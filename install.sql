@@ -72,4 +72,7 @@ GRANT EXECUTE ON game_logic TO PUBLIC;
 -- Даем право просматривать лобби ВСЕМ пользователям
 GRANT SELECT ON v_open_games TO PUBLIC;
 
+GRANT SELECT ON v_active_games TO PUBLIC;
+
+
 PROMPT [SUCCESS] Permissions granted to PUBLIC.

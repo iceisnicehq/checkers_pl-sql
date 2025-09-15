@@ -78,7 +78,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_rule_id             IN  NUMBER   DEFAULT 1,
         p_time_limit_move_sec IN  NUMBER   DEFAULT NULL,
         p_time_limit_game_sec IN  NUMBER   DEFAULT NULL,
-        p_game_id             OUT NUMBER
+        p_game_id             OUT NUMBER,
+        p_status_message      OUT VARCHAR2
     );
 
     /**
@@ -164,6 +165,12 @@ CREATE OR REPLACE PACKAGE game_logic AS
     FUNCTION cleanup_stale_games(
         p_timeout_minutes IN NUMBER
     ) RETURN NUMBER;
+
+    /**
+     * Возвращает ID активной партии для текущего пользователя (USER).
+     * @return ID партии или NULL, если активных партий нет.
+     */
+    FUNCTION get_my_active_game RETURN NUMBER;
 
 END game_logic;
 

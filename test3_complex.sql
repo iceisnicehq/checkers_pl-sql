@@ -1,132 +1,83 @@
 -- =================================================================
--- == КОМПЛЕКСНЫЙ ТЕСТОВЫЙ СЦЕНАРИЙ ДЛЯ ЛОББИ ИГРЫ "ШАШКИ"       ==
--- ==             (Версия для общей схемы C##CHECKERS_APP)         ==
+-- == НОВЫЙ ТЕСТОВЫЙ СЦЕНАРИЙ (Версия для правила 1 сессии) ==
 -- =================================================================
 SET SERVEROUTPUT ON;
 SET LONG 20000;
--- Отключаем проверку подстановочных переменных, чтобы символ '&' не вызывал диалог
 SET DEFINE OFF;
-
--- -----------------------------------------------------------------
--- ШАГ 0: (Опционально) Полная очистка для нового теста
+-- ШАГ 0: Полная очистка
 -- Подключитесь как C##CHECKERS_APP и выполните этот блок.
--- -----------------------------------------------------------------
-PROMPT [INFO] Performing cleanup for a fresh test run...
--- У игроков нет прав на удаление, поэтому это должен делать владелец схемы.
--- CONNECT C##CHECKERS_APP/your_password_here;
+PROMPT [INFO] Performing cleanup...
 DELETE FROM C##CHECKERS_APP.game_moves;
 DELETE FROM C##CHECKERS_APP.games;
--- Игроков можно не удалять, они переиспользуются.
 COMMIT;
 PROMPT [INFO] Cleanup complete.
-
-
--- -----------------------------------------------------------------
--- ШАГ 1: C##DEV_USER создает ОТКРЫТЫЙ вызов
--- Подключитесь как C##DEV_USER и выполните этот блок.
--- -----------------------------------------------------------------
+-- СЦЕНАРИЙ 1: Проверка правила "ОДНА СЕССИЯ"
+PROMPT --- СЦЕНАРИЙ 1: Проверка правила "ОДНА СЕССИЯ" ---
+-- 1.1: C##DEV_USER успешно создает первую игру
+-- Подключитесь как C##DEV_USER
 DECLARE
-    v_game_id NUMBER;
+v_game_id NUMBER;
+v_msg VARCHAR2(1000);
 BEGIN
-    DBMS_OUTPUT.PUT_LINE(CHR(10) || '--- ШАГ 1: C##DEV_USER создает ОТКРЫТЫЙ вызов ---');
-    C##CHECKERS_APP.game_logic.create_game(
-        p_player_color => 'W', -- Хочет играть за белых
-        p_game_id      => v_game_id
-    );
-    DBMS_OUTPUT.PUT_LINE('[OK] Открытый вызов создан. Game ID: ' || v_game_id);
-    COMMIT;
+DBMS_OUTPUT.PUT_LINE('[TEST 1.1] C##DEV_USER создает первую игру...');
+C##CHECKERS_APP.game_logic.create_game(p_game_id => v_game_id, p_status_message => v_msg);
+DBMS_OUTPUT.PUT_LINE(v_msg);
 END;
 /
-
-
--- -----------------------------------------------------------------
--- ШАГ 2: C##DEV2_USER смотрит список открытых игр
--- Подключитесь как C##DEV2_USER и выполните этот блок.
--- -----------------------------------------------------------------
-PROMPT --- ШАГ 2: C##DEV2_USER смотрит лобби ---
-PROMPT [INFO] Ожидается увидеть одну игру с типом 'Open Challenge'...
-SELECT * FROM C##CHECKERS_APP.v_open_games;
-
-
--- -----------------------------------------------------------------
--- ШАГ 3: C##DEV_USER создает ПРЯМОЙ вызов для C##DEV2_USER
--- Подключитесь как C##DEV_USER и выполните этот блок.
--- -----------------------------------------------------------------
+-- 1.2: C##DEV_USER НЕ МОЖЕТ создать вторую игру
+-- Подключитесь как C##DEV_USER
 DECLARE
-    v_game_id NUMBER;
+v_game_id NUMBER;
+v_msg VARCHAR2(1000);
 BEGIN
-    DBMS_OUTPUT.PUT_LINE(CHR(10) || '--- ШАГ 3: C##DEV_USER создает ПРЯМОЙ вызов ---');
-    C##CHECKERS_APP.game_logic.create_game(
-        p_opponent_username => 'C##DEV2_USER',
-        p_game_id           => v_game_id
-    );
-    DBMS_OUTPUT.PUT_LINE('[OK] Прямой вызов для C##DEV2_USER создан. Game ID: ' || v_game_id);
-    COMMIT;
-END;
-/
-
-
--- -----------------------------------------------------------------
--- ШАГ 4: C##DEV2_USER снова смотрит список игр
--- Подключитесь как C##DEV2_USER и выполните этот блок.
--- -----------------------------------------------------------------
-PROMPT --- ШАГ 4: C##DEV2_USER снова смотрит лобби ---
-PROMPT [INFO] Ожидается увидеть две игры: одну открытую, одну прямую...
-SELECT * FROM C##CHECKERS_APP.v_open_games;
-
-PROMPT [INFO] ...а теперь только те, что адресованы лично C##DEV2_USER:
-SELECT * FROM C##CHECKERS_APP.v_open_games WHERE challenged_player = USER;
-
-
--- -----------------------------------------------------------------
--- ШАГ 5: C##DEV2_USER принимает ПРЯМОЙ вызов
--- Подключитесь как C##DEV2_USER и выполните этот блок.
--- -----------------------------------------------------------------
-DECLARE
-    v_direct_challenge_id NUMBER;
-BEGIN
-    DBMS_OUTPUT.PUT_LINE(CHR(10) || '--- ШАГ 5: C##DEV2_USER принимает ПРЯМОЙ вызов ---');
-    -- Находим ID прямого вызова
-    SELECT game_id INTO v_direct_challenge_id
-    FROM C##CHECKERS_APP.v_open_games
-    WHERE challenged_player = USER AND ROWNUM = 1;
-
-    C##CHECKERS_APP.game_logic.join_game(p_game_id => v_direct_challenge_id);
-    DBMS_OUTPUT.PUT_LINE('[OK] Вызов принят! Партия ' || v_direct_challenge_id || ' теперь АКТИВНА.');
-    COMMIT;
-END;
-/
-
-
--- -----------------------------------------------------------------
--- ШАГ 6: Проверка финального состояния
--- Подключитесь как C##CHECKERS_APP (или любой пользователь с правами DBA) для полного обзора.
--- -----------------------------------------------------------------
-PROMPT --- ШАГ 6: Проверка финального состояния ---
-PROMPT [INFO] Состояние таблицы games (ожидается одна WAITING, одна ACTIVE):
-SELECT
-    g.game_id,
-    g.status,
-    (SELECT username FROM C##CHECKERS_APP.players p WHERE p.player_id = g.player_white_id) as white_player,
-    (SELECT username FROM C##CHECKERS_APP.players p WHERE p.player_id = g.player_black_id) as black_player
-FROM C##CHECKERS_APP.games g
-ORDER BY g.game_id;
-
-PROMPT [INFO] Оставшиеся игры в лобби (ожидается одна 'Open Challenge'):
-SELECT * FROM C##CHECKERS_APP.v_open_games;
-
-PROMPT [INFO] Доска в активной партии:
-DECLARE
-    v_active_game_id NUMBER;
-    v_board          CLOB;
-BEGIN
-    SELECT game_id INTO v_active_game_id
-    FROM C##CHECKERS_APP.games WHERE status = 'ACTIVE' AND ROWNUM = 1;
-
-    v_board := C##CHECKERS_APP.game_logic.get_printable_board(v_active_game_id);
-    DBMS_OUTPUT.PUT_LINE(v_board);
+DBMS_OUTPUT.PUT_LINE(CHR(10) || '[TEST 1.2] C##DEV_USER пытается создать вторую игру (ожидается ошибка)...');
+C##CHECKERS_APP.game_logic.create_game(p_game_id => v_game_id, p_status_message => v_msg);
 EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-        DBMS_OUTPUT.PUT_LINE('Активных партий не найдено.');
+WHEN OTHERS THEN
+IF SQLCODE = -20001 THEN
+DBMS_OUTPUT.PUT_LINE('[SUCCESS] Ошибка "e_player_is_busy" успешно перехвачена. Правило работает!');
+ELSE
+RAISE;
+END IF;
+END;
+/
+-- СЦЕНАРИЙ 2: Проверка УВЕДОМЛЕНИЙ
+PROMPT --- СЦЕНАРИЙ 2: Проверка УВЕДОМЛЕНИЙ ---
+-- Для этого сценария нам понадобится третий пользователь, C##DEV3_USER.
+-- Убедитесь, что он создан и имеет права CONNECT.
+-- 2.1: C##DEV2_USER бросает прямой вызов C##DEV_USER
+-- Подключитесь как C##DEV2_USER
+DECLARE
+v_game_id NUMBER;
+v_msg VARCHAR2(1000);
+BEGIN
+DBMS_OUTPUT.PUT_LINE(CHR(10) || '[TEST 2.1] C##DEV2_USER вызывает C##DEV_USER...');
+C##CHECKERS_APP.game_logic.create_game(p_opponent_username => 'C##DEV_USER', p_game_id => v_game_id, p_status_message => v_msg);
+DBMS_OUTPUT.PUT_LINE(v_msg);
+END;
+/
+-- 2.2: C##DEV3_USER создает открытую игру (для статистики)
+-- Подключитесь как C##DEV3_USER
+DECLARE
+v_game_id NUMBER;
+v_msg VARCHAR2(1000);
+BEGIN
+DBMS_OUTPUT.PUT_LINE(CHR(10) || '[TEST 2.2] C##DEV3_USER создает открытую игру...');
+C##CHECKERS_APP.game_logic.create_game(p_game_id => v_game_id, p_status_message => v_msg);
+DBMS_OUTPUT.PUT_LINE(v_msg);
+END;
+/
+-- 2.3: C##DEV_USER (которого ждут) создает свою игру и получает уведомления
+-- Подключитесь как C##DEV_USER
+DECLARE
+v_game_id NUMBER;
+v_msg VARCHAR2(1000);
+BEGIN
+DBMS_OUTPUT.PUT_LINE(CHR(10) || '[TEST 2.3] C##DEV_USER создает свою игру и должен увидеть уведомления...');
+C##CHECKERS_APP.game_logic.create_game(p_game_id => v_game_id, p_status_message => v_msg);
+DBMS_OUTPUT.PUT_LINE('--- ПОЛУЧЕННОЕ СООБЩЕНИЕ ---');
+DBMS_OUTPUT.PUT_LINE(v_msg);
+DBMS_OUTPUT.PUT_LINE('-----------------------------');
+DBMS_OUTPUT.PUT_LINE('[VERIFY] Проверьте, что в сообщении есть вызов от C##DEV2_USER и упоминание 1 другой открытой игры.');
 END;
 /
