@@ -224,6 +224,16 @@ ALTER TABLE games ADD CONSTRAINT chk_games_active_players CHECK (
     status != 'ACTIVE' OR (player_white_id IS NOT NULL AND player_black_id IS NOT NULL)
 );
 
+
+ALTER TABLE C##CHECKERS_APP.games
+ADD (creator_player_id NUMBER(10) NOT NULL);
+
+ALTER TABLE C##CHECKERS_APP.games
+ADD CONSTRAINT fk_games_creator FOREIGN KEY (creator_player_id)
+REFERENCES C##CHECKERS_APP.players(player_id);
+
+COMMENT ON COLUMN C##CHECKERS_APP.games.creator_player_id IS 'ID игрока, который создал партию/вызов.';
+
 COMMIT;
 
 PROMPT Schema for "Checkers on Oracle" has been created successfully.
