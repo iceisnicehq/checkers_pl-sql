@@ -73,7 +73,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
      * @raises e_invalid_opponent   Если оппонент не найден или совпадает с текущим игроком.
      */
     PROCEDURE create_game(
-        p_opponent_username   IN  VARCHAR2,
+        p_opponent_username   IN  VARCHAR2 DEFAULT NULL, -- << ИЗМЕНЕНИЕ: стал необязательным
         p_player_color        IN  CHAR     DEFAULT NULL,
         p_rule_id             IN  NUMBER   DEFAULT 1,
         p_time_limit_move_sec IN  NUMBER   DEFAULT NULL,
@@ -102,6 +102,9 @@ CREATE OR REPLACE PACKAGE game_logic AS
      * @raises e_game_not_found, e_access_denied, e_game_is_over.
      */
     PROCEDURE resign_game(
+        p_game_id IN NUMBER
+    );
+        PROCEDURE join_game(
         p_game_id IN NUMBER
     );
 

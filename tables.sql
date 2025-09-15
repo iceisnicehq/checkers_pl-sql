@@ -212,6 +212,18 @@ VALUES (1, 'Русские шашки 8x8', 8, 30, 'Y');
 INSERT INTO game_rules (rule_id, rule_name, board_size, draw_moves_limit, enable_pos_repetition_draw)
 VALUES (2, 'Международные шашки 10x10', 10, 50, 'Y');
 
+ALTER TABLE games MODIFY player_white_id NUMBER(10) NULL;
+ALTER TABLE games MODIFY player_black_id NUMBER(10) NULL;
+
+ALTER TABLE games DROP CONSTRAINT chk_games_status;
+ALTER TABLE games ADD CONSTRAINT chk_games_status CHECK (
+    status IN ('WAITING', 'ACTIVE', 'WHITE_WIN', 'BLACK_WIN', 'DRAW', 'TIMEOUT', 'ABORTED')
+);
+
+ALTER TABLE games ADD CONSTRAINT chk_games_active_players CHECK (
+    status != 'ACTIVE' OR (player_white_id IS NOT NULL AND player_black_id IS NOT NULL)
+);
+
 COMMIT;
 
 PROMPT Schema for "Checkers on Oracle" has been created successfully.
