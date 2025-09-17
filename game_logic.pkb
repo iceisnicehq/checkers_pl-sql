@@ -20,7 +20,8 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         EXCEPTION
             WHEN NO_DATA_FOUND THEN
                 INSERT INTO players (username) VALUES (p_username) RETURNING player_id INTO v_player_id;
-                INSERT INTO audit_log (username, event_type, event_details) VALUES (p_username, 'PLAYER_REGISTERED', 'New player created.');
+                INSERT INTO audit_log (player_id, event_type, event_details)
+                VALUES (v_player_id, 'PLAYER_REGISTERED', 'New player (' || p_username || ') created.');
         END;
         RETURN v_player_id;
     END get_or_create_player_id;
@@ -91,7 +92,8 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         IF v_open_games_count > 0 THEN p_status_message := p_status_message || CHR(10) || '[INFO] В лобби есть еще ' || v_open_games_count || ' открытых игр.'; END IF;
         COMMIT;
     EXCEPTION WHEN e_invalid_opponent OR e_player_is_busy THEN ROLLBACK; RAISE;
-        WHEN OTHERS THEN ROLLBACK; v_error_details := SQLERRM; INSERT INTO audit_log (username, event_type, event_details) VALUES (USER, 'CREATE_GAME_ERROR', v_error_details); COMMIT; RAISE;
+            INSERT INTO audit_log (player_id, event_type, event_details) VALUES (v_current_player_id, 'CREATE_GAME_ERROR', v_error_details);
+            COMMIT; RAISE;
     END create_game;
 
     PROCEDURE join_game(p_game_id IN NUMBER) IS
@@ -175,7 +177,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         WHEN e_game_not_found OR e_game_is_over OR e_access_denied OR e_not_your_turn OR e_invalid_move_notation OR e_illegal_move THEN ROLLBACK; RAISE;
         WHEN OTHERS THEN
             ROLLBACK; v_error_details := SQLERRM;
-            INSERT INTO audit_log (game_id, event_type, event_details) VALUES (p_game_id, 'MAKE_MOVE_ERROR', v_error_details);
+            INSERT INTO audit_log (player_id, game_id, event_type, event_details) VALUES (v_player_id, p_game_id, 'MAKE_MOVE_ERROR', v_error_details);
             COMMIT; RAISE;
     END make_move;
 

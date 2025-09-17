@@ -44,4 +44,4 @@ JOIN game_rules gr ON g.rule_id = gr.rule_id
 WHERE
     g.status = 'ACTIVE';
 
-COMMENT ON VIEW v_active_games IS 'Показывает все активные на данный момент партии для наблюдения.';
+COMMENT ON TABLE v_active_games IS 'Показывает все активные на данный момент партии для наблюдения.';
