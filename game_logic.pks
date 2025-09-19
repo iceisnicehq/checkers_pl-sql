@@ -15,7 +15,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
     c_black_man   CONSTANT VARCHAR2(1) := 'b';
     c_white_king  CONSTANT VARCHAR2(1) := 'W';
     c_black_king  CONSTANT VARCHAR2(1) := 'B';
-    c_empty_field CONSTANT VARCHAR2(1) := '_';
+    c_empty_field CONSTANT VARCHAR2(1) := ' ';
 
     -- Пользовательский тип-запись для возврата полной информации о состоянии игры
     -- одним объектом, чтобы избежать множества OUT-параметров.

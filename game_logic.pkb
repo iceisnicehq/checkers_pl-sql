@@ -42,16 +42,23 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     END get_or_create_player_id;
 
     FUNCTION get_initial_position(p_rule_id IN NUMBER) RETURN VARCHAR2 IS
-        v_board_position games.board_position%TYPE;
-        v_rule           game_rules%ROWTYPE;
+        v_rule game_rules%ROWTYPE;
     BEGIN
         SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
+
         IF v_rule.rule_name = 'Русские шашки 8x8' THEN
-            v_board_position := RPAD(c_black_man, 12, c_black_man) || RPAD(c_empty_field, 8, c_empty_field) || RPAD(c_white_man, 12, c_white_man);
+            -- Новая 64-символьная доска (от a8 до h1)
+            RETURN  'b b b b ' || -- 8-й ряд
+                    ' b b b b' || -- 7-й ряд
+                    'b b b b ' || -- 6-й ряд
+                    '        ' || -- 5-й ряд
+                    '        ' || -- 4-й ряд
+                    ' w w w w' || -- 3-й ряд
+                    'w w w w ' || -- 2-й ряд
+                    ' w w w w';   -- 1-й ряд
         ELSE
             RAISE_APPLICATION_ERROR(-20100, 'Правила игры с ID=' || p_rule_id || ' не поддерживаются.');
         END IF;
-        RETURN v_board_position;
     END get_initial_position;
     
     FUNCTION idx_to_notation(p_idx IN PLS_INTEGER) RETURN VARCHAR2 IS
@@ -85,10 +92,11 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         p_is_king       IN CHAR, -- 'Y'/'N'
         p_visited_path  IN t_move_path DEFAULT t_move_path()
     ) RETURN t_move_list IS
-        v_results       t_move_list := t_move_list();
-        v_jump_directions SYS.ODCINUMBERLIST := SYS.ODCINUMBERLIST(-9, -7, 7, 9); -- UpLeft, UpRight, DownLeft, DownRight
-        v_opponent_man  CHAR(1);
-        v_opponent_king CHAR(1);
+        v_results           t_move_list := t_move_list();
+        -- Смещения для прыжков: вверх-влево, вверх-вправо, вниз-влево, вниз-вправо
+        v_jump_directions   SYS.ODCINUMBERLIST := SYS.ODCINUMBERLIST(-18, -14, 14, 18);
+        v_opponent_man      CHAR(1);
+        v_opponent_king     CHAR(1);
     BEGIN
         IF p_player_color = 'W' THEN
             v_opponent_man := c_black_man; v_opponent_king := c_black_king;
@@ -100,39 +108,67 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             DECLARE
                 v_jump          PLS_INTEGER := v_jump_directions(i);
                 v_land_idx      PLS_INTEGER := p_start_idx + v_jump;
-                v_capture_idx   PLS_INTEGER;
-                v_step          r_move_step;
-                v_is_visited    CHAR(1) := 'N';
-                v_start_not     VARCHAR2(2) := idx_to_notation(p_start_idx);
-                v_land_not      VARCHAR2(2) := idx_to_notation(v_land_idx);
-            BEGIN
-                IF v_land_not IS NOT NULL AND ABS(g_board_map(v_start_not).col_num - g_board_map(v_land_not).col_num) = 2 THEN
-                    
-                    -- --- ВОТ ОКОНЧАТЕЛЬНОЕ ИСПРАВЛЕНИЕ ---
-                    -- Возвращаемся к надежной логике, основанной на направлении прыжка, а не на неверной математике.
-                    IF v_jump = -9 THEN v_capture_idx := p_start_idx - 5; -- Прыжок Вверх-Влево, бьем шашку на -5
-                    ELSIF v_jump = -7 THEN v_capture_idx := p_start_idx - 4; -- Прыжок Вверх-Вправо, бьем шашку на -4
-                    ELSIF v_jump = 7 THEN v_capture_idx := p_start_idx + 3; -- Прыжок Вниз-Влево, бьем шашку на +3
-                    ELSIF v_jump = 9 THEN v_capture_idx := p_start_idx + 4; -- Прыжок Вниз-Вправо, бьем шашку на +4
-                    END IF;
+                v_capture_idx   PLS_INTEGER := p_start_idx + v_jump / 2; -- Шашка, которую бьем, находится на полпути
 
-                    IF idx_to_notation(v_capture_idx) IS NOT NULL THEN
-                        IF (SUBSTR(p_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king)) AND (SUBSTR(p_board, v_land_idx, 1) = c_empty_field) THEN
-                            FOR k IN 1..p_visited_path.COUNT LOOP IF p_visited_path(k).captured_idx = v_capture_idx THEN v_is_visited := 'Y'; EXIT; END IF; END LOOP;
+                v_start_field   rec_board_field;
+                v_land_field    rec_board_field;
+                v_capture_field rec_board_field;
+
+                v_is_visited    CHAR(1) := 'N';
+                v_is_valid_jump BOOLEAN := FALSE;
+            BEGIN
+                -- Проверяем, что индексы в пределах доски (1..64)
+                IF v_land_idx BETWEEN 1 AND 64 THEN
+                    v_start_field := g_board_map(idx_to_notation(p_start_idx));
+                    v_land_field  := g_board_map(idx_to_notation(v_land_idx));
+
+                    -- Ключевая проверка: прыжок не должен "обернуться" вокруг доски
+                    -- Разница в колонках должна быть ровно 2
+                    IF ABS(v_start_field.col_num - v_land_field.col_num) = 2 THEN
+                        v_capture_field := g_board_map(idx_to_notation(v_capture_idx));
+                        
+                        -- Проверяем: поле приземления пустое, а на поле взятия стоит противник
+                        IF SUBSTR(p_board, v_land_idx, 1) = ' ' AND -- <<< Пустое поле
+                        SUBSTR(p_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king) THEN
+                            
+                            -- Проверяем, что мы уже не били эту шашку в текущей цепочке
+                            FOR k IN 1..p_visited_path.COUNT LOOP
+                                IF p_visited_path(k).captured_idx = v_capture_idx THEN
+                                    v_is_visited := 'Y';
+                                    EXIT;
+                                END IF;
+                            END LOOP;
 
                             IF v_is_visited = 'N' THEN
-                                v_step.start_idx := p_start_idx; v_step.end_idx := v_land_idx; v_step.captured_idx := v_capture_idx;
                                 DECLARE
-                                    v_new_path t_move_path := p_visited_path;
-                                    v_sub_paths t_move_list; v_move r_move;
+                                    v_step      r_move_step;
+                                    v_new_path  t_move_path := p_visited_path;
+                                    v_sub_paths t_move_list;
+                                    v_move      r_move;
                                 BEGIN
-                                    v_new_path.EXTEND; v_new_path(v_new_path.LAST) := v_step;
+                                    v_step.start_idx := p_start_idx;
+                                    v_step.end_idx := v_land_idx;
+                                    v_step.captured_idx := v_capture_idx;
+
+                                    v_new_path.EXTEND;
+                                    v_new_path(v_new_path.LAST) := v_step;
+
+                                    -- Рекурсивный вызов для поиска продолжения цепочки
                                     v_sub_paths := find_capture_paths(v_land_idx, p_board, p_player_color, p_is_king, v_new_path);
+
                                     IF v_sub_paths.COUNT = 0 THEN
-                                        v_move.path := v_new_path; v_move.is_capture := 'Y'; v_move.capture_count := v_new_path.COUNT;
-                                        v_results.EXTEND; v_results(v_results.LAST) := v_move;
+                                        -- Если продолжения нет, это конечная точка маршрута
+                                        v_move.path := v_new_path;
+                                        v_move.is_capture := 'Y';
+                                        v_move.capture_count := v_new_path.COUNT;
+                                        v_results.EXTEND;
+                                        v_results(v_results.LAST) := v_move;
                                     ELSE
-                                        FOR j IN 1..v_sub_paths.COUNT LOOP v_results.EXTEND; v_results(v_results.LAST) := v_sub_paths(j); END LOOP;
+                                        -- Если есть продолжения (например, еще одно взятие), добавляем их в результаты
+                                        FOR j IN 1..v_sub_paths.COUNT LOOP
+                                            v_results.EXTEND;
+                                            v_results(v_results.LAST) := v_sub_paths(j);
+                                        END LOOP;
                                     END IF;
                                 END;
                             END IF;
@@ -141,77 +177,156 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 END IF;
             END;
         END LOOP;
+
         RETURN v_results;
     END find_capture_paths;
 
     /**
-     * Находит ВСЕ возможные ходы для игрока (и взятия, и простые).
-     */
-
+    * Находит ВСЕ возможные ходы для игрока (и взятия, и простые).
+    * Адаптировано для 64-символьной доски.
+    * Если есть обязательные взятия, возвращает ТОЛЬКО их (с максимальной длиной).
+    * Если взятий нет, возвращает все возможные простые ходы.
+    */
     FUNCTION find_all_player_moves(p_board IN VARCHAR2, p_player_color IN CHAR) RETURN t_move_list IS
-        v_all_moves         t_move_list := t_move_list();
-        v_capture_moves     t_move_list := t_move_list();
-        v_simple_moves      t_move_list := t_move_list();
-        v_player_man        CHAR(1); v_player_king       CHAR(1);
-        v_max_captures      PLS_INTEGER := 0;
+        v_all_moves     t_move_list := t_move_list();
+        v_capture_moves t_move_list := t_move_list();
+        v_simple_moves  t_move_list := t_move_list();
+        v_player_man    CHAR(1);
+        v_player_king   CHAR(1);
+        v_max_captures  PLS_INTEGER := 0;
     BEGIN
-        IF p_player_color = 'W' THEN v_player_man := c_white_man; v_player_king := c_white_king;
-        ELSE v_player_man := c_black_man; v_player_king := c_black_king; END IF;
+        -- 1. Определяем, какими фигурами мы играем
+        IF p_player_color = 'W' THEN
+            v_player_man := c_white_man; v_player_king := c_white_king;
+        ELSE
+            v_player_man := c_black_man; v_player_king := c_black_king;
+        END IF;
 
-        FOR i IN 1..32 LOOP
-            DECLARE v_piece CHAR(1) := SUBSTR(p_board, i, 1); v_paths t_move_list; v_is_king CHAR(1);
+        -- 2. СНАЧАЛА ИЩЕМ ТОЛЬКО ВЗЯТИЯ (ЭТО ОБЯЗАТЕЛЬНО)
+        FOR i IN 1..64 LOOP
+            DECLARE
+                v_piece     CHAR(1) := SUBSTR(p_board, i, 1);
+                v_paths     t_move_list;
+                v_is_king   CHAR(1);
             BEGIN
                 IF v_piece IN (v_player_man, v_player_king) THEN
-                    IF v_piece = v_player_king THEN v_is_king := 'Y'; ELSE v_is_king := 'N'; END IF;
+                    v_is_king := CASE WHEN v_piece = v_player_king THEN 'Y' ELSE 'N' END;
+                    -- Ищем цепочки взятий для текущей фигуры
                     v_paths := find_capture_paths(i, p_board, p_player_color, v_is_king);
+
                     IF v_paths.COUNT > 0 THEN
                         FOR j IN 1..v_paths.COUNT LOOP
-                            v_capture_moves.EXTEND; v_capture_moves(v_capture_moves.LAST) := v_paths(j);
-                            IF v_paths(j).capture_count > v_max_captures THEN v_max_captures := v_paths(j).capture_count; END IF;
+                            v_capture_moves.EXTEND;
+                            v_capture_moves(v_capture_moves.LAST) := v_paths(j);
+                            -- Обновляем максимальную длину цепочки взятий
+                            IF v_paths(j).capture_count > v_max_captures THEN
+                                v_max_captures := v_paths(j).capture_count;
+                            END IF;
                         END LOOP;
                     END IF;
                 END IF;
             END;
         END LOOP;
 
+        -- 3. Если были найдены взятия, мы должны вернуть ТОЛЬКО ТЕ, у которых максимальная длина
         IF v_max_captures > 0 THEN
             FOR i IN 1..v_capture_moves.COUNT LOOP
-                IF v_capture_moves(i).capture_count = v_max_captures THEN v_all_moves.EXTEND; v_all_moves(v_all_moves.LAST) := v_capture_moves(i); END IF;
+                IF v_capture_moves(i).capture_count = v_max_captures THEN
+                    v_all_moves.EXTEND;
+                    v_all_moves(v_all_moves.LAST) := v_capture_moves(i);
+                END IF;
             END LOOP;
-            RETURN v_all_moves;
+            RETURN v_all_moves; -- Возвращаем только обязательные ходы
         END IF;
 
-        FOR i IN 1..32 LOOP
+        -- 4. ЕСЛИ ВЗЯТИЙ НЕТ, то ищем простые ходы
+        FOR i IN 1..64 LOOP
             DECLARE
-                v_piece CHAR(1) := SUBSTR(p_board, i, 1); v_directions SYS.ODCINUMBERLIST;
-                v_move r_move; v_step r_move_step; v_start_not VARCHAR2(2) := idx_to_notation(i);
+                v_piece     CHAR(1) := SUBSTR(p_board, i, 1);
+                v_start_not VARCHAR2(2) := idx_to_notation(i);
             BEGIN
+                -- ===================================================================
+                -- == ЛОГИКА ПРОСТЫХ ХОДОВ ДЛЯ ОБЫЧНОЙ ШАШКИ ('w' или 'b')
+                -- ===================================================================
                 IF v_piece = v_player_man THEN
-                    IF p_player_color = 'W' THEN
-                        v_directions := SYS.ODCINUMBERLIST(-4, -3);
-                    ELSE
-                        -- >>> ВОТ ГЛАВНОЕ ИСПРАВЛЕНИЕ <<<
-                        v_directions := SYS.ODCINUMBERLIST(3, 4); -- Было (4, 5)
-                    END IF;
-                    FOR d IN 1..v_directions.COUNT LOOP
-                        DECLARE v_end_idx PLS_INTEGER := i + v_directions(d); v_end_not VARCHAR2(2) := idx_to_notation(v_end_idx);
-                        BEGIN
-                            IF v_end_not IS NOT NULL THEN
-                                IF ABS(g_board_map(v_start_not).col_num - g_board_map(v_end_not).col_num) = 1 AND SUBSTR(p_board, v_end_idx, 1) = c_empty_field THEN
-                                    v_step.start_idx := i; v_step.end_idx := v_end_idx; v_step.captured_idx := NULL;
-                                    v_move.path := t_move_path();
-                                    v_move.path.EXTEND;
-                                    v_move.path(1) := v_step;
-                                    v_move.is_capture := 'N'; v_move.capture_count := 0;
-                                    v_simple_moves.EXTEND; v_simple_moves(v_simple_moves.LAST) := v_move;
+                    DECLARE
+                        v_directions SYS.ODCINUMBERLIST;
+                    BEGIN
+                        -- Определяем направления в зависимости от цвета
+                        IF p_player_color = 'W' THEN
+                            v_directions := SYS.ODCINUMBERLIST(-9, -7); -- Вверх-влево, Вверх-вправо
+                        ELSE
+                            v_directions := SYS.ODCINUMBERLIST(7, 9);   -- Вниз-влево, Вниз-вправо
+                        END IF;
+
+                        FOR d IN 1..v_directions.COUNT LOOP
+                            DECLARE
+                                v_end_idx   PLS_INTEGER := i + v_directions(d);
+                                v_end_not   VARCHAR2(2) := idx_to_notation(v_end_idx);
+                            BEGIN
+                                -- Проверяем, что ход в пределах доски и на пустую клетку
+                                IF v_end_not IS NOT NULL AND SUBSTR(p_board, v_end_idx, 1) = ' ' THEN
+                                    -- КЛЮЧЕВАЯ ПРОВЕРКА от "перепрыгивания" на другую сторону доски
+                                    IF ABS(g_board_map(v_start_not).col_num - g_board_map(v_end_not).col_num) = 1 THEN
+                                        DECLARE
+                                        v_move r_move;
+                                        v_step r_move_step;
+                                        BEGIN
+                                        v_step.start_idx := i; v_step.end_idx := v_end_idx; v_step.captured_idx := NULL;
+                                        v_move.path := t_move_path(v_step);
+                                        v_move.is_capture := 'N'; v_move.capture_count := 0;
+                                        v_simple_moves.EXTEND; v_simple_moves(v_simple_moves.LAST) := v_move;
+                                        END;
+                                    END IF;
                                 END IF;
-                            END IF;
-                        END;
-                    END LOOP;
+                            END;
+                        END LOOP;
+                    END;
+                -- ===================================================================
+                -- == ЛОГИКА ПРОСТЫХ ХОДОВ ДЛЯ ДАМКИ ('W' или 'B')
+                -- ===================================================================
+                ELSIF v_piece = v_player_king THEN
+                    DECLARE
+                        -- Дамка ходит во всех 4 диагональных направлениях
+                        v_directions SYS.ODCINUMBERLIST := SYS.ODCINUMBERLIST(-9, -7, 7, 9);
+                    BEGIN
+                        FOR d IN 1..v_directions.COUNT LOOP
+                            -- Для каждого направления проверяем все клетки до упора
+                            FOR k IN 1..7 LOOP
+                                DECLARE
+                                    v_end_idx PLS_INTEGER := i + (v_directions(d) * k);
+                                    v_end_not VARCHAR2(2) := idx_to_notation(v_end_idx);
+                                BEGIN
+                                    IF v_end_not IS NULL THEN EXIT; END IF; -- Вышли за пределы доски
+
+                                    -- Проверяем, что не "перепрыгнули" на другую сторону доски
+                                    IF ABS(g_board_map(idx_to_notation(i + (v_directions(d) * (k-1)))).col_num - g_board_map(v_end_not).col_num) != 1 THEN
+                                        EXIT; -- Неверная геометрия, прерываем луч
+                                    END IF;
+
+                                    IF SUBSTR(p_board, v_end_idx, 1) = ' ' THEN -- Если клетка пуста
+                                        DECLARE
+                                        v_move r_move;
+                                        v_step r_move_step;
+                                        BEGIN
+                                        v_step.start_idx := i; v_step.end_idx := v_end_idx; v_step.captured_idx := NULL;
+                                        v_move.path := t_move_path(v_step);
+                                        v_move.is_capture := 'N'; v_move.capture_count := 0;
+                                        v_simple_moves.EXTEND; v_simple_moves(v_simple_moves.LAST) := v_move;
+                                        END;
+                                    ELSE
+                                        EXIT; -- Упёрлись в фигуру, дальше по этому лучу идти нельзя
+                                    END IF;
+                                END;
+                            END LOOP; -- конец цикла по длине хода дамки
+                        END LOOP; -- конец цикла по направлениям
+                    END;
                 END IF;
             END;
         END LOOP;
+
         RETURN v_simple_moves;
+
     END find_all_player_moves;
     -- =========================================================================
     -- == ПУБЛИЧНЫЕ ПРОЦЕДУРЫ И ФУНКЦИИ
@@ -387,76 +502,113 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
     FUNCTION get_printable_board(p_game_id IN NUMBER) RETURN CLOB IS
         -- Существующие переменные
-        v_board_position  games.board_position%TYPE;
-        v_clob            CLOB;
-        v_char            CHAR(1);
-        v_linear_idx      PLS_INTEGER;
-        c_nl              CONSTANT VARCHAR2(1) := CHR(10);
+        v_board_position    games.board_position%TYPE;
+        v_clob              CLOB;
+        v_char              CHAR(1);
+        v_linear_idx        PLS_INTEGER;
+        c_nl                CONSTANT VARCHAR2(1) := CHR(10);
         
         -- Переменные для данных об игре
-        v_status          games.status%TYPE;
-        v_current_turn    games.current_turn%TYPE;
-        v_player_username players.username%TYPE; -- Новая переменная для имени игрока
+        v_status            games.status%TYPE;
+        v_current_turn      games.current_turn%TYPE;
+        v_player_username   players.username%TYPE;
+        v_active_player_id  players.player_id%TYPE; -- ID того, чей сейчас ход
+
+        --- НОВЫЙ БЛОК: Переменные для логики подсветки ---
+        v_viewer_player_id  players.player_id%TYPE; -- ID того, кто смотрит на доску (из USER)
+        TYPE t_map_indices IS TABLE OF BOOLEAN INDEX BY PLS_INTEGER;
+        v_highlight_indices t_map_indices; -- Коллекция для хранения индексов полей, которые нужно подсветить
+        v_legal_moves       t_move_list;
+        --- КОНЕЦ НОВОГО БЛОКА ---
 
     BEGIN
         BEGIN
-            -- Усложняем запрос: получаем имя текущего игрока с помощью JOIN и CASE
+            -- 1. Сначала получаем основную информацию об игре и ID активного игрока
             SELECT
                 g.board_position,
                 g.status,
                 g.current_turn,
-                p.username
-            INTO
-                v_board_position,
-                v_status,
-                v_current_turn,
-                v_player_username
-            FROM
-                games g
-            LEFT JOIN players p ON p.player_id = (
                 CASE g.current_turn
                     WHEN 'W' THEN g.player_white_id
                     WHEN 'B' THEN g.player_black_id
                 END
-            )
+            INTO
+                v_board_position,
+                v_status,
+                v_current_turn,
+                v_active_player_id -- Сохраняем ID того, чей ход
+            FROM games g
             WHERE g.game_id = p_game_id;
 
+            -- 2. Затем, если игрок есть, получаем его имя
+            IF v_active_player_id IS NOT NULL THEN
+                SELECT p.username INTO v_player_username FROM players p WHERE p.player_id = v_active_player_id;
+            ELSE
+                v_player_username := '(ожидание)';
+            END IF;
+
         EXCEPTION
-            WHEN NO_DATA_FOUND THEN
-                RAISE e_game_not_found;
+            WHEN NO_DATA_FOUND THEN RAISE e_game_not_found;
         END;
+
+        --- НОВЫЙ БЛОК: Логика определения и вычисления подсветки ---
+        -- Получаем ID пользователя, который выполняет этот запрос
+        v_viewer_player_id := get_or_create_player_id(USER);
+
+        -- Подсветка включается, только если игра активна И тот, кто смотрит, является тем, кто должен ходить
+        IF v_status = 'ACTIVE' AND v_viewer_player_id = v_active_player_id THEN
+            -- Находим все легальные ходы
+            v_legal_moves := find_all_player_moves(v_board_position, v_current_turn);
+
+            -- Если есть ходы и они являются взятиями, то собираем их конечные точки
+            IF v_legal_moves.COUNT > 0 AND v_legal_moves(1).is_capture = 'Y' THEN
+                FOR i IN 1..v_legal_moves.COUNT LOOP
+                    FOR j IN 1..v_legal_moves(i).path.COUNT LOOP
+                        v_highlight_indices(v_legal_moves(i).path(j).end_idx) := TRUE;
+                    END LOOP;
+                END LOOP;
+            END IF;
+        END IF;
+        --- КОНЕЦ НОВОГО БЛОКА ---
 
         DBMS_LOB.createtemporary(v_clob, TRUE);
 
         IF v_status = 'ACTIVE' THEN
-            -- Формируем строку с именем игрока и цветом его фигур
             DBMS_LOB.append(v_clob, 'Сейчас ходит ' || v_player_username || ' (' || v_current_turn || ')' || c_nl || c_nl);
         ELSE
             DBMS_LOB.append(v_clob, 'Состояние доски: ' || c_nl || c_nl);
         END IF;
-
-        DBMS_LOB.append(v_clob, '  |  A   B   C   D   E   F   G   H  |' || c_nl);
-        DBMS_LOB.append(v_clob, '--+---------------------------------+--' || c_nl);
-        FOR i IN REVERSE 1..8 LOOP
-            DBMS_LOB.append(v_clob, i || ' | ');
-            FOR j IN 1..8 LOOP
-                IF MOD(i + j, 2) != 0 THEN
-                    v_linear_idx := ((8 - i) * 4) + CEIL(j / 2);
+        
+        -- Отрисовка доски с учетом подсветки
+        DBMS_LOB.append(v_clob, '  | A  B  C  D  E  F  G  H |' || c_nl);
+        DBMS_LOB.append(v_clob, '--+------------------------+--' || c_nl);
+        FOR r IN REVERSE 1..8 LOOP
+            DBMS_LOB.append(v_clob, r || ' |');
+            FOR c IN 1..8 LOOP
+                v_linear_idx := ((8-r)*8)+c;
+                
+                IF MOD(r + c, 2) != 0 THEN -- Только для темных (игровых) полей
                     v_char := SUBSTR(v_board_position, v_linear_idx, 1);
-                    IF v_char = c_empty_field THEN
-                        DBMS_LOB.append(v_clob, '[ ] ');
+                    
+                    IF v_char = c_empty_field OR v_char = ' ' THEN
+                        --- ИЗМЕНЕНИЕ ЗДЕСЬ: Проверка на подсветку для пустых полей ---
+                        IF v_highlight_indices.EXISTS(v_linear_idx) THEN
+                            DBMS_LOB.append(v_clob, '[.]'); -- Подсвеченное поле
+                        ELSE
+                            DBMS_LOB.append(v_clob, '[ ]'); -- Обычное пустое поле
+                        END IF;
                     ELSE
-                        DBMS_LOB.append(v_clob, '[' || v_char || '] ');
+                        DBMS_LOB.append(v_clob, '[' || v_char || ']'); -- Поле с фигурой
                     END IF;
                 ELSE
-                    DBMS_LOB.append(v_clob, '    ');
+                    DBMS_LOB.append(v_clob, '   '); -- Светлое (неигровое) поле
                 END IF;
             END LOOP;
-            DBMS_LOB.append(v_clob, '| ' || i);
+            DBMS_LOB.append(v_clob, '| ' || r);
             DBMS_LOB.append(v_clob, c_nl);
         END LOOP;
-        DBMS_LOB.append(v_clob, '--+---------------------------------+--' || c_nl);
-        DBMS_LOB.append(v_clob, '  |  A   B   C   D   E   F   G   H  |' || c_nl);
+        DBMS_LOB.append(v_clob, '--+------------------------+--' || c_nl);
+        DBMS_LOB.append(v_clob, '  | A  B  C  D  E  F  G  H |' || c_nl);
         
         RETURN v_clob;
         
@@ -478,11 +630,19 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     END get_my_active_game;
 
     BEGIN -- Блок инициализации пакета
-        FOR r IN 1..8 LOOP FOR c IN 1..8 LOOP
-            IF MOD(r + c, 2) != 0 THEN
-                DECLARE v_idx PLS_INTEGER := ((8 - r) * 4) + CEIL(c / 2); v_notation VARCHAR2(2) := CHR(ASCII('a') + c - 1) || r;
-                BEGIN g_board_map(v_notation).idx := v_idx; g_board_map(v_notation).notation := v_notation; g_board_map(v_notation).row_num := r; g_board_map(v_notation).col_num := c; END;
-            END IF;
-        END LOOP; END LOOP;
-END game_logic;
+        FOR r IN 1..8 LOOP -- Ряды (1-8)
+            FOR c IN 1..8 LOOP -- Колонки (a-h)
+                DECLARE
+                    -- Индекс в строке от 1 до 64. Ряд 8 (индекс 1-8), ..., ряд 1 (индекс 57-64)
+                    v_idx       PLS_INTEGER := ((8 - r) * 8) + c;
+                    v_notation  VARCHAR2(2)  := CHR(ASCII('a') + c - 1) || r;
+                BEGIN
+                    g_board_map(v_notation).idx := v_idx;
+                    g_board_map(v_notation).notation := v_notation;
+                    g_board_map(v_notation).row_num := r;
+                    g_board_map(v_notation).col_num := c;
+                END;
+            END LOOP;
+        END LOOP;
+    END game_logic;
 /
