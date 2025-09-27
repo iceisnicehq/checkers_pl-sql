@@ -19,6 +19,8 @@ CREATE USER C##CHECKERS_APP IDENTIFIED BY "P@ssw0rd";
 -- Выдача прав на создание сессии, таблиц, представлений, процедур и т.д.
 GRANT CONNECT, RESOURCE TO C##CHECKERS_APP;
 GRANT CREATE VIEW TO C##CHECKERS_APP;
+GRANT CREATE SEQUENCE TO C##CHECKERS_APP;
+GRANT CREATE JOB TO C##CHECKERS_APP;
 
 -- Даем квоту на табличное пространство (замените USERS на ваше)
 ALTER USER C##CHECKERS_APP QUOTA UNLIMITED ON USERS;
@@ -32,7 +34,6 @@ ALTER USER C##DEV_USER QUOTA UNLIMITED ON USERS;
 GRANT CONNECT TO C##DEV2_USER;
 ALTER USER C##DEV2_USER QUOTA UNLIMITED ON USERS;
 
--- PROMPT [SUCCESS] Users C##CHECKERS_APP, C##DEV_USER, C##DEV2_USER created.
 
 -- install.sql
 -- =================================================================
@@ -40,21 +41,15 @@ ALTER USER C##DEV2_USER QUOTA UNLIMITED ON USERS;
 -- =================================================================
 -- Выполнять из-под пользователя-владельца C##CHECKERS_APP.
 
-PROMPT [INFO] Starting installation...
 
-PROMPT [1/4] Creating tables...
 @tables.sql
 
-PROMPT [2/4] Creating views...
 @views.sql
 
-PROMPT [3/4] Creating package specification GAME_LOGIC...
 @game_logic.pks
 
-PROMPT [4/4] Creating package body GAME_LOGIC...
 @game_logic.pkb
 
-PROMPT [SUCCESS] Installation complete. All objects created in C##CHECKERS_APP schema.
 
 
 
@@ -64,15 +59,13 @@ PROMPT [SUCCESS] Installation complete. All objects created in C##CHECKERS_APP s
 -- =================================================================
 -- Выполнять из-под пользователя-владельца C##CHECKERS_APP.
 
-PROMPT [GRANT] Granting permissions on GAME_LOGIC and V_OPEN_GAMES to PUBLIC...
-
 -- Даем право выполнять пакет ВСЕМ пользователям в базе данных
 GRANT EXECUTE ON game_logic TO PUBLIC;
 
 -- Даем право просматривать лобби ВСЕМ пользователям
 GRANT SELECT ON v_open_games TO PUBLIC;
-
 GRANT SELECT ON v_active_games TO PUBLIC;
+GRANT SELECT ON v_game_protocol TO PUBLIC;
+GRANT SELECT ON v_player_history TO PUBLIC;
+GRANT SELECT ON v_leaderboard TO PUBLIC;
 
-
-PROMPT [SUCCESS] Permissions granted to PUBLIC.
