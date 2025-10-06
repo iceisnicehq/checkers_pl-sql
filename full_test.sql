@@ -142,32 +142,91 @@ END;
 -- == ЭТАП 4: ПРОСМОТР ЗАПИСИ ПАРТИИ (REPLAY)
 -- == Может выполняться любым пользователем, например C##DEV_USER
 -- =================================================================
+-- =================================================================
+-- == БЛОК 1: ЗАПУСК СЕССИИ ПРОСМОТРА
+-- == Выполните этот блок один раз, чтобы начать.
+-- =================================================================
+SET SERVEROUTPUT ON;
+
 DECLARE
     v_finished_game_id NUMBER;
 BEGIN
-    DBMS_OUTPUT.PUT_LINE(CHR(10) || '--- ЭТАП 4: C##DEV_USER просматривает запись последней игры ---');
-    -- Находим ID последней завершенной игры против C##DEV2_USER
+    DBMS_OUTPUT.PUT_LINE('--- ЗАПУСК СЕССИИ ПРОСМОТРА ---');
+    
+    -- Находим ID последней завершенной игры
     SELECT game_id INTO v_finished_game_id
     FROM C##CHECKERS_APP.v_player_history
-    WHERE opponent_name = 'C##DEV2_USER'
+    WHERE opponent_name = 'C##DEV2_USER' -- Укажите нужного оппонента
     ORDER BY start_time DESC FETCH FIRST 1 ROW ONLY;
 
     DBMS_OUTPUT.PUT_LINE('[INFO] Найдена завершенная партия ID: ' || v_finished_game_id);
 
-    -- 1. Начинаем сессию просмотра
-    DBMS_OUTPUT.PUT_LINE('[ACTION] Запуск сессии просмотра...');
+    -- Начинаем сессию просмотра
     C##CHECKERS_APP.game_logic.start_replay_session(p_game_id => v_finished_game_id);
-    DBMS_OUTPUT.PUT_LINE('[SUCCESS] Сессия начата. Последовательность ходов создана.');
+    DBMS_OUTPUT.PUT_LINE('[SUCCESS] Сессия начата. Теперь можно просматривать ходы.');
+    
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        DBMS_OUTPUT.PUT_LINE('[ERROR] Не найдено завершенных партий для просмотра.');
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('[ERROR] ' || SQLERRM);
+END;
 
-    -- 2. Просматриваем ходы по очереди. Сделаем 4 вызова, чтобы показать цикличность
-    DBMS_OUTPUT.PUT_LINE(CHR(10) || '--- Пошаговый просмотр ---');
-    FOR i IN 1..4 LOOP
-        DBMS_OUTPUT.PUT_LINE('Вызов ' || i || ':');
+-- =================================================================
+-- == БЛОК 2: ПОКАЗАТЬ СЛЕДУЮЩИЙ ХОД
+-- == Выполняйте этот блок многократно для пошагового просмотра.
+-- =================================================================
+SET SERVEROUTPUT ON;
+
+DECLARE
+    v_finished_game_id NUMBER;
+BEGIN
+    -- Находим ID последней игры (чтобы не вводить его вручную каждый раз)
+    SELECT game_id INTO v_finished_game_id
+    FROM C##CHECKERS_APP.v_player_history
+    WHERE opponent_name = 'C##DEV2_USER'
+    ORDER BY start_time DESC FETCH FIRST 1 ROW ONLY;
+    
+    -- Показываем следующий ход
+    C##CHECKERS_APP.game_logic.show_next_replay_move(p_game_id => v_finished_game_id);
+
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        DBMS_OUTPUT.PUT_LINE('[ERROR] Не найдено завершенных партий.');
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('[ERROR] ' || SQLERRM);
+END;
+
+-- =================================================================
+-- == БЛОК 3: ПОКАЗАТЬ ПЕРВЫЕ 10 ХОДОВ В ЦИКЛЕ
+-- == Выполните этот блок, чтобы увидеть автоматический просмотр.
+-- =================================================================
+SET SERVEROUTPUT ON;
+
+DECLARE
+    v_finished_game_id NUMBER;
+    v_total_moves      NUMBER;
+    v_moves_to_show    NUMBER := 10;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('--- ПРОСМОТР ' || v_moves_to_show || ' ХОДОВ В ЦИКЛЕ ---');
+    
+    -- Находим игру и количество ходов в ней
+    SELECT game_id, total_moves INTO v_finished_game_id, v_total_moves
+    FROM C##CHECKERS_APP.v_player_history
+    WHERE opponent_name = 'C##DEV2_USER'
+    ORDER BY start_time DESC FETCH FIRST 1 ROW ONLY;
+
+    DBMS_OUTPUT.PUT_LINE('[INFO] Перезапускаем сессию для игры ID: ' || v_finished_game_id);
+    
+    -- Перезапускаем сессию, чтобы начать с 1-го хода
+    C##CHECKERS_APP.game_logic.start_replay_session(p_game_id => v_finished_game_id);
+    
+    FOR i IN 1..v_moves_to_show LOOP
+        IF i > v_total_moves THEN EXIT; END IF;
         C##CHECKERS_APP.game_logic.show_next_replay_move(p_game_id => v_finished_game_id);
-        IF i = 2 THEN
-             DBMS_OUTPUT.PUT_LINE('-- Все ходы показаны, следующие вызовы начнут с начала --');
-        END IF;
     END LOOP;
+    
+    DBMS_OUTPUT.PUT_LINE('-- Просмотр в цикле завершен --');
 
 EXCEPTION
     WHEN NO_DATA_FOUND THEN
