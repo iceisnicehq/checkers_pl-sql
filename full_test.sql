@@ -156,27 +156,13 @@ END;
 -- == Выполните этот блок один раз, чтобы начать.
 -- =================================================================
 SET SERVEROUTPUT ON;
-
 DECLARE
-    v_finished_game_id NUMBER;
+    v_game_to_watch NUMBER := 1; -- Replace with the actual ID of a finished game
 BEGIN
-    DBMS_OUTPUT.PUT_LINE('--- ЗАПУСК СЕССИИ ПРОСМОТРА ---');
-    
-    -- Находим ID последней завершенной игры
-    SELECT game_id INTO v_finished_game_id
-    FROM C##CHECKERS_APP.v_player_history
-    WHERE opponent_name = 'C##DEV2_USER' -- Укажите нужного оппонента
-    ORDER BY start_time DESC FETCH FIRST 1 ROW ONLY;
-
-    DBMS_OUTPUT.PUT_LINE('[INFO] Найдена завершенная партия ID: ' || v_finished_game_id);
-
-    -- Начинаем сессию просмотра
-    C##CHECKERS_APP.game_logic.start_replay_session(p_game_id => v_finished_game_id);
-    DBMS_OUTPUT.PUT_LINE('[SUCCESS] Сессия начата. Теперь можно просматривать ходы.');
-    
+    DBMS_OUTPUT.PUT_LINE('[INFO] Starting replay session for Game ID: ' || v_game_to_watch);
+    C##CHECKERS_APP.game_logic.start_replay_session(p_game_id => v_game_to_watch);
+    DBMS_OUTPUT.PUT_LINE('[SUCCESS] Session started. You can now view moves one by one.');
 EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-        DBMS_OUTPUT.PUT_LINE('[ERROR] Не найдено завершенных партий для просмотра.');
     WHEN OTHERS THEN
         DBMS_OUTPUT.PUT_LINE('[ERROR] ' || SQLERRM);
 END;
@@ -186,60 +172,23 @@ END;
 -- == Выполняйте этот блок многократно для пошагового просмотра.
 -- =================================================================
 SET SERVEROUTPUT ON;
-
 DECLARE
-    v_finished_game_id NUMBER;
+    v_game_to_watch NUMBER := 1; -- Use the same game ID as above
 BEGIN
-    -- Находим ID последней игры (чтобы не вводить его вручную каждый раз)
-    SELECT game_id INTO v_finished_game_id
-    FROM C##CHECKERS_APP.v_player_history
-    WHERE opponent_name = 'C##DEV2_USER'
-    ORDER BY start_time DESC FETCH FIRST 1 ROW ONLY;
-    
-    -- Показываем следующий ход
-    C##CHECKERS_APP.game_logic.show_next_replay_move(p_game_id => v_finished_game_id);
-
-EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-        DBMS_OUTPUT.PUT_LINE('[ERROR] Не найдено завершенных партий.');
-    WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('[ERROR] ' || SQLERRM);
+    C##CHECKERS_APP.game_logic.show_next_replay_move(p_game_id => v_game_to_watch);
 END;
 
--- =================================================================
--- == БЛОК 3: ПОКАЗАТЬ ПЕРВЫЕ 10 ХОДОВ В ЦИКЛЕ
--- == Выполните этот блок, чтобы увидеть автоматический просмотр.
--- =================================================================
+-- -- =================================================================
+-- -- == БЛОК 3: ПОКАЗАТЬ ПЕРВЫЕ 10 ХОДОВ В ЦИКЛЕ
+-- -- == Выполните этот блок, чтобы увидеть автоматический просмотр.
+-- -- =================================================================
 SET SERVEROUTPUT ON;
 
 DECLARE
-    v_finished_game_id NUMBER;
-    v_total_moves      NUMBER;
-    v_moves_to_show    NUMBER := 10;
+    v_game_id NUMBER := 1; -- Your game ID
 BEGIN
-    DBMS_OUTPUT.PUT_LINE('--- ПРОСМОТР ' || v_moves_to_show || ' ХОДОВ В ЦИКЛЕ ---');
-    
-    -- Находим игру и количество ходов в ней
-    SELECT game_id, total_moves INTO v_finished_game_id, v_total_moves
-    FROM C##CHECKERS_APP.v_player_history
-    WHERE opponent_name = 'C##DEV2_USER'
-    ORDER BY start_time DESC FETCH FIRST 1 ROW ONLY;
-
-    DBMS_OUTPUT.PUT_LINE('[INFO] Перезапускаем сессию для игры ID: ' || v_finished_game_id);
-    
-    -- Перезапускаем сессию, чтобы начать с 1-го хода
-    C##CHECKERS_APP.game_logic.start_replay_session(p_game_id => v_finished_game_id);
-    
-    FOR i IN 1..v_moves_to_show LOOP
-        IF i > v_total_moves THEN EXIT; END IF;
-        C##CHECKERS_APP.game_logic.show_next_replay_move(p_game_id => v_finished_game_id);
-    END LOOP;
-    
-    DBMS_OUTPUT.PUT_LINE('-- Просмотр в цикле завершен --');
-
-EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-        DBMS_OUTPUT.PUT_LINE('[ERROR] Не найдено завершенных партий для просмотра.');
-    WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('[ERROR] ' || SQLERRM);
+    C##CHECKERS_APP.game_logic.show_next_replay_move(
+        p_game_id       => v_game_id,
+        p_moves_to_show => 3
+    );
 END;

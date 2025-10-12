@@ -50,12 +50,12 @@ COMMENT ON TABLE v_active_games IS 'Показывает все активные
 CREATE OR REPLACE VIEW v_game_protocol AS
 SELECT
     gm.game_id,
-    gm.move_number,
-    CASE WHEN MOD(gm.move_number, 2) = 1 THEN (gm.move_number + 1) / 2 ELSE gm.move_number / 2 END AS turn_number,
+    gm.move_number, -- The simple, sequential move number
     p.username,
     gm.move_notation,
     gm.is_capture,
-    gm.move_timestamp
+    gm.move_timestamp,
+    gm.board_position -- The board state AFTER the move
 FROM
     game_moves gm
 JOIN
@@ -63,7 +63,7 @@ JOIN
 ORDER BY
     gm.game_id, gm.move_number;
 
-COMMENT ON COLUMN v_game_protocol.turn_number IS 'Номер полного хода (1. e2-e4 e7-e5)';
+COMMENT ON TABLE v_game_protocol IS 'Протокол ходов партии, включая позицию доски после каждого хода.';
 
 ---
 

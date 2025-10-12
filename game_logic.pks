@@ -57,7 +57,10 @@ CREATE OR REPLACE PACKAGE game_logic AS
     PROCEDURE join_game(p_game_id IN NUMBER);
     PROCEDURE start_replay_session(p_game_id IN NUMBER);
     FUNCTION get_next_replay_move(p_game_id IN NUMBER) RETURN SYS_REFCURSOR;
-    PROCEDURE show_replay(p_game_id IN NUMBER, p_moves_to_show IN NUMBER DEFAULT 1); -- Эту строку добавляем
+    PROCEDURE show_next_replay_move(
+        p_game_id         IN NUMBER,
+        p_moves_to_show   IN NUMBER DEFAULT 1
+    );
     FUNCTION get_game_status(p_game_id IN NUMBER) RETURN rec_game_status;
     FUNCTION get_printable_board(p_game_id IN NUMBER) RETURN CLOB;
     FUNCTION get_possible_moves(p_game_id IN NUMBER) RETURN SYS_REFCURSOR;

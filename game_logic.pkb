@@ -489,7 +489,38 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
     PROCEDURE resign_game(p_game_id IN NUMBER) IS v_game games%ROWTYPE; v_player_id players.player_id%TYPE; v_winner_id players.player_id%TYPE; v_new_status games.status%TYPE; BEGIN v_player_id := get_or_create_player_id(USER); UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE; IF v_game.status NOT IN ('ACTIVE', 'WAITING') THEN RAISE e_game_is_over; END IF; IF v_player_id NOT IN (v_game.player_white_id, v_game.player_black_id, v_game.creator_player_id) THEN RAISE e_access_denied; END IF; IF v_game.status = 'WAITING' THEN v_new_status := 'ABORTED'; v_winner_id := NULL; ELSE IF v_player_id = v_game.player_white_id THEN v_new_status := 'BLACK_WIN'; v_winner_id := v_game.player_black_id; ELSE v_new_status := 'WHITE_WIN'; v_winner_id := v_game.player_white_id; END IF; END IF; UPDATE games SET status = v_new_status, winner_player_id = v_winner_id, end_time = SYSTIMESTAMP WHERE game_id = p_game_id; COMMIT; END resign_game;
     FUNCTION get_game_status(p_game_id IN NUMBER) RETURN rec_game_status IS v_status rec_game_status; BEGIN SELECT g.game_id, gr.rule_name, g.status, g.current_turn, pw.username, pb.username, g.board_position, g.last_move_at, g.moves_since_capture, pwin.username INTO v_status FROM games g JOIN game_rules gr ON g.rule_id = gr.rule_id LEFT JOIN players pw ON g.player_white_id = pw.player_id LEFT JOIN players pb ON g.player_black_id = pb.player_id LEFT JOIN players pwin ON g.winner_player_id = pwin.player_id WHERE g.game_id = p_game_id; RETURN v_status; EXCEPTION WHEN NO_DATA_FOUND THEN RAISE e_game_not_found; END get_game_status;
-   
+       FUNCTION f_get_board_as_clob(p_board_position IN VARCHAR2) RETURN CLOB IS
+        v_clob CLOB;
+        v_char CHAR(1);
+        v_linear_idx PLS_INTEGER;
+        c_nl CONSTANT VARCHAR2(1) := CHR(10);
+    BEGIN
+        DBMS_LOB.createtemporary(v_clob, TRUE);
+        DBMS_LOB.append(v_clob, '  | A  B  C  D  E  F  G  H |' || c_nl);
+        DBMS_LOB.append(v_clob, '--+------------------------+--' || c_nl);
+        FOR r IN REVERSE 1..8 LOOP
+            DBMS_LOB.append(v_clob, r || ' |');
+            FOR c IN 1..8 LOOP
+                v_linear_idx := ((8-r)*8)+c;
+                -- Playable squares have an odd sum of row+col
+                IF MOD(r + c, 2) != 0 THEN
+                    v_char := SUBSTR(p_board_position, v_linear_idx, 1);
+                    IF v_char = c_empty_field OR v_char IS NULL OR v_char = ' ' THEN
+                        DBMS_LOB.append(v_clob, '[ ]');
+                    ELSE
+                        DBMS_LOB.append(v_clob, '[' || v_char || ']');
+                    END IF;
+                ELSE
+                    DBMS_LOB.append(v_clob, '   '); -- Unplayable square
+                END IF;
+            END LOOP;
+            DBMS_LOB.append(v_clob, '| ' || r);
+            DBMS_LOB.append(v_clob, c_nl);
+        END LOOP;
+        DBMS_LOB.append(v_clob, '--+------------------------+--' || c_nl);
+        DBMS_LOB.append(v_clob, '  | A  B  C  D  E  F  G  H |' || c_nl);
+        RETURN v_clob;
+    END f_get_board_as_clob;
     PROCEDURE start_replay_session(p_game_id IN NUMBER) IS
 
       v_player_id   players.player_id%type;
@@ -585,51 +616,106 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             WHERE game_id = p_game_id AND move_number = v_move_num;
         RETURN v_cursor;
     END get_next_replay_move;
-    PROCEDURE show_replay(p_game_id IN NUMBER, p_moves_to_show IN NUMBER DEFAULT 1) IS
+    PROCEDURE show_next_replay_move(
+        p_game_id         IN NUMBER,
+        p_moves_to_show   IN NUMBER DEFAULT 1
+    ) IS
         v_cursor        SYS_REFCURSOR;
+        -- Variable declarations remain the same
         v_game_id       game_moves.game_id%TYPE;
         v_move_number   game_moves.move_number%TYPE;
-        v_turn_number   NUMBER;
-        v_username      VARCHAR2(256);
-        v_move_notation VARCHAR2(256);
+        v_username      players.username%TYPE;
+        v_move_notation game_moves.move_notation%TYPE;
         v_is_capture    game_moves.is_capture%TYPE;
         v_move_ts       game_moves.move_timestamp%TYPE;
+        v_board_pos     games.board_position%TYPE;
         v_color_str     VARCHAR2(10);
     BEGIN
-        -- Основной цикл для показа нужного количества ходов
         FOR i IN 1..p_moves_to_show LOOP
             BEGIN
                 v_cursor := get_next_replay_move(p_game_id);
-                FETCH v_cursor INTO
-                    v_game_id, v_move_number, v_turn_number, v_username,
-                    v_move_notation, v_is_capture, v_move_ts;
 
+                FETCH v_cursor INTO
+                    v_game_id, v_move_number, v_username,
+                    v_move_notation, v_is_capture, v_move_ts, v_board_pos;
+
+                -- <<====== [FIXED LOGIC HERE] ======>>
+                -- Check the status of the cursor immediately after fetching.
                 IF v_cursor%FOUND THEN
-                    v_color_str := CASE WHEN MOD(v_move_number, 2) = 1 THEN '(Белые)' ELSE '(Черные)' END;
+                    -- If the fetch was successful, close the cursor and print the move.
+                    CLOSE v_cursor;
+
+                    v_color_str := CASE WHEN MOD(v_move_number, 2) = 1 THEN '(White)' ELSE '(Black)' END;
+                    DBMS_OUTPUT.PUT_LINE('---');
                     DBMS_OUTPUT.PUT_LINE(
-                        'Ход ' || v_turn_number || '. ' || RPAD(v_username, 20) || ' ' ||
+                        'Move ' || v_move_number || ' ' || RPAD(v_username, 20) || ' ' ||
                         RPAD(v_color_str, 10) || ' : ' || v_move_notation
                     );
+                    DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_board_pos));
+                ELSE
+                    -- If the fetch found nothing, the cursor is already empty.
+                    -- We just need to close it and exit the loop.
+                    CLOSE v_cursor;
+                    EXIT; -- No more moves to show.
                 END IF;
-                CLOSE v_cursor;
+                -- <<====== [END OF FIX] ======>>
 
             EXCEPTION
                 WHEN e_replay_finished THEN
-                    -- Если мы поймали это исключение, значит ходы закончились.
-                    DBMS_OUTPUT.PUT_LINE('--[ КОНЕЦ ПАРТИТИ ]-- Для нового просмотра вызовите start_replay_session.');
+                    -- This exception is raised by get_next_replay_move before we even fetch.
+                    DBMS_OUTPUT.PUT_LINE('--[ END OF GAME ]-- To watch again, call start_replay_session.');
                     IF v_cursor%ISOPEN THEN CLOSE v_cursor; END IF;
-                    EXIT; -- Выходим из цикла досрочно
+                    EXIT; -- Exit the FOR loop gracefully
             END;
-        END LOOP; -- Конец основного цикла
+        END LOOP;
+
     EXCEPTION
         WHEN e_replay_session_not_started THEN
-            DBMS_OUTPUT.PUT_LINE('[ВНИМАНИЕ] Сессия просмотра не начата. Вызовите game_logic.start_replay_session(' || p_game_id || ');');
+            DBMS_OUTPUT.PUT_LINE('[WARNING] Replay session not started. Call game_logic.start_replay_session(' || p_game_id || '); first.');
         WHEN OTHERS THEN
             IF v_cursor%ISOPEN THEN CLOSE v_cursor; END IF;
             RAISE;
-    END show_replay;
+    END show_next_replay_move;
 
-    FUNCTION get_printable_board(p_game_id IN NUMBER) RETURN CLOB IS v_board_position games.board_position%TYPE; v_clob CLOB; v_char CHAR(1); v_linear_idx PLS_INTEGER; c_nl CONSTANT VARCHAR2(1) := CHR(10); v_status games.status%TYPE; v_current_turn games.current_turn%TYPE; v_player_username players.username%TYPE; v_active_player_id players.player_id%TYPE; v_viewer_player_id players.player_id%TYPE; v_rule_id games.rule_id%TYPE; TYPE t_map_indices IS TABLE OF BOOLEAN INDEX BY PLS_INTEGER; v_highlight_indices t_map_indices; v_legal_moves t_move_list; BEGIN BEGIN SELECT g.board_position, g.status, g.current_turn, g.rule_id, CASE g.current_turn WHEN 'W' THEN g.player_white_id ELSE g.player_black_id END INTO v_board_position, v_status, v_current_turn, v_rule_id, v_active_player_id FROM games g WHERE g.game_id = p_game_id; IF v_active_player_id IS NOT NULL THEN SELECT p.username INTO v_player_username FROM players p WHERE p.player_id = v_active_player_id; ELSE v_player_username := '(ожидание)'; END IF; EXCEPTION WHEN NO_DATA_FOUND THEN RAISE e_game_not_found; END; v_viewer_player_id := get_or_create_player_id(USER); IF v_status = 'ACTIVE' AND v_viewer_player_id = v_active_player_id THEN v_legal_moves := find_all_player_moves(v_board_position, v_current_turn, v_rule_id); IF v_legal_moves.COUNT > 0 AND v_legal_moves(1).is_capture = 'Y' THEN FOR i IN 1..v_legal_moves.COUNT LOOP v_highlight_indices(v_legal_moves(i).path(v_legal_moves(i).path.LAST).end_idx) := TRUE; END LOOP; END IF; END IF; DBMS_LOB.createtemporary(v_clob, TRUE); IF v_status = 'ACTIVE' THEN DBMS_LOB.append(v_clob, 'Сейчас ходит ' || v_player_username || ' (' || v_current_turn || ')' || c_nl || c_nl); ELSE DBMS_LOB.append(v_clob, 'Состояние доски: ' || c_nl || c_nl); END IF; DBMS_LOB.append(v_clob, '  | A  B  C  D  E  F  G  H |' || c_nl); DBMS_LOB.append(v_clob, '--+------------------------+--' || c_nl); FOR r IN REVERSE 1..8 LOOP DBMS_LOB.append(v_clob, r || ' |'); FOR c IN 1..8 LOOP v_linear_idx := ((8-r)*8)+c; IF MOD(r + c, 2) != 0 THEN v_char := SUBSTR(v_board_position, v_linear_idx, 1); IF v_char = c_empty_field OR v_char = ' ' THEN IF v_highlight_indices.EXISTS(v_linear_idx) THEN DBMS_LOB.append(v_clob, '[.]'); ELSE DBMS_LOB.append(v_clob, '[ ]'); END IF; ELSE DBMS_LOB.append(v_clob, '[' || v_char || ']'); END IF; ELSE DBMS_LOB.append(v_clob, '   '); END IF; END LOOP; DBMS_LOB.append(v_clob, '| ' || r); DBMS_LOB.append(v_clob, c_nl); END LOOP; DBMS_LOB.append(v_clob, '--+------------------------+--' || c_nl); DBMS_LOB.append(v_clob, '  | A  B  C  D  E  F  G  H |' || c_nl); RETURN v_clob; END get_printable_board;
+    FUNCTION get_printable_board(p_game_id IN NUMBER) RETURN CLOB IS
+        v_board_position games.board_position%TYPE;
+        v_clob           CLOB;
+        c_nl             CONSTANT VARCHAR2(1) := CHR(10);
+        v_status         games.status%TYPE;
+        v_current_turn   games.current_turn%TYPE;
+        v_player_username players.username%TYPE;
+        v_active_player_id players.player_id%TYPE;
+    BEGIN
+        BEGIN
+            SELECT g.board_position, g.status, g.current_turn,
+                   CASE g.current_turn WHEN 'W' THEN g.player_white_id ELSE g.player_black_id END
+            INTO v_board_position, v_status, v_current_turn, v_active_player_id
+            FROM games g WHERE g.game_id = p_game_id;
+
+            IF v_active_player_id IS NOT NULL THEN
+                SELECT p.username INTO v_player_username FROM players p WHERE p.player_id = v_active_player_id;
+            ELSE
+                v_player_username := '(waiting)';
+            END IF;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN RAISE e_game_not_found;
+        END;
+
+        DBMS_LOB.createtemporary(v_clob, TRUE);
+
+        -- Add the header
+        IF v_status = 'ACTIVE' THEN
+            DBMS_LOB.append(v_clob, 'Turn: ' || v_player_username || ' (' || v_current_turn || ')' || c_nl || c_nl);
+        ELSE
+            DBMS_LOB.append(v_clob, 'Board State: ' || c_nl || c_nl);
+        END IF;
+
+        -- Append the rendered board by calling the new private function
+        DBMS_LOB.append(v_clob, f_get_board_as_clob(v_board_position));
+
+        RETURN v_clob;
+    END get_printable_board;
+
     FUNCTION get_possible_moves(p_game_id IN NUMBER) RETURN SYS_REFCURSOR IS v_cursor SYS_REFCURSOR; v_game games%ROWTYPE; v_player_id players.player_id%TYPE; v_player_color CHAR(1); v_all_legal_moves t_move_list; v_notations game_logic.tbl_move_notation := game_logic.tbl_move_notation(); v_notation_str VARCHAR2(100); BEGIN SELECT * INTO v_game FROM games WHERE game_id = p_game_id; IF v_game.status != 'ACTIVE' THEN RAISE e_game_is_over; END IF; v_player_id := get_or_create_player_id(USER); IF v_game.player_white_id = v_player_id THEN v_player_color := 'W'; ELSIF v_game.player_black_id = v_player_id THEN v_player_color := 'B'; ELSE RAISE e_access_denied; END IF; IF v_game.current_turn != v_player_color THEN RAISE e_not_your_turn; END IF; v_all_legal_moves := find_all_player_moves(v_game.board_position, v_player_color, v_game.rule_id); FOR i IN 1..v_all_legal_moves.COUNT LOOP v_notation_str := idx_to_notation(v_all_legal_moves(i).path(1).start_idx); FOR j IN 1..v_all_legal_moves(i).path.COUNT LOOP v_notation_str := v_notation_str || CASE v_all_legal_moves(i).is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_all_legal_moves(i).path(j).end_idx); END LOOP; v_notations.EXTEND; v_notations(v_notations.LAST) := game_logic.rec_move_notation(v_notation_str); END LOOP; OPEN v_cursor FOR SELECT * FROM TABLE(v_notations); RETURN v_cursor; EXCEPTION WHEN NO_DATA_FOUND THEN RAISE e_game_not_found; END get_possible_moves;
     FUNCTION cleanup_stale_games(p_timeout_minutes IN NUMBER) RETURN NUMBER IS v_cleaned_count NUMBER := 0; BEGIN FOR r IN ( SELECT game_id, status, player_white_id, player_black_id, current_turn FROM games WHERE status IN ('ACTIVE', 'WAITING') AND last_move_at < (SYSTIMESTAMP - NUMTODSINTERVAL(p_timeout_minutes, 'MINUTE')) FOR UPDATE ) LOOP DECLARE v_new_status games.status%TYPE; v_winner_id games.winner_player_id%TYPE; BEGIN IF r.status = 'WAITING' THEN v_new_status := 'ABORTED'; v_winner_id := NULL; ELSE v_new_status := CASE r.current_turn WHEN 'W' THEN 'BLACK_WIN' ELSE 'WHITE_WIN' END; v_winner_id := CASE r.current_turn WHEN 'W' THEN r.player_black_id ELSE r.player_white_id END; END IF; UPDATE games SET status = v_new_status, winner_player_id = v_winner_id, end_time = SYSTIMESTAMP WHERE game_id = r.game_id; v_cleaned_count := v_cleaned_count + 1; END; END LOOP; COMMIT; RETURN v_cleaned_count; END cleanup_stale_games;
     FUNCTION get_my_active_game RETURN NUMBER IS v_game_id games.game_id%TYPE; v_player_id players.player_id%TYPE; BEGIN v_player_id := get_or_create_player_id(USER); SELECT g.game_id INTO v_game_id FROM games g WHERE g.status IN ('ACTIVE', 'WAITING') AND (g.player_white_id = v_player_id OR g.player_black_id = v_player_id OR g.creator_player_id = v_player_id) AND ROWNUM = 1; RETURN v_game_id; EXCEPTION WHEN NO_DATA_FOUND THEN RETURN NULL; END get_my_active_game;
