@@ -56,7 +56,6 @@ CREATE OR REPLACE PACKAGE game_logic AS
     PROCEDURE resign_game(p_game_id IN NUMBER);
     PROCEDURE join_game(p_game_id IN NUMBER);
     PROCEDURE start_replay_session(p_game_id IN NUMBER);
-    FUNCTION get_next_replay_move(p_game_id IN NUMBER) RETURN SYS_REFCURSOR;
     PROCEDURE show_next_replay_move(
         p_game_id         IN NUMBER,
         p_moves_to_show   IN NUMBER DEFAULT 1

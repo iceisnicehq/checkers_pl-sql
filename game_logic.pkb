@@ -588,84 +588,71 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
       commit;
    end start_replay_session;
-   
-    FUNCTION get_next_replay_move(p_game_id IN NUMBER) RETURN SYS_REFCURSOR IS
-        v_player_id players.player_id%TYPE;
-        v_seq_name VARCHAR2(64);
-        v_move_num NUMBER;
-        v_cursor SYS_REFCURSOR;
+    
+    PROCEDURE show_next_replay_move(
+        p_game_id         IN NUMBER,
+        p_moves_to_show   IN NUMBER DEFAULT 1
+    ) IS
+        v_player_id     players.player_id%TYPE;
+        v_seq_name      VARCHAR2(64);
+        v_move_num      NUMBER;
+        v_cursor        SYS_REFCURSOR;
+        -- Variable declarations remain the same
+        v_game_id_fetch       game_moves.game_id%TYPE;
+        v_move_number_fetch   game_moves.move_number%TYPE;
+        v_username_fetch      players.username%TYPE;
+        v_move_notation_fetch game_moves.move_notation%TYPE;
+        v_is_capture_fetch    game_moves.is_capture%TYPE;
+        v_move_ts_fetch       game_moves.move_timestamp%TYPE;
+        v_board_pos_fetch     games.board_position%TYPE;
+        v_color_str     VARCHAR2(10);
     BEGIN
         v_player_id := get_or_create_player_id(USER);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
         v_seq_name := 'REPLAY_SEQ_' || p_game_id || '_' || v_player_id;
 
-        BEGIN
-            EXECUTE IMMEDIATE 'SELECT ' || v_seq_name || '.NEXTVAL FROM DUAL' INTO v_move_num;
-        EXCEPTION
-            WHEN OTHERS THEN
-                -- === УЛУЧШЕННАЯ ОБРАБОТКА ОШИБОК ===
-                IF SQLCODE = -8004 THEN -- ORA-08004: sequence ... exceeds MAXVALUE
-                    RAISE e_replay_finished; -- Бросаем наше кастомное исключение
-                ELSE
-                    RAISE e_replay_session_not_started; -- Если другая ошибка (напр. нет sequence)
-                END IF;
-        END;
-
-        OPEN v_cursor FOR
-            SELECT * FROM v_game_protocol
-            WHERE game_id = p_game_id AND move_number = v_move_num;
-        RETURN v_cursor;
-    END get_next_replay_move;
-    PROCEDURE show_next_replay_move(
-        p_game_id         IN NUMBER,
-        p_moves_to_show   IN NUMBER DEFAULT 1
-    ) IS
-        v_cursor        SYS_REFCURSOR;
-        -- Variable declarations remain the same
-        v_game_id       game_moves.game_id%TYPE;
-        v_move_number   game_moves.move_number%TYPE;
-        v_username      players.username%TYPE;
-        v_move_notation game_moves.move_notation%TYPE;
-        v_is_capture    game_moves.is_capture%TYPE;
-        v_move_ts       game_moves.move_timestamp%TYPE;
-        v_board_pos     games.board_position%TYPE;
-        v_color_str     VARCHAR2(10);
-    BEGIN
         FOR i IN 1..p_moves_to_show LOOP
             BEGIN
-                v_cursor := get_next_replay_move(p_game_id);
+                -- << LOGIC FROM get_next_replay_move IS NOW INLINED HERE >>
+                BEGIN
+                    EXECUTE IMMEDIATE 'SELECT ' || v_seq_name || '.NEXTVAL FROM DUAL' INTO v_move_num;
+                EXCEPTION
+                    WHEN OTHERS THEN
+                        IF SQLCODE = -8004 THEN
+                            RAISE e_replay_finished;
+                        ELSE
+                            RAISE e_replay_session_not_started;
+                        END IF;
+                END;
+
+                OPEN v_cursor FOR
+                    SELECT * FROM v_game_protocol
+                    WHERE game_id = p_game_id AND move_number = v_move_num;
+                -- << END OF INLINED LOGIC >>
 
                 FETCH v_cursor INTO
-                    v_game_id, v_move_number, v_username,
-                    v_move_notation, v_is_capture, v_move_ts, v_board_pos;
+                    v_game_id_fetch, v_move_number_fetch, v_username_fetch,
+                    v_move_notation_fetch, v_is_capture_fetch, v_move_ts_fetch, v_board_pos_fetch;
 
-                -- <<====== [FIXED LOGIC HERE] ======>>
-                -- Check the status of the cursor immediately after fetching.
                 IF v_cursor%FOUND THEN
-                    -- If the fetch was successful, close the cursor and print the move.
                     CLOSE v_cursor;
-
-                    v_color_str := CASE WHEN MOD(v_move_number, 2) = 1 THEN '(White)' ELSE '(Black)' END;
+                    v_color_str := CASE WHEN MOD(v_move_number_fetch, 2) = 1 THEN '(White)' ELSE '(Black)' END;
                     DBMS_OUTPUT.PUT_LINE('---');
                     DBMS_OUTPUT.PUT_LINE(
-                        'Move ' || v_move_number || ' ' || RPAD(v_username, 20) || ' ' ||
-                        RPAD(v_color_str, 10) || ' : ' || v_move_notation
+                        'Move ' || v_move_number_fetch || ' ' || RPAD(v_username_fetch, 20) || ' ' ||
+                        RPAD(v_color_str, 10) || ' : ' || v_move_notation_fetch
                     );
-                    DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_board_pos));
+                    DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_board_pos_fetch));
                 ELSE
-                    -- If the fetch found nothing, the cursor is already empty.
-                    -- We just need to close it and exit the loop.
                     CLOSE v_cursor;
-                    EXIT; -- No more moves to show.
+                    EXIT;
                 END IF;
-                -- <<====== [END OF FIX] ======>>
 
             EXCEPTION
                 WHEN e_replay_finished THEN
-                    -- This exception is raised by get_next_replay_move before we even fetch.
                     DBMS_OUTPUT.PUT_LINE('--[ END OF GAME ]-- To watch again, call start_replay_session.');
                     IF v_cursor%ISOPEN THEN CLOSE v_cursor; END IF;
-                    EXIT; -- Exit the FOR loop gracefully
+                    EXIT;
             END;
         END LOOP;
 
