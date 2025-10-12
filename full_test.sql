@@ -112,6 +112,15 @@ EXCEPTION
     WHEN OTHERS THEN
         DBMS_OUTPUT.PUT_LINE('[ERROR] ' || SQLERRM);
 END;
+
+
+DECLARE
+    v_game_id        NUMBER;
+BEGIN
+    v_game_id := C##CHECKERS_APP.game_logic.get_my_active_game();
+    DBMS_OUTPUT.PUT_LINE(C##CHECKERS_APP.game_logic.get_printable_board(v_game_id));
+END;
+
 /
 
 -- =================================================================

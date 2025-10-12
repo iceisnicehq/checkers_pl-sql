@@ -1,22 +1,17 @@
--- =============================================================================
--- Файл: views.sql
--- Описание: Представления для отображения информации пользователям.
--- =============================================================================
-
 CREATE OR REPLACE VIEW v_open_games AS
 SELECT
     g.game_id,
     p_creator.username AS creator_username,
-    -- Тип вызова определяется просто: если оба слота заняты, это прямой вызов
-    CASE
-        WHEN g.player_white_id IS NOT NULL AND g.player_black_id IS NOT NULL
-        THEN 'Direct Challenge'
-        ELSE 'Open Challenge'
+    -- << ИЗМЕНЕНИЕ: Тип вызова теперь определяется напрямую из статуса
+    CASE g.status
+        WHEN 'OPEN'       THEN 'Open Challenge'
+        WHEN 'CHALLENGED' THEN 'Direct Challenge'
     END AS challenge_type,
-    -- Вызываемый игрок - это тот, кто не является создателем
+    -- << ИЗМЕНЕНИЕ: Вызываемый игрок есть только у прямых вызовов
     CASE
-        WHEN g.player_white_id = g.creator_player_id THEN p_black.username
-        ELSE p_white.username
+        WHEN g.status = 'CHALLENGED' AND g.player_white_id = g.creator_player_id THEN p_black.username
+        WHEN g.status = 'CHALLENGED' AND g.player_black_id = g.creator_player_id THEN p_white.username
+        ELSE NULL
     END AS challenged_player,
     g.start_time AS created_at
 FROM
@@ -25,10 +20,13 @@ JOIN players p_creator ON g.creator_player_id = p_creator.player_id
 LEFT JOIN players p_white ON g.player_white_id = p_white.player_id
 LEFT JOIN players p_black ON g.player_black_id = p_black.player_id
 WHERE
-    g.status = 'WAITING';
+    g.status IN ('OPEN', 'CHALLENGED'); -- << ИЗМЕНЕНИЕ: Фильтруем по новым статусам
 
 COMMENT ON TABLE v_open_games IS 'Показывает все партии, ожидающие второго игрока (игровое лобби).';
 
+---
+-- V_ACTIVE_GAMES - без изменений, логика остается прежней
+---
 CREATE OR REPLACE VIEW v_active_games AS
 SELECT
     g.game_id,
@@ -46,12 +44,14 @@ WHERE
 
 COMMENT ON TABLE v_active_games IS 'Показывает все активные на данный момент партии для наблюдения.';
 
-
+---
+-- V_GAME_PROTOCOL - без изменений, не зависит от статуса партии
+---
 CREATE OR REPLACE VIEW v_game_protocol AS
 SELECT
     gm.game_id,
     gm.move_number,
-CASE WHEN MOD(gm.move_number, 2) = 1 THEN (gm.move_number + 1) / 2 ELSE gm.move_number / 2 END AS turn_number,
+    CASE WHEN MOD(gm.move_number, 2) = 1 THEN (gm.move_number + 1) / 2 ELSE gm.move_number / 2 END AS turn_number,
     p.username,
     gm.move_notation,
     gm.is_capture,
@@ -62,8 +62,10 @@ JOIN
     players p ON gm.player_id = p.player_id
 ORDER BY
     gm.game_id, gm.move_number;
-    
+
 COMMENT ON COLUMN v_game_protocol.turn_number IS 'Номер полного хода (1. e2-e4 e7-e5)';
+
+---
 
 CREATE OR REPLACE VIEW v_player_history AS
 SELECT
@@ -73,7 +75,7 @@ SELECT
     CASE
         WHEN g.status IN ('WHITE_WIN', 'BLACK_WIN') AND g.winner_player_id = p_user.player_id THEN 'WIN'
         WHEN g.status = 'DRAW' THEN 'DRAW'
-        ELSE 'LOSS'
+        ELSE 'LOSS' -- Включает поражения по таймауту, сдаче и т.д.
     END AS result,
     g.status AS final_status,
     g.start_time,
@@ -89,16 +91,21 @@ LEFT JOIN
         (g.player_black_id = p_user.player_id AND g.player_white_id = p_opponent.player_id)
     )
 WHERE
-    g.status NOT IN ('ACTIVE', 'WAITING', 'SCHEDULED')
+    g.status NOT IN ('ACTIVE', 'OPEN', 'CHALLENGED', 'ABORTED') -- << ИЗМЕНЕНИЕ: Убираем незавершенные партии
     AND p_user.username = USER;
 
+COMMENT ON TABLE v_player_history IS 'История завершенных игр для текущего пользователя.';
+
+---
 
 CREATE OR REPLACE VIEW v_leaderboard AS
 WITH game_results AS (
     -- Собираем все участия в завершенных играх
-    SELECT player_white_id AS player_id, status, winner_player_id FROM games WHERE status NOT IN ('ACTIVE', 'WAITING', 'ABORTED', 'SCHEDULED') AND player_white_id IS NOT NULL
+    SELECT player_white_id AS player_id, status, winner_player_id FROM games
+    WHERE status NOT IN ('ACTIVE', 'OPEN', 'CHALLENGED', 'ABORTED') AND player_white_id IS NOT NULL -- << ИЗМЕНЕНИЕ
     UNION ALL
-    SELECT player_black_id AS player_id, status, winner_player_id FROM games WHERE status NOT IN ('ACTIVE', 'WAITING', 'ABORTED', 'SCHEDULED') AND player_black_id IS NOT NULL
+    SELECT player_black_id AS player_id, status, winner_player_id FROM games
+    WHERE status NOT IN ('ACTIVE', 'OPEN', 'CHALLENGED', 'ABORTED') AND player_black_id IS NOT NULL -- << ИЗМЕНЕНИЕ
 ),
 player_stats AS (
     SELECT
@@ -120,8 +127,9 @@ SELECT
     ps.draws,
     -- Поведение при 0 в знаменателе: если поражений 0, считаем успех 100% от числа побед. Если и побед 0, то 0.
     CASE
-        WHEN ps.losses = 0 THEN ps.wins * 100
-        ELSE ROUND((ps.wins / ps.losses) * 100, 2)
+        WHEN ps.losses = 0 AND ps.wins > 0 THEN ps.wins * 100.0
+        WHEN ps.losses = 0 AND ps.wins = 0 THEN 0.0
+        ELSE ROUND((ps.wins * 1.0 / ps.losses) * 100, 2) -- Умножение на 1.0 для избежания целочисленного деления
     END AS success_rate_percent
 FROM
     player_stats ps
@@ -129,3 +137,5 @@ JOIN
     players p ON ps.player_id = p.player_id
 ORDER BY
     success_rate_percent DESC, wins DESC;
+
+COMMENT ON TABLE v_leaderboard IS 'Таблица лидеров на основе статистики побед, поражений и ничьих.';
