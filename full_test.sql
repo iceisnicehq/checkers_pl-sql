@@ -71,15 +71,16 @@ DECLARE
 BEGIN
     v_game_id := C##CHECKERS_APP.game_logic.get_my_active_game();
     IF v_game_id IS NOT NULL THEN
-        DBMS_OUTPUT.PUT_LINE(CHR(10) || '--- ЭТАП 2.1: Ход Белых (C##DEV_USER) ---');
         C##CHECKERS_APP.game_logic.make_move(
             p_game_id       => v_game_id,
-            p_move_notation => 'c3-d4',
+            p_move_notation => 'd6-c5',
             p_status_message => v_status_message
         );
         DBMS_OUTPUT.PUT_LINE('[OK] ' || v_status_message);
+        DBMS_OUTPUT.PUT_LINE(CHR(10) || 'Доска после хода:');
+        DBMS_OUTPUT.PUT_LINE(C##CHECKERS_APP.game_logic.get_printable_board(v_game_id));
     ELSE
-        DBMS_OUTPUT.PUT_LINE('[INFO] Активных партий для ' || USER || ' не найдено.');
+         DBMS_OUTPUT.PUT_LINE('[INFO] Активных партий для ' || USER || ' не найдено.');
     END IF;
 EXCEPTION
     WHEN OTHERS THEN
@@ -114,6 +115,9 @@ EXCEPTION
 END;
 
 
+-- -----------------------------------------------------------------
+-- ПРОСМОТР СОСТОЯНИЯ ДОСКИ
+-- -----------------------------------------------------------------
 DECLARE
     v_game_id        NUMBER;
 BEGIN
@@ -191,4 +195,92 @@ BEGIN
         p_game_id       => v_game_id,
         p_moves_to_show => 3
     );
+END;
+
+
+-- =================================================================
+-- == ЭТАП 5: СОЗДАНИЕ ПАРТИИ ПРОТИВ КОМПЬЮТЕРА
+-- == Может выполняться любым пользователем, например C##DEV_USER
+-- =================================================================
+-- =================================================================
+-- == БЛОК 1: ЗАПУСК СЕССИИ игры против компьютера
+-- == Выполните этот блок один раз, чтобы начать.
+-- =================================================================
+SET SERVEROUTPUT ON;
+
+DECLARE
+    v_game_id NUMBER;
+    v_msg VARCHAR2(2000);
+BEGIN
+    game_logic.create_game(
+        p_opponent_username => 'AI', -- Указываем специальное имя
+        p_player_color      => 'W',  -- Можно 'W', 'B' или NULL для случайного выбора
+        p_game_id           => v_game_id,
+        p_status_message    => v_msg
+    );
+    DBMS_OUTPUT.PUT_LINE(v_msg);
+    DBMS_OUTPUT.PUT_LINE('Game ID: ' || v_game_id);
+END;
+/
+
+
+-- =================================================================
+-- == БЛОК 2: ВЫПОЛНЕНИЕ ХОДА ПРОТИВ КОМПЬЮТЕРА
+-- == Выполняйте этот блок многократно, чтобы играть.
+-- =================================================================
+SET SERVEROUTPUT ON;
+
+DECLARE
+    v_my_game_id NUMBER := 1; -- <<== Use your active game ID
+    v_msg        VARCHAR2(2000);
+BEGIN
+    C##CHECKERS_APP.game_logic.make_move(
+        p_game_id       => v_my_game_id,
+        p_move_notation => 'b3:c5', -- <<== An illegal move when e3:c5 is available
+        p_status_message => v_msg
+    );
+    DBMS_OUTPUT.PUT_LINE(v_msg);
+    DBMS_OUTPUT.PUT_LINE(C##CHECKERS_APP.game_logic.get_printable_board(v_my_game_id));
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('[ОШИБКА] ' || SQLERRM);
+END;
+
+
+----
+DECLARE
+    v_game_id        NUMBER := 1;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE(C##CHECKERS_APP.game_logic.get_printable_board(v_game_id));
+END;
+----
+
+-- ===========================================================================
+--- 2. Создать открытую PvP игру:
+SET SERVEROUTPUT ON;
+DECLARE
+    v_game_id NUMBER;
+    v_msg VARCHAR2(2000);
+BEGIN
+    game_logic.create_game(
+        p_opponent_username => NULL, -- Оставляем NULL для открытой игры
+        p_game_id           => v_game_id,
+        p_status_message    => v_msg
+    );
+    DBMS_OUTPUT.PUT_LINE(v_msg);
+END;
+
+
+-- 3. Бросить вызов конкретному игроку (например, PLAYER2):
+SET SERVEROUTPUT ON;
+DECLARE
+    v_game_id NUMBER;
+    v_msg VARCHAR2(2000);
+BEGIN
+    game_logic.create_game(
+        p_opponent_username => 'PLAYER2',
+        p_game_id           => v_game_id,
+        p_status_message    => v_msg
+    );
+    DBMS_OUTPUT.PUT_LINE(v_msg);
 END;
