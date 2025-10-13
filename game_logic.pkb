@@ -332,9 +332,10 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         
         COMMIT;
     END join_game;
+    
     PROCEDURE make_move(
-        p_game_id         IN  NUMBER,
-        p_move_notation   IN  VARCHAR2,
+        p_game_id         IN NUMBER,
+        p_move_notation   IN VARCHAR2,
         p_status_message  OUT VARCHAR2
     ) IS
         v_game              games%ROWTYPE;
@@ -347,23 +348,31 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_new_board         games.board_position%TYPE;
         v_move_count        NUMBER;
     BEGIN
+        -- (Начало процедуры остается без изменений: получение данных, проверка хода)
         SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE;
         IF v_game.status NOT IN ('ACTIVE') THEN RAISE e_game_is_over; END IF;
 
         v_player_id := get_or_create_player_id(USER);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
-        IF v_game.player_white_id = v_player_id THEN v_player_color := 'W'; ELSIF v_game.player_black_id = v_player_id THEN v_player_color := 'B'; ELSE RAISE e_access_denied; END IF;
+
+        IF v_game.player_white_id = v_player_id THEN v_player_color := 'W';
+        ELSIF v_game.player_black_id = v_player_id THEN v_player_color := 'B';
+        ELSE RAISE e_access_denied;
+        END IF;
+
         IF v_game.current_turn != v_player_color THEN RAISE e_not_your_turn; END IF;
 
         v_all_legal_moves := find_all_player_moves(v_game.board_position, v_player_color, v_game.rule_id);
 
         IF v_all_legal_moves.COUNT = 0 THEN
-            UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'BLACK_WIN' ELSE 'WHITE_WIN' END, end_time = SYSTIMESTAMP,
-                             winner_player_id = CASE v_player_color WHEN 'W' THEN v_game.player_black_id ELSE v_game.player_white_id END
+            UPDATE games SET
+                status = CASE v_player_color WHEN 'W' THEN 'BLACK_WIN' ELSE 'WHITE_WIN' END,
+                end_time = SYSTIMESTAMP,
+                winner_player_id = CASE v_player_color WHEN 'W' THEN v_game.player_black_id ELSE v_game.player_white_id END
             WHERE game_id = p_game_id;
             p_status_message := 'Ходов нет. Вы проиграли!'; COMMIT; RETURN;
         END IF;
-
+        -- (...Проверка легальности хода и поиск v_chosen_move...)
         FOR i IN 1..v_all_legal_moves.COUNT LOOP
             DECLARE
                 v_legal_move r_move := v_all_legal_moves(i);
@@ -380,32 +389,15 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             END;
         END LOOP;
 
-        IF NOT v_is_move_valid THEN
-            IF v_all_legal_moves(1).is_capture = 'Y' THEN
-                DECLARE
-                    v_error_msg VARCHAR2(2000) := 'Нелегальный ход. Взятие обязательно! Доступные варианты: ';
-                    v_notation_str VARCHAR2(100);
-                BEGIN
-                    FOR i IN 1..v_all_legal_moves.COUNT LOOP
-                        v_notation_str := idx_to_notation(v_all_legal_moves(i).path(1).start_idx);
-                        FOR j IN 1..v_all_legal_moves(i).path.COUNT LOOP
-                            v_notation_str := v_notation_str || ':' || idx_to_notation(v_all_legal_moves(i).path(j).end_idx);
-                        END LOOP;
-                        v_error_msg := v_error_msg || v_notation_str || ' ';
-                    END LOOP;
-                    RAISE_APPLICATION_ERROR(-20007, RTRIM(v_error_msg));
-                END;
-            ELSE
-                RAISE e_illegal_move;
-            END IF;
-        END IF;
+        IF NOT v_is_move_valid THEN RAISE e_illegal_move; END IF;
 
+        -- (...Формирование новой доски v_new_board...)
         v_new_board := v_game.board_position;
         DECLARE
-            v_moving_piece CHAR(1);
-            v_start_pos PLS_INTEGER := v_chosen_move.path(1).start_idx;
-            v_end_pos   PLS_INTEGER := v_chosen_move.path(v_chosen_move.path.LAST).end_idx;
-            v_promoted  BOOLEAN := FALSE;
+        v_moving_piece CHAR(1);
+        v_start_pos PLS_INTEGER := v_chosen_move.path(1).start_idx;
+        v_end_pos   PLS_INTEGER := v_chosen_move.path(v_chosen_move.path.LAST).end_idx;
+        v_promoted  BOOLEAN := FALSE;
         BEGIN
             v_moving_piece := SUBSTR(v_new_board, v_start_pos, 1);
             v_new_board := SUBSTR(v_new_board, 1, v_start_pos - 1) || c_empty_field || SUBSTR(v_new_board, v_start_pos + 1);
@@ -414,76 +406,86 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     v_new_board := SUBSTR(v_new_board, 1, v_chosen_move.path(i).captured_idx - 1) || c_empty_field || SUBSTR(v_new_board, v_chosen_move.path(i).captured_idx + 1);
                 END LOOP;
             END IF;
-
             IF v_moving_piece IN (c_white_man, c_black_man) THEN
-                IF v_game.rule_id = 1 AND v_chosen_move.is_capture = 'Y' THEN
-                    FOR i IN 1..v_chosen_move.path.COUNT LOOP
-                        DECLARE
-                            v_intermediate_pos PLS_INTEGER := v_chosen_move.path(i).end_idx;
-                            v_intermediate_row PLS_INTEGER := g_board_map(idx_to_notation(v_intermediate_pos)).row_num;
-                        BEGIN
-                            IF (v_player_color = 'W' AND v_intermediate_row = 8) OR (v_player_color = 'B' AND v_intermediate_row = 1) THEN
-                                v_promoted := TRUE;
-                                EXIT;
-                            END IF;
-                        END;
-                    END LOOP;
+                IF ( (v_player_color = 'W' AND g_board_map(idx_to_notation(v_end_pos)).row_num = 8) OR (v_player_color = 'B' AND g_board_map(idx_to_notation(v_end_pos)).row_num = 1) ) THEN
+                    v_moving_piece := CASE v_player_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
                 END IF;
-
-                DECLARE
-                    v_end_row PLS_INTEGER := g_board_map(idx_to_notation(v_end_pos)).row_num;
-                    v_is_final_square_promotion BOOLEAN := (v_player_color = 'W' AND v_end_row = 8) OR (v_player_color = 'B' AND v_end_row = 1);
-                BEGIN
-                    IF v_promoted OR v_is_final_square_promotion THEN
-                        v_moving_piece := CASE v_player_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
-                    END IF;
-                END;
             END IF;
             v_new_board := SUBSTR(v_new_board, 1, v_end_pos - 1) || v_moving_piece || SUBSTR(v_new_board, v_end_pos + 1);
         END;
 
+        -- Обновляем состояние игры
         UPDATE games SET
-            board_position = v_new_board, current_turn = CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
-            last_move_at = SYSTIMESTAMP, moves_since_capture = CASE v_chosen_move.is_capture WHEN 'Y' THEN 0 ELSE v_game.moves_since_capture + 1 END
+            board_position = v_new_board,
+            current_turn = CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
+            last_move_at = SYSTIMESTAMP,
+            moves_since_capture = CASE v_chosen_move.is_capture WHEN 'Y' THEN 0 ELSE v_game.moves_since_capture + 1 END
         WHERE game_id = p_game_id;
+
+        -- Записываем ход в протокол
         SELECT COUNT(*) + 1 INTO v_move_count FROM game_moves WHERE game_id = p_game_id;
         INSERT INTO game_moves (game_id, move_number, player_id, move_notation, is_capture, board_position)
         VALUES (p_game_id, v_move_count, v_player_id, p_move_notation, v_chosen_move.is_capture, v_new_board);
+
         p_status_message := 'Ход ' || p_move_notation || ' принят.';
+
+        -- <<====== [НАЧАЛО НОВОГО БЛОКА] Проверка условий завершения партии ======>>
         DECLARE
-            v_next_turn_color CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
-            v_next_player_moves t_move_list;
+            v_next_turn_color       CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
+            v_next_player_moves     t_move_list;
             v_opponent_pieces_exist BOOLEAN := FALSE;
+            v_repetition_count      NUMBER;
         BEGIN
+            -- 1. Проверка на победу (у оппонента не осталось фигур)
             IF v_next_turn_color = 'W' THEN
                 IF INSTR(v_new_board, c_white_man) > 0 OR INSTR(v_new_board, c_white_king) > 0 THEN v_opponent_pieces_exist := TRUE; END IF;
             ELSE
                 IF INSTR(v_new_board, c_black_man) > 0 OR INSTR(v_new_board, c_black_king) > 0 THEN v_opponent_pieces_exist := TRUE; END IF;
             END IF;
+
             IF NOT v_opponent_pieces_exist THEN
-                 UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'WHITE_WIN' ELSE 'BLACK_WIN' END, end_time = SYSTIMESTAMP, winner_player_id = v_player_id
-                 WHERE game_id = p_game_id;
-                 p_status_message := p_status_message || ' Победа! У противника не осталось фигур.';
-                 COMMIT; RETURN;
+                UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'WHITE_WIN' ELSE 'BLACK_WIN' END, end_time = SYSTIMESTAMP, winner_player_id = v_player_id WHERE game_id = p_game_id;
+                p_status_message := p_status_message || ' Победа! У противника не осталось фигур.';
+                COMMIT; RETURN;
             END IF;
+
+            -- 2. Проверка на победу (пат - у оппонента нет ходов)
             v_next_player_moves := find_all_player_moves(v_new_board, v_next_turn_color, v_game.rule_id);
             IF v_next_player_moves.COUNT = 0 THEN
-                UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'WHITE_WIN' ELSE 'BLACK_WIN' END, end_time = SYSTIMESTAMP, winner_player_id = v_player_id
-                WHERE game_id = p_game_id;
+                UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'WHITE_WIN' ELSE 'BLACK_WIN' END, end_time = SYSTIMESTAMP, winner_player_id = v_player_id WHERE game_id = p_game_id;
                 p_status_message := p_status_message || ' Победа! У противника нет доступных ходов (пат).';
                 COMMIT; RETURN;
             END IF;
+
+            -- Получаем правила для проверок ничьи
             SELECT * INTO v_rule FROM game_rules WHERE rule_id = v_game.rule_id;
-            IF v_game.moves_since_capture + 1 >= v_rule.draw_moves_limit THEN
+
+            -- 3. Проверка на ничью по лимиту ходов без взятия
+            IF v_chosen_move.is_capture = 'N' AND (v_game.moves_since_capture + 1) >= v_rule.draw_moves_limit THEN
                 UPDATE games SET status = 'DRAW', end_time = SYSTIMESTAMP WHERE game_id = p_game_id;
                 p_status_message := p_status_message || ' Ничья! Превышен лимит ходов без взятия.';
                 COMMIT; RETURN;
             END IF;
+
+            -- 4. Проверка на ничью по троекратному повторению позиции
+            IF v_rule.enable_pos_repetition_draw = 'Y' THEN
+                SELECT COUNT(*) INTO v_repetition_count FROM game_moves
+                WHERE game_id = p_game_id AND board_position = v_new_board;
+
+                -- Если позиция уже встречалась 2 раза в протоколе, то текущий ход создает 3-е повторение
+                IF v_repetition_count >= 2 THEN
+                    UPDATE games SET status = 'DRAW', end_time = SYSTIMESTAMP WHERE game_id = p_game_id;
+                    p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.';
+                    COMMIT; RETURN;
+                END IF;
+            END IF;
         END;
+        -- <<====== [КОНЕЦ НОВОГО БЛОКА] ======>>
+
         COMMIT;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN RAISE e_game_not_found;
-        WHEN e_game_is_over OR e_access_denied OR e_not_your_turn OR e_invalid_move_notation OR e_illegal_move THEN ROLLBACK; RAISE;
+        WHEN e_game_is_over OR e_access_denied OR e_not_your_turn OR e_illegal_move THEN ROLLBACK; RAISE;
         WHEN OTHERS THEN ROLLBACK; RAISE;
     END make_move;
 

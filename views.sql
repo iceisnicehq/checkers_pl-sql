@@ -139,3 +139,76 @@ ORDER BY
     success_rate_percent DESC, wins DESC;
 
 COMMENT ON TABLE v_leaderboard IS 'Таблица лидеров на основе статистики побед, поражений и ничьих.';
+
+-- 1. Представление для истории игр конкретного пользователя
+CREATE OR REPLACE VIEW v_player_history AS
+SELECT
+    p_user.username AS player_name,
+    g.game_id,
+    CASE
+        WHEN g.winner_player_id = p_user.player_id THEN 'WIN'
+        WHEN g.status = 'DRAW' THEN 'DRAW'
+        ELSE 'LOSS'
+    END AS result,
+    p_opponent.username AS opponent_name,
+    gr.rule_name,
+    (SELECT COUNT(*) FROM game_moves gm WHERE gm.game_id = g.game_id) AS total_moves,
+    g.end_time
+FROM
+    games g
+JOIN players p_user ON (g.player_white_id = p_user.player_id OR g.player_black_id = p_user.player_id)
+JOIN game_rules gr ON g.rule_id = gr.rule_id
+-- Находим оппонента
+LEFT JOIN players p_opponent ON (
+    (g.player_white_id = p_user.player_id AND g.player_black_id = p_opponent.player_id) OR
+    (g.player_black_id = p_user.player_id AND g.player_white_id = p_opponent.player_id)
+)
+WHERE
+    -- Показываем только завершенные партии
+    g.status IN ('WHITE_WIN', 'BLACK_WIN', 'DRAW', 'TIMEOUT')
+    -- Фильтруем для текущего пользователя, который просматривает отчет
+    AND p_user.username = USER;
+
+COMMENT ON TABLE v_player_history IS 'История завершенных игр для текущего пользователя.';
+
+
+-- 2. Представление для таблицы лидеров (рейтинг)
+CREATE OR REPLACE VIEW v_leaderboard AS
+WITH game_participations AS (
+    -- Собираем все участия в завершенных играх в один список
+    SELECT player_white_id AS player_id, status, winner_player_id FROM games WHERE status IN ('WHITE_WIN', 'BLACK_WIN', 'DRAW', 'TIMEOUT')
+    UNION ALL
+    SELECT player_black_id AS player_id, status, winner_player_id FROM games WHERE status IN ('WHITE_WIN', 'BLACK_WIN', 'DRAW', 'TIMEOUT')
+),
+player_stats AS (
+    -- Считаем статистику для каждого игрока
+    SELECT
+        player_id,
+        COUNT(*) AS games_played,
+        SUM(CASE WHEN winner_player_id = player_id THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN status = 'DRAW' THEN 1 ELSE 0 END) AS draws,
+        SUM(CASE WHEN status NOT IN ('DRAW') AND winner_player_id != player_id THEN 1 ELSE 0 END) AS losses
+    FROM game_participations
+    WHERE player_id IS NOT NULL
+    GROUP BY player_id
+)
+SELECT
+    p.username,
+    ps.games_played,
+    ps.wins,
+    ps.losses,
+    ps.draws,
+    -- Расчет "успешности": победы / поражения. Обрабатываем деление на ноль.
+    CASE
+        WHEN ps.losses = 0 AND ps.wins > 0 THEN (ps.wins * 100.0) -- Если нет поражений, но есть победы - максимальный успех
+        WHEN ps.losses = 0 AND ps.wins = 0 THEN 0.0 -- Если нет ни побед, ни поражений
+        ELSE ROUND((ps.wins * 1.0 / ps.losses) * 100, 2)
+    END AS success_rate_percent
+FROM
+    player_stats ps
+JOIN
+    players p ON ps.player_id = p.player_id
+ORDER BY
+    success_rate_percent DESC, wins DESC;
+
+COMMENT ON TABLE v_leaderboard IS 'Таблица лидеров, отсортированная по проценту успеха и количеству побед.';
