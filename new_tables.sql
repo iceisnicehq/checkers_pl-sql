@@ -36,8 +36,6 @@ CREATE TABLE players (
     CONSTRAINT pk_players PRIMARY KEY (player_id),
     CONSTRAINT uk_players_username UNIQUE (username)
 );
-COMMENT ON TABLE players IS 'Игроки и другие сущности (AI, Admin).';
-COMMENT ON COLUMN players.last_activity_at IS 'Время последней зафиксированной активности игрока.';
 
 -- 2. GAME_RULES
 CREATE TABLE game_rules (

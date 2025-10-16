@@ -37,6 +37,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
     e_access_denied             EXCEPTION;
     e_replay_session_not_started EXCEPTION;
     e_replay_finished           EXCEPTION;
+    e_opponent_is_busy          EXCEPTION; 
 
     PRAGMA EXCEPTION_INIT(e_player_is_busy, -20001);
     PRAGMA EXCEPTION_INIT(e_invalid_opponent, -20002);
@@ -48,35 +49,38 @@ CREATE OR REPLACE PACKAGE game_logic AS
     PRAGMA EXCEPTION_INIT(e_access_denied, -20008);
     PRAGMA EXCEPTION_INIT(e_replay_session_not_started, -20009);
     PRAGMA EXCEPTION_INIT(e_replay_finished, -20012);
+    PRAGMA EXCEPTION_INIT(e_opponent_is_busy, -20020);
 
     -- ========================= [ НАЧАЛО ИЗМЕНЕНИЙ ] =========================
-    -- Объединяем create_game и create_pve_game
     PROCEDURE create_game(
         p_opponent_username   IN VARCHAR2 DEFAULT NULL,
         p_player_color        IN CHAR     DEFAULT NULL,
         p_rule_id             IN NUMBER   DEFAULT 1,
-        p_ai_difficulty       IN NUMBER   DEFAULT 1, -- Новый параметр для сложности ИИ
+        p_ai_difficulty       IN NUMBER   DEFAULT 1,
         p_time_limit_move_sec IN NUMBER   DEFAULT NULL,
-        p_time_limit_game_sec IN NUMBER   DEFAULT NULL,
-        p_game_id             OUT NUMBER,
-        p_status_message      OUT VARCHAR2
+        p_time_limit_game_sec IN NUMBER   DEFAULT NULL
     );
     -- ========================== [ КОНЕЦ ИЗМЕНЕНИЙ ] ==========================
 
-    PROCEDURE make_move(p_game_id IN NUMBER, p_move_notation IN VARCHAR2, p_status_message OUT VARCHAR2);
-    PROCEDURE resign_game(p_game_id IN NUMBER);
+    PROCEDURE make_move(
+            p_move_notation  IN VARCHAR2
+    );
+    
+    PROCEDURE print_board(
+        p_game_id     IN NUMBER   DEFAULT NULL,
+        p_username    IN VARCHAR2 DEFAULT NULL,
+        p_hide_header IN BOOLEAN  DEFAULT FALSE
+    );
+    
+    PROCEDURE resign_game;
     PROCEDURE join_game(p_game_id IN NUMBER);
     PROCEDURE start_replay_session(p_game_id IN NUMBER);
     PROCEDURE show_next_replay_move( p_game_id IN NUMBER, p_moves_to_show IN NUMBER DEFAULT 1 );
     
-    -- ПРОЦЕДУРА create_pve_game БОЛЬШЕ НЕ НУЖНА
-    -- PROCEDURE create_pve_game(...);
 
     FUNCTION get_game_status(p_game_id IN NUMBER) RETURN rec_game_status;
-    FUNCTION get_printable_board(p_game_id IN NUMBER) RETURN CLOB;
     FUNCTION get_possible_moves(p_game_id IN NUMBER) RETURN SYS_REFCURSOR;
     FUNCTION cleanup_stale_games(p_timeout_minutes IN NUMBER) RETURN NUMBER;
-    FUNCTION get_my_active_game RETURN NUMBER;
 
 END game_logic;
 /
