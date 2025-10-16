@@ -7,7 +7,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
     c_black_man     CONSTANT VARCHAR2(1) := 'b';
     c_white_king    CONSTANT VARCHAR2(1) := 'W';
     c_black_king    CONSTANT VARCHAR2(1) := 'B';
-    c_empty_field   CONSTANT VARCHAR2(1) := ' ';
+    c_empty_field   CONSTANT VARCHAR2(1) := '+';
 
     TYPE rec_game_status IS RECORD (
         game_id             games.game_id%TYPE,

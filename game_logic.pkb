@@ -17,14 +17,14 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     BEGIN
         SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
         IF v_rule.rule_name = 'Русские шашки 8x8' THEN
-            RETURN ' b b b b' || -- Row 8 (b8, d8, f8, h8)
-                   'b b b b ' || -- Row 7 (a7, c7, e7, g7)
-                   ' b b b b' || -- Row 6 (b6, d6, f6, h6)
-                   '        ' || -- Row 5 (Empty)
-                   '        ' || -- Row 4 (Empty)
-                   'w w w w ' || -- Row 3 (a3, c3, e3, g3)
-                   ' w w w w' || -- Row 2 (b2, d2, f2, h2)
-                   'w w w w ';   -- Row 1 (a1, c1, e1, g1)
+            RETURN '+b+b+b+b' || -- Row 8
+                'b+b+b+b+' || -- Row 7
+                '+b+b+b+b' || -- Row 6
+                '++++++++' || -- Row 5
+                '++++++++' || -- Row 4
+                'w+w+w+w+' || -- Row 3
+                '+w+w+w+w' || -- Row 2
+                'w+w+w+w+';   -- Row 1
         ELSE
             RAISE_APPLICATION_ERROR(-20100, 'Правила игры с ID=' || p_rule_id || ' не поддерживаются.');
         END IF;
@@ -32,11 +32,151 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
     FUNCTION idx_to_notation(p_idx IN PLS_INTEGER) RETURN VARCHAR2 IS v_key VARCHAR2(2); BEGIN v_key := g_board_map.FIRST; WHILE v_key IS NOT NULL LOOP IF g_board_map(v_key).idx = p_idx THEN RETURN v_key; END IF; v_key := g_board_map.NEXT(v_key); END LOOP; RETURN NULL; END idx_to_notation;
     
-    FUNCTION find_capture_paths( p_start_idx IN PLS_INTEGER, p_board IN VARCHAR2, p_player_color IN CHAR, p_is_king IN CHAR, p_rule_id IN NUMBER, p_visited_path IN t_move_path DEFAULT t_move_path() ) RETURN t_move_list IS v_results t_move_list := t_move_list(); v_jump_directions SYS.ODCINUMBERLIST; v_opponent_man CHAR(1); v_opponent_king CHAR(1); BEGIN IF p_player_color = 'W' THEN v_opponent_man := c_black_man; v_opponent_king := c_black_king; ELSE v_opponent_man := c_white_man; v_opponent_king := c_white_king; END IF; v_jump_directions := SYS.ODCINUMBERLIST(-18, -14, 14, 18); FOR i IN 1 .. v_jump_directions.COUNT LOOP DECLARE v_jump PLS_INTEGER := v_jump_directions(i); v_land_idx PLS_INTEGER; v_capture_idx PLS_INTEGER; v_start_field rec_board_field := g_board_map(idx_to_notation(p_start_idx)); v_is_visited BOOLEAN := FALSE; BEGIN IF p_is_king = 'N' THEN v_land_idx := p_start_idx + v_jump; v_capture_idx := p_start_idx + v_jump / 2; IF v_land_idx BETWEEN 1 AND 64 AND ABS(v_start_field.col_num - g_board_map(idx_to_notation(v_land_idx)).col_num) = 2 THEN IF SUBSTR(p_board, v_land_idx, 1) = ' ' AND SUBSTR(p_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king) THEN FOR k IN 1 .. p_visited_path.COUNT LOOP IF p_visited_path(k).captured_idx = v_capture_idx THEN v_is_visited := TRUE; EXIT; END IF; END LOOP; IF NOT v_is_visited THEN DECLARE v_becomes_king CHAR(1) := 'N'; v_land_row PLS_INTEGER := g_board_map(idx_to_notation(v_land_idx)).row_num; v_is_promotion_square BOOLEAN := (p_player_color = 'W' AND v_land_row = 8) OR (p_player_color = 'B' AND v_land_row = 1); v_step r_move_step; v_new_path t_move_path := p_visited_path; v_sub_paths t_move_list; v_move r_move; BEGIN v_step.start_idx := p_start_idx; v_step.end_idx := v_land_idx; v_step.captured_idx := v_capture_idx; v_new_path.EXTEND; v_new_path(v_new_path.LAST) := v_step; IF p_rule_id = 1 AND v_is_promotion_square THEN v_becomes_king := 'Y'; END IF; v_sub_paths := find_capture_paths(v_land_idx, p_board, p_player_color, v_becomes_king, p_rule_id, v_new_path); IF v_sub_paths.COUNT = 0 THEN v_move.path := v_new_path; v_move.is_capture := 'Y'; v_move.capture_count := v_new_path.COUNT; v_results.EXTEND; v_results(v_results.LAST) := v_move; ELSE FOR j IN 1 .. v_sub_paths.COUNT LOOP v_results.EXTEND; v_results(v_results.LAST) := v_sub_paths(j); END LOOP; END IF; END; END IF; END IF; END IF; ELSE FOR k IN 1 .. 7 LOOP v_capture_idx := p_start_idx + (v_jump / 2 * k); IF v_capture_idx NOT BETWEEN 1 AND 64 OR ABS(v_start_field.col_num - g_board_map(idx_to_notation(v_capture_idx)).col_num) != k THEN EXIT; END IF; IF SUBSTR(p_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king) THEN FOR m IN 1 .. p_visited_path.COUNT LOOP IF p_visited_path(m).captured_idx = v_capture_idx THEN v_is_visited := TRUE; EXIT; END IF; END LOOP; IF v_is_visited THEN EXIT; END IF; FOR l IN (k + 1) .. 8 LOOP v_land_idx := p_start_idx + (v_jump / 2 * l); IF v_land_idx NOT BETWEEN 1 AND 64 OR ABS(v_start_field.col_num - g_board_map(idx_to_notation(v_land_idx)).col_num) != l THEN EXIT; END IF; DECLARE v_land_field rec_board_field := g_board_map(idx_to_notation(v_land_idx)); BEGIN IF SUBSTR(p_board, v_land_idx, 1) = ' ' AND MOD(v_land_field.row_num + v_land_field.col_num, 2) = 0 THEN DECLARE v_step r_move_step; v_new_path t_move_path := p_visited_path; v_sub_paths t_move_list; v_move r_move; BEGIN v_step.start_idx := p_start_idx; v_step.end_idx := v_land_idx; v_step.captured_idx := v_capture_idx; v_new_path.EXTEND; v_new_path(v_new_path.LAST) := v_step; v_sub_paths := find_capture_paths(v_land_idx, p_board, p_player_color, 'Y', p_rule_id, v_new_path); IF v_sub_paths.COUNT = 0 THEN v_move.path := v_new_path; v_move.is_capture := 'Y'; v_move.capture_count := v_new_path.COUNT; v_results.EXTEND; v_results(v_results.LAST) := v_move; ELSE FOR j IN 1 .. v_sub_paths.COUNT LOOP v_results.EXTEND; v_results(v_results.LAST) := v_sub_paths(j); END LOOP; END IF; END; ELSE EXIT; END IF; END; END LOOP; EXIT; END IF; END LOOP; END IF; END; END LOOP; RETURN v_results; END find_capture_paths;
-    FUNCTION find_all_player_moves(p_board IN VARCHAR2, p_player_color IN CHAR, p_rule_id IN NUMBER) RETURN t_move_list IS v_all_moves t_move_list := t_move_list(); v_capture_moves t_move_list := t_move_list(); v_simple_moves t_move_list := t_move_list(); v_player_man CHAR(1); v_player_king CHAR(1); v_max_captures PLS_INTEGER := 0; BEGIN IF p_player_color = 'W' THEN v_player_man := c_white_man; v_player_king := c_white_king; ELSE v_player_man := c_black_man; v_player_king := c_black_king; END IF; FOR i IN 1..64 LOOP DECLARE v_piece CHAR(1) := SUBSTR(p_board, i, 1); v_paths t_move_list; v_is_king CHAR(1); BEGIN IF v_piece IN (v_player_man, v_player_king) THEN v_is_king := CASE WHEN v_piece IN (c_white_king, c_black_king) THEN 'Y' ELSE 'N' END; v_paths := find_capture_paths(i, p_board, p_player_color, v_is_king, p_rule_id); IF v_paths.COUNT > 0 THEN FOR j IN 1..v_paths.COUNT LOOP v_capture_moves.EXTEND; v_capture_moves(v_capture_moves.LAST) := v_paths(j); IF v_paths(j).capture_count > v_max_captures THEN v_max_captures := v_paths(j).capture_count; END IF; END LOOP; END IF; END IF; END; END LOOP; IF v_capture_moves.COUNT > 0 THEN FOR i IN 1..v_capture_moves.COUNT LOOP IF v_capture_moves(i).capture_count = v_max_captures THEN v_all_moves.EXTEND; v_all_moves(v_all_moves.LAST) := v_capture_moves(i); END IF; END LOOP; RETURN v_all_moves; END IF; FOR i IN 1..64 LOOP DECLARE v_piece CHAR(1) := SUBSTR(p_board, i, 1); v_start_not VARCHAR2(2) := idx_to_notation(i); BEGIN IF v_piece = v_player_man THEN DECLARE v_directions SYS.ODCINUMBERLIST; BEGIN IF p_player_color = 'W' THEN v_directions := SYS.ODCINUMBERLIST(-9, -7); ELSE v_directions := SYS.ODCINUMBERLIST(7, 9); END IF; FOR d IN 1..v_directions.COUNT LOOP DECLARE v_end_idx PLS_INTEGER := i + v_directions(d); v_end_not VARCHAR2(2) := idx_to_notation(v_end_idx); BEGIN IF v_end_not IS NOT NULL AND SUBSTR(p_board, v_end_idx, 1) = ' ' THEN IF ABS(g_board_map(v_start_not).col_num - g_board_map(v_end_not).col_num) = 1 THEN DECLARE v_move r_move; v_step r_move_step; BEGIN v_step.start_idx := i; v_step.end_idx := v_end_idx; v_step.captured_idx := NULL; v_move.path := t_move_path(v_step); v_move.is_capture := 'N'; v_move.capture_count := 0; v_simple_moves.EXTEND; v_simple_moves(v_simple_moves.LAST) := v_move; END; END IF; END IF; END; END LOOP; END; ELSIF v_piece = v_player_king THEN DECLARE v_directions SYS.ODCINUMBERLIST := SYS.ODCINUMBERLIST(-9, -7, 7, 9); BEGIN FOR d IN 1..v_directions.COUNT LOOP FOR k IN 1..7 LOOP DECLARE v_end_idx PLS_INTEGER := i + (v_directions(d) * k); v_end_not VARCHAR2(2) := idx_to_notation(v_end_idx); BEGIN IF v_end_not IS NULL THEN EXIT; END IF; IF k > 1 AND ABS(g_board_map(idx_to_notation(i + (v_directions(d) * (k-1)))).col_num - g_board_map(v_end_not).col_num) != 1 THEN EXIT; END IF; IF SUBSTR(p_board, v_end_idx, 1) = ' ' THEN DECLARE v_move r_move; v_step r_move_step; BEGIN v_step.start_idx := i; v_step.end_idx := v_end_idx; v_step.captured_idx := NULL; v_move.path := t_move_path(v_step); v_move.is_capture := 'N'; v_move.capture_count := 0; v_simple_moves.EXTEND; v_simple_moves(v_simple_moves.LAST) := v_move; END; ELSE EXIT; END IF; END; END LOOP; END LOOP; END; END IF; END; END LOOP; RETURN v_simple_moves; END find_all_player_moves;
-    PROCEDURE p_process_move( p_game_id IN NUMBER, p_move_notation IN VARCHAR2, p_player_id IN NUMBER, p_status_message OUT VARCHAR2 ) IS v_game games%ROWTYPE; v_rule game_rules%ROWTYPE; v_player_color CHAR(1); v_all_legal_moves t_move_list; v_chosen_move r_move; v_is_move_valid BOOLEAN := FALSE; v_new_board games.board_position%TYPE; v_move_count NUMBER; BEGIN SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE; IF v_game.player_white_id = p_player_id THEN v_player_color := 'W'; ELSE v_player_color := 'B'; END IF; v_all_legal_moves := find_all_player_moves(v_game.board_position, v_player_color, v_game.rule_id); IF v_all_legal_moves.COUNT = 0 THEN UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'BLACK_WIN' ELSE 'WHITE_WIN' END, end_time = SYSTIMESTAMP, winner_player_id = CASE v_player_color WHEN 'W' THEN v_game.player_black_id ELSE v_game.player_white_id END WHERE game_id = p_game_id; p_status_message := 'Ходов нет. Вы проиграли!'; COMMIT; RETURN; END IF; FOR i IN 1..v_all_legal_moves.COUNT LOOP DECLARE v_legal_move r_move := v_all_legal_moves(i); v_notation VARCHAR2(50); BEGIN v_notation := idx_to_notation(v_legal_move.path(1).start_idx); FOR j IN 1..v_legal_move.path.COUNT LOOP v_notation := v_notation || CASE v_legal_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_legal_move.path(j).end_idx); END LOOP; IF REPLACE(LOWER(p_move_notation), 'x', ':') = v_notation THEN v_chosen_move := v_legal_move; v_is_move_valid := TRUE; EXIT; END IF; END; END LOOP; IF NOT v_is_move_valid THEN IF v_all_legal_moves(1).is_capture = 'Y' THEN DECLARE v_error_msg VARCHAR2(2000) := 'Неверный ход. Взятие обязательно! Доступные варианты: '; v_notation_str VARCHAR2(100); BEGIN FOR i IN 1..v_all_legal_moves.COUNT LOOP v_notation_str := idx_to_notation(v_all_legal_moves(i).path(1).start_idx); FOR j IN 1..v_all_legal_moves(i).path.COUNT LOOP v_notation_str := v_notation_str || ':' || idx_to_notation(v_all_legal_moves(i).path(j).end_idx); END LOOP; v_error_msg := v_error_msg || v_notation_str || ' '; END LOOP; RAISE_APPLICATION_ERROR(-20007, RTRIM(v_error_msg)); END; ELSE RAISE_APPLICATION_ERROR(-20007, 'Нелегальный ход: "' || p_move_notation || '".'); END IF; END IF; v_new_board := v_game.board_position; DECLARE v_moving_piece CHAR(1) := SUBSTR(v_new_board, v_chosen_move.path(1).start_idx, 1); v_start_pos PLS_INTEGER := v_chosen_move.path(1).start_idx; v_end_pos PLS_INTEGER := v_chosen_move.path(v_chosen_move.path.LAST).end_idx; BEGIN v_new_board := SUBSTR(v_new_board, 1, v_start_pos - 1) || c_empty_field || SUBSTR(v_new_board, v_start_pos + 1); IF v_chosen_move.is_capture = 'Y' THEN FOR i IN 1..v_chosen_move.path.COUNT LOOP v_new_board := SUBSTR(v_new_board, 1, v_chosen_move.path(i).captured_idx - 1) || c_empty_field || SUBSTR(v_new_board, v_chosen_move.path(i).captured_idx + 1); END LOOP; END IF; IF v_moving_piece IN (c_white_man, c_black_man) AND ((v_player_color = 'W' AND g_board_map(idx_to_notation(v_end_pos)).row_num = 8) OR (v_player_color = 'B' AND g_board_map(idx_to_notation(v_end_pos)).row_num = 1)) THEN v_moving_piece := CASE v_player_color WHEN 'W' THEN c_white_king ELSE c_black_king END; END IF; v_new_board := SUBSTR(v_new_board, 1, v_end_pos - 1) || v_moving_piece || SUBSTR(v_new_board, v_end_pos + 1); END; UPDATE games SET board_position = v_new_board, current_turn = CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END, last_move_at = SYSTIMESTAMP, moves_since_capture = CASE v_chosen_move.is_capture WHEN 'Y' THEN 0 ELSE v_game.moves_since_capture + 1 END WHERE game_id = p_game_id; SELECT COUNT(*) + 1 INTO v_move_count FROM game_moves WHERE game_id = p_game_id; INSERT INTO game_moves (game_id, move_number, player_id, move_notation, is_capture, board_position) VALUES (p_game_id, v_move_count, p_player_id, p_move_notation, v_chosen_move.is_capture, v_new_board); p_status_message := 'Ход ' || p_move_notation || ' принят.'; DECLARE v_next_turn_color CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END; v_next_player_moves t_move_list; v_opponent_pieces_exist BOOLEAN := FALSE; v_repetition_count NUMBER; BEGIN IF v_next_turn_color = 'W' THEN IF INSTR(v_new_board, c_white_man) > 0 OR INSTR(v_new_board, c_white_king) > 0 THEN v_opponent_pieces_exist := TRUE; END IF; ELSE IF INSTR(v_new_board, c_black_man) > 0 OR INSTR(v_new_board, c_black_king) > 0 THEN v_opponent_pieces_exist := TRUE; END IF; END IF; IF NOT v_opponent_pieces_exist THEN UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'WHITE_WIN' ELSE 'BLACK_WIN' END, end_time = SYSTIMESTAMP, winner_player_id = p_player_id WHERE game_id = p_game_id; p_status_message := p_status_message || ' Победа! У противника не осталось фигур.'; COMMIT; RETURN; END IF; v_next_player_moves := find_all_player_moves(v_new_board, v_next_turn_color, v_game.rule_id); IF v_next_player_moves.COUNT = 0 THEN UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'WHITE_WIN' ELSE 'BLACK_WIN' END, end_time = SYSTIMESTAMP, winner_player_id = p_player_id WHERE game_id = p_game_id; p_status_message := p_status_message || ' Победа! Противник заблокирован.'; COMMIT; RETURN; END IF; SELECT * INTO v_rule FROM game_rules WHERE rule_id = v_game.rule_id; IF v_chosen_move.is_capture = 'N' AND (v_game.moves_since_capture + 1) >= v_rule.draw_moves_limit THEN UPDATE games SET status = 'DRAW', end_time = SYSTIMESTAMP WHERE game_id = p_game_id; p_status_message := p_status_message || ' Ничья! Превышен лимит ходов без взятия.'; COMMIT; RETURN; END IF; IF v_rule.enable_pos_repetition_draw = 'Y' THEN SELECT COUNT(*) INTO v_repetition_count FROM game_moves WHERE game_id = p_game_id AND board_position = v_new_board; IF v_repetition_count >= 2 THEN UPDATE games SET status = 'DRAW', end_time = SYSTIMESTAMP WHERE game_id = p_game_id; p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.'; COMMIT; RETURN; END IF; END IF; END; COMMIT; END p_process_move;
+FUNCTION find_capture_paths( p_start_idx IN PLS_INTEGER, p_board IN VARCHAR2, p_player_color IN CHAR, p_is_king IN CHAR, p_rule_id IN NUMBER, p_visited_path IN t_move_path DEFAULT t_move_path() ) RETURN t_move_list IS
+        v_results t_move_list := t_move_list(); v_jump_directions SYS.ODCINUMBERLIST; v_opponent_man CHAR(1); v_opponent_king CHAR(1);
+    BEGIN
+        IF p_player_color = 'W' THEN v_opponent_man := c_black_man; v_opponent_king := c_black_king; ELSE v_opponent_man := c_white_man; v_opponent_king := c_white_king; END IF;
+        v_jump_directions := SYS.ODCINUMBERLIST(-18, -14, 14, 18);
+        FOR i IN 1 .. v_jump_directions.COUNT LOOP
+            DECLARE v_jump PLS_INTEGER := v_jump_directions(i); v_land_idx PLS_INTEGER; v_capture_idx PLS_INTEGER; v_start_field rec_board_field := g_board_map(idx_to_notation(p_start_idx)); v_is_visited BOOLEAN := FALSE;
+            BEGIN
+                IF p_is_king = 'N' THEN
+                    v_land_idx := p_start_idx + v_jump; v_capture_idx := p_start_idx + v_jump / 2;
+                    IF v_land_idx BETWEEN 1 AND 64 AND ABS(v_start_field.col_num - g_board_map(idx_to_notation(v_land_idx)).col_num) = 2 THEN
+                        IF SUBSTR(p_board, v_land_idx, 1) = c_empty_field AND SUBSTR(p_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king) THEN
+                            FOR k IN 1 .. p_visited_path.COUNT LOOP IF p_visited_path(k).captured_idx = v_capture_idx THEN v_is_visited := TRUE; EXIT; END IF; END LOOP;
+                            IF NOT v_is_visited THEN
+                                DECLARE
+                                    v_becomes_king CHAR(1) := 'N'; -- По умолчанию шашка не становится дамкой
+                                    v_land_row PLS_INTEGER := g_board_map(idx_to_notation(v_land_idx)).row_num;
+                                    v_is_promotion_square BOOLEAN := (p_player_color = 'W' AND v_land_row = 8) OR (p_player_color = 'B' AND v_land_row = 1);
+                                    v_step r_move_step; v_new_path t_move_path := p_visited_path; v_sub_paths t_move_list; v_move r_move;
+                                BEGIN
+                                    v_step.start_idx := p_start_idx; v_step.end_idx := v_land_idx; v_step.captured_idx := v_capture_idx;
+                                    v_new_path.EXTEND; v_new_path(v_new_path.LAST) := v_step;
+                                    
+                                    -- ПРОВЕРКА ПРАВИЛ ПРЕВРАЩЕНИЯ
+                                    -- Для русских шашек (ID=1) превращение происходит немедленно
+                                    IF p_rule_id = 1 AND v_is_promotion_square THEN
+                                        v_becomes_king := 'Y';
+                                    END IF;
+                                    -- Для международных шашек (ID=2) шашка продолжает бой как простая, если может.
+                                    -- Поэтому v_becomes_king остается 'N', и рекурсивный вызов будет искать ходы для простой.
+                                    
+                                    v_sub_paths := find_capture_paths(v_land_idx, p_board, p_player_color, v_becomes_king, p_rule_id, v_new_path);
+                                    
+                                    IF v_sub_paths.COUNT = 0 THEN
+                                        v_move.path := v_new_path; v_move.is_capture := 'Y'; v_move.capture_count := v_new_path.COUNT;
+                                        v_results.EXTEND; v_results(v_results.LAST) := v_move;
+                                    ELSE
+                                        FOR j IN 1 .. v_sub_paths.COUNT LOOP v_results.EXTEND; v_results(v_results.LAST) := v_sub_paths(j); END LOOP;
+                                    END IF;
+                                END;
+                            END IF;
+                        END IF;
+                    END IF;
+                ELSE -- Логика для дамки (остается без изменений)
+                    FOR k IN 1 .. 7 LOOP v_capture_idx := p_start_idx + (v_jump / 2 * k); IF v_capture_idx NOT BETWEEN 1 AND 64 OR ABS(v_start_field.col_num - g_board_map(idx_to_notation(v_capture_idx)).col_num) != k THEN EXIT; END IF; IF SUBSTR(p_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king) THEN FOR m IN 1 .. p_visited_path.COUNT LOOP IF p_visited_path(m).captured_idx = v_capture_idx THEN v_is_visited := TRUE; EXIT; END IF; END LOOP; IF v_is_visited THEN EXIT; END IF; FOR l IN (k + 1) .. 8 LOOP v_land_idx := p_start_idx + (v_jump / 2 * l); IF v_land_idx NOT BETWEEN 1 AND 64 OR ABS(v_start_field.col_num - g_board_map(idx_to_notation(v_land_idx)).col_num) != l THEN EXIT; END IF; DECLARE v_land_field rec_board_field := g_board_map(idx_to_notation(v_land_idx)); BEGIN IF SUBSTR(p_board, v_land_idx, 1) = c_empty_field AND MOD(v_land_field.row_num + v_land_field.col_num, 2) = 0 THEN DECLARE v_step r_move_step; v_new_path t_move_path := p_visited_path; v_sub_paths t_move_list; v_move r_move; BEGIN v_step.start_idx := p_start_idx; v_step.end_idx := v_land_idx; v_step.captured_idx := v_capture_idx; v_new_path.EXTEND; v_new_path(v_new_path.LAST) := v_step; v_sub_paths := find_capture_paths(v_land_idx, p_board, p_player_color, 'Y', p_rule_id, v_new_path); IF v_sub_paths.COUNT = 0 THEN v_move.path := v_new_path; v_move.is_capture := 'Y'; v_move.capture_count := v_new_path.COUNT; v_results.EXTEND; v_results(v_results.LAST) := v_move; ELSE FOR j IN 1 .. v_sub_paths.COUNT LOOP v_results.EXTEND; v_results(v_results.LAST) := v_sub_paths(j); END LOOP; END IF; END; ELSE EXIT; END IF; END; END LOOP; EXIT; END IF; END LOOP;
+                END IF;
+            END;
+        END LOOP;
+        RETURN v_results;
+    END find_capture_paths;
+FUNCTION find_all_player_moves(p_board IN VARCHAR2, p_player_color IN CHAR, p_rule_id IN NUMBER) RETURN t_move_list IS
+        v_all_moves t_move_list := t_move_list(); v_capture_moves t_move_list := t_move_list(); v_simple_moves t_move_list := t_move_list();
+        v_player_man CHAR(1); v_player_king CHAR(1); v_max_captures PLS_INTEGER := 0;
+    BEGIN
+        IF p_player_color = 'W' THEN v_player_man := c_white_man; v_player_king := c_white_king; ELSE v_player_man := c_black_man; v_player_king := c_black_king; END IF;
+        FOR i IN 1..64 LOOP
+            DECLARE v_piece CHAR(1) := SUBSTR(p_board, i, 1); v_paths t_move_list; v_is_king CHAR(1);
+            BEGIN
+                IF v_piece IN (v_player_man, v_player_king) THEN
+                    v_is_king := CASE WHEN v_piece IN (c_white_king, c_black_king) THEN 'Y' ELSE 'N' END;
+                    v_paths := find_capture_paths(i, p_board, p_player_color, v_is_king, p_rule_id);
+                    IF v_paths.COUNT > 0 THEN
+                        FOR j IN 1..v_paths.COUNT LOOP
+                            v_capture_moves.EXTEND; v_capture_moves(v_capture_moves.LAST) := v_paths(j);
+                            IF v_paths(j).capture_count > v_max_captures THEN v_max_captures := v_paths(j).capture_count; END IF;
+                        END LOOP;
+                    END IF;
+                END IF;
+            END;
+        END LOOP;
+
+        IF v_capture_moves.COUNT > 0 THEN
+            -- Для русских шашек (ID=1) игрок может выбрать любой вариант взятия. Возвращаем все.
+            IF p_rule_id = 1 THEN
+                RETURN v_capture_moves;
+            ELSE -- Для международных шашек (и других) возвращаем только путь с максимальным взятием.
+                FOR i IN 1..v_capture_moves.COUNT LOOP
+                    IF v_capture_moves(i).capture_count = v_max_captures THEN
+                        v_all_moves.EXTEND; v_all_moves(v_all_moves.LAST) := v_capture_moves(i);
+                    END IF;
+                END LOOP;
+                RETURN v_all_moves;
+            END IF;
+        END IF;
+        
+        -- Логика для простых ходов (без взятий) остается без изменений
+        FOR i IN 1..64 LOOP DECLARE v_piece CHAR(1) := SUBSTR(p_board, i, 1); v_start_not VARCHAR2(2) := idx_to_notation(i); BEGIN IF v_piece = v_player_man THEN DECLARE v_directions SYS.ODCINUMBERLIST; BEGIN IF p_player_color = 'W' THEN v_directions := SYS.ODCINUMBERLIST(-9, -7); ELSE v_directions := SYS.ODCINUMBERLIST(7, 9); END IF; FOR d IN 1..v_directions.COUNT LOOP DECLARE v_end_idx PLS_INTEGER := i + v_directions(d); v_end_not VARCHAR2(2) := idx_to_notation(v_end_idx); BEGIN IF v_end_not IS NOT NULL AND SUBSTR(p_board, v_end_idx, 1) = c_empty_field THEN IF ABS(g_board_map(v_start_not).col_num - g_board_map(v_end_not).col_num) = 1 THEN DECLARE v_move r_move; v_step r_move_step; BEGIN v_step.start_idx := i; v_step.end_idx := v_end_idx; v_step.captured_idx := NULL; v_move.path := t_move_path(v_step); v_move.is_capture := 'N'; v_move.capture_count := 0; v_simple_moves.EXTEND; v_simple_moves(v_simple_moves.LAST) := v_move; END; END IF; END IF; END; END LOOP; END; ELSIF v_piece = v_player_king THEN DECLARE v_directions SYS.ODCINUMBERLIST := SYS.ODCINUMBERLIST(-9, -7, 7, 9); BEGIN FOR d IN 1..v_directions.COUNT LOOP FOR k IN 1..7 LOOP DECLARE v_end_idx PLS_INTEGER := i + (v_directions(d) * k); v_end_not VARCHAR2(2) := idx_to_notation(v_end_idx); BEGIN IF v_end_not IS NULL THEN EXIT; END IF; IF k > 1 AND ABS(g_board_map(idx_to_notation(i + (v_directions(d) * (k-1)))).col_num - g_board_map(v_end_not).col_num) != 1 THEN EXIT; END IF; IF SUBSTR(p_board, v_end_idx, 1) = c_empty_field THEN DECLARE v_move r_move; v_step r_move_step; BEGIN v_step.start_idx := i; v_step.end_idx := v_end_idx; v_step.captured_idx := NULL; v_move.path := t_move_path(v_step); v_move.is_capture := 'N'; v_move.capture_count := 0; v_simple_moves.EXTEND; v_simple_moves(v_simple_moves.LAST) := v_move; END; ELSE EXIT; END IF; END; END LOOP; END LOOP; END; END IF; END; END LOOP;
+        RETURN v_simple_moves;
+    END find_all_player_moves;
+PROCEDURE p_process_move( p_game_id IN NUMBER, p_move_notation IN VARCHAR2, p_player_id IN NUMBER, p_status_message OUT VARCHAR2 ) IS
+        v_game games%ROWTYPE; v_rule game_rules%ROWTYPE; v_player_color CHAR(1); v_all_legal_moves t_move_list;
+        v_chosen_move r_move; v_is_move_valid BOOLEAN := FALSE; v_new_board games.board_position%TYPE; v_move_count NUMBER;
+    BEGIN
+        SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE;
+        IF v_game.player_white_id = p_player_id THEN v_player_color := 'W'; ELSE v_player_color := 'B'; END IF;
+        v_all_legal_moves := find_all_player_moves(v_game.board_position, v_player_color, v_game.rule_id);
+        IF v_all_legal_moves.COUNT = 0 THEN UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'BLACK_WIN' ELSE 'WHITE_WIN' END, end_time = SYSTIMESTAMP, winner_player_id = CASE v_player_color WHEN 'W' THEN v_game.player_black_id ELSE v_game.player_white_id END WHERE game_id = p_game_id; p_status_message := 'Ходов нет. Вы проиграли!'; COMMIT; RETURN; END IF;
+        FOR i IN 1..v_all_legal_moves.COUNT LOOP DECLARE v_legal_move r_move := v_all_legal_moves(i); v_notation VARCHAR2(50); BEGIN v_notation := idx_to_notation(v_legal_move.path(1).start_idx); FOR j IN 1..v_legal_move.path.COUNT LOOP v_notation := v_notation || CASE v_legal_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_legal_move.path(j).end_idx); END LOOP; IF REPLACE(LOWER(p_move_notation), 'x', ':') = v_notation THEN v_chosen_move := v_legal_move; v_is_move_valid := TRUE; EXIT; END IF; END; END LOOP;
+        IF NOT v_is_move_valid THEN IF v_all_legal_moves.COUNT > 0 AND v_all_legal_moves(1).is_capture = 'Y' THEN DECLARE v_error_msg VARCHAR2(2000) := 'Неверный ход. Взятие обязательно! Доступные варианты: '; v_notation_str VARCHAR2(100); BEGIN FOR i IN 1..v_all_legal_moves.COUNT LOOP v_notation_str := idx_to_notation(v_all_legal_moves(i).path(1).start_idx); FOR j IN 1..v_all_legal_moves(i).path.COUNT LOOP v_notation_str := v_notation_str || CASE v_all_legal_moves(i).is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_all_legal_moves(i).path(j).end_idx); END LOOP; v_error_msg := v_error_msg || v_notation_str || ' '; END LOOP; RAISE_APPLICATION_ERROR(-20007, RTRIM(v_error_msg)); END; ELSE RAISE_APPLICATION_ERROR(-20007, 'Нелегальный ход: "' || p_move_notation || '".'); END IF; END IF;
+        
+        v_new_board := v_game.board_position;
+        DECLARE
+            v_moving_piece CHAR(1) := SUBSTR(v_new_board, v_chosen_move.path(1).start_idx, 1);
+            v_start_pos PLS_INTEGER := v_chosen_move.path(1).start_idx;
+            v_end_pos PLS_INTEGER := v_chosen_move.path(v_chosen_move.path.LAST).end_idx;
+            v_promoted BOOLEAN := FALSE;
+        BEGIN
+            v_new_board := SUBSTR(v_new_board, 1, v_start_pos - 1) || c_empty_field || SUBSTR(v_new_board, v_start_pos + 1);
+            IF v_chosen_move.is_capture = 'Y' THEN FOR i IN 1..v_chosen_move.path.COUNT LOOP v_new_board := SUBSTR(v_new_board, 1, v_chosen_move.path(i).captured_idx - 1) || c_empty_field || SUBSTR(v_new_board, v_chosen_move.path(i).captured_idx + 1); END LOOP; END IF;
+            
+            IF v_moving_piece IN (c_white_man, c_black_man) THEN
+                IF v_game.rule_id = 1 AND v_chosen_move.is_capture = 'Y' THEN
+                    FOR i IN 1..v_chosen_move.path.COUNT LOOP
+                        DECLARE
+                            v_intermediate_pos PLS_INTEGER := v_chosen_move.path(i).end_idx;
+                            v_intermediate_row PLS_INTEGER := g_board_map(idx_to_notation(v_intermediate_pos)).row_num;
+                        BEGIN
+                            IF (v_player_color = 'W' AND v_intermediate_row = 8) OR (v_player_color = 'B' AND v_intermediate_row = 1) THEN
+                                v_promoted := TRUE;
+                                EXIT;
+                            END IF;
+                        END;
+                    END LOOP;
+                END IF;
+                DECLARE
+                    v_end_row PLS_INTEGER := g_board_map(idx_to_notation(v_end_pos)).row_num;
+                    v_is_final_square_promotion BOOLEAN := (v_player_color = 'W' AND v_end_row = 8) OR (v_player_color = 'B' AND v_end_row = 1);
+                BEGIN
+                    IF v_promoted OR v_is_final_square_promotion THEN
+                        v_moving_piece := CASE v_player_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
+                    END IF;
+                END;
+            END IF;
+            v_new_board := SUBSTR(v_new_board, 1, v_end_pos - 1) || v_moving_piece || SUBSTR(v_new_board, v_end_pos + 1);
+        END;
+        
+        UPDATE games SET board_position = v_new_board, current_turn = CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END, last_move_at = SYSTIMESTAMP, moves_since_capture = CASE v_chosen_move.is_capture WHEN 'Y' THEN 0 ELSE v_game.moves_since_capture + 1 END WHERE game_id = p_game_id;
+        SELECT COUNT(*) + 1 INTO v_move_count FROM game_moves WHERE game_id = p_game_id;
+        INSERT INTO game_moves (game_id, move_number, player_id, move_notation, is_capture, board_position) VALUES (p_game_id, v_move_count, p_player_id, p_move_notation, v_chosen_move.is_capture, v_new_board);
+        p_status_message := 'Ход ' || p_move_notation || ' принят.';
+        DECLARE v_next_turn_color CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END; v_next_player_moves t_move_list; v_opponent_pieces_exist BOOLEAN := FALSE; v_repetition_count NUMBER; BEGIN IF v_next_turn_color = 'W' THEN IF INSTR(v_new_board, c_white_man) > 0 OR INSTR(v_new_board, c_white_king) > 0 THEN v_opponent_pieces_exist := TRUE; END IF; ELSE IF INSTR(v_new_board, c_black_man) > 0 OR INSTR(v_new_board, c_black_king) > 0 THEN v_opponent_pieces_exist := TRUE; END IF; END IF; IF NOT v_opponent_pieces_exist THEN UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'WHITE_WIN' ELSE 'BLACK_WIN' END, end_time = SYSTIMESTAMP, winner_player_id = p_player_id WHERE game_id = p_game_id; p_status_message := p_status_message || ' Победа! У противника не осталось фигур.'; COMMIT; RETURN; END IF; v_next_player_moves := find_all_player_moves(v_new_board, v_next_turn_color, v_game.rule_id); IF v_next_player_moves.COUNT = 0 THEN UPDATE games SET status = CASE v_player_color WHEN 'W' THEN 'WHITE_WIN' ELSE 'BLACK_WIN' END, end_time = SYSTIMESTAMP, winner_player_id = p_player_id WHERE game_id = p_game_id; p_status_message := p_status_message || ' Победа! Противник заблокирован.'; COMMIT; RETURN; END IF; SELECT * INTO v_rule FROM game_rules WHERE rule_id = v_game.rule_id; IF v_chosen_move.is_capture = 'N' AND (v_game.moves_since_capture + 1) >= v_rule.draw_moves_limit THEN UPDATE games SET status = 'DRAW', end_time = SYSTIMESTAMP WHERE game_id = p_game_id; p_status_message := p_status_message || ' Ничья! Превышен лимит ходов без взятия.'; COMMIT; RETURN; END IF; IF v_rule.enable_pos_repetition_draw = 'Y' THEN SELECT COUNT(*) INTO v_repetition_count FROM game_moves WHERE game_id = p_game_id AND board_position = v_new_board; IF v_repetition_count >= 2 THEN UPDATE games SET status = 'DRAW', end_time = SYSTIMESTAMP WHERE game_id = p_game_id; p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.'; COMMIT; RETURN; END IF; END IF; END;
+        COMMIT;
+    END p_process_move;
     FUNCTION get_ai_move(p_board_position IN games.board_position%TYPE, p_ai_color IN games.current_turn%TYPE, p_rule_id IN games.rule_id%TYPE, p_difficulty IN games.ai_difficulty%TYPE) RETURN VARCHAR2 IS v_best_move VARCHAR2(50); v_possible_moves t_move_list; v_chosen_move r_move; BEGIN v_possible_moves := find_all_player_moves(p_board_position, p_ai_color, p_rule_id); IF v_possible_moves.COUNT > 0 THEN v_chosen_move := v_possible_moves(TRUNC(DBMS_RANDOM.VALUE(1, v_possible_moves.COUNT + 1))); v_best_move := idx_to_notation(v_chosen_move.path(1).start_idx); FOR j IN 1..v_chosen_move.path.COUNT LOOP v_best_move := v_best_move || CASE v_chosen_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_chosen_move.path(j).end_idx); END LOOP; ELSE v_best_move := NULL; END IF; RETURN v_best_move; END get_ai_move;
-    
+     
     PROCEDURE create_game(
         p_opponent_username   IN VARCHAR2 DEFAULT NULL,
         p_player_color        IN CHAR     DEFAULT NULL,
@@ -160,7 +300,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 v_linear_idx := ((8 - r) * 8) + c;
                 IF MOD(r + c, 2) = 0 THEN
                     v_char := SUBSTR(p_board_position, v_linear_idx, 1);
-                    IF v_char = c_empty_field OR v_char IS NULL OR v_char = ' ' THEN
+                    IF v_char = c_empty_field OR v_char IS NULL THEN
                         IF p_highlight_indices.EXISTS(v_linear_idx) THEN DBMS_LOB.append(v_clob, '[.]');
                         ELSE DBMS_LOB.append(v_clob, '[ ]');
                         END IF;
