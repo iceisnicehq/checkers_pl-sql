@@ -189,10 +189,11 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         p_visited_path IN t_move_path DEFAULT t_move_path()
     ) RETURN t_move_list IS
         v_results         t_move_list := t_move_list();
+        v_leaf_paths      t_move_list := t_move_list(); -- << NEW: Temporary storage for paths that end here
         v_jump_directions SYS.ODCINUMBERLIST;
         v_opponent_man    CHAR(1);
         v_opponent_king   CHAR(1);
-        v_decoded_board   VARCHAR2(100) := decode_board(p_board); -- ДЕКОДИРОВАНИЕ
+        v_decoded_board   VARCHAR2(100) := decode_board(p_board);
     BEGIN
         IF p_player_color = 'W' THEN
             v_opponent_man  := c_black_man;
@@ -240,20 +241,23 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                                     v_step.captured_idx := v_capture_idx;
                                     v_new_path.EXTEND;
                                     v_new_path(v_new_path.LAST) := v_step;
-                                    
+
                                     IF p_rule_id = 1 AND v_is_promotion_square THEN
                                         v_becomes_king := 'Y';
                                     END IF;
 
                                     v_sub_paths := find_capture_paths(v_land_idx, v_decoded_board, p_player_color, v_becomes_king, p_rule_id, v_new_path);
 
+                                    -- << MODIFIED LOGIC >>
                                     IF v_sub_paths.COUNT = 0 THEN
+                                        -- This is a potential leaf path. Don't add to final results yet.
                                         v_move.path           := v_new_path;
                                         v_move.is_capture    := 'Y';
                                         v_move.capture_count := v_new_path.COUNT;
-                                        v_results.EXTEND;
-                                        v_results(v_results.LAST) := v_move;
+                                        v_leaf_paths.EXTEND;
+                                        v_leaf_paths(v_leaf_paths.LAST) := v_move;
                                     ELSE
+                                        -- A longer path was found. These are guaranteed to be valid. Add them.
                                         FOR j IN 1 .. v_sub_paths.COUNT LOOP
                                             v_results.EXTEND;
                                             v_results(v_results.LAST) := v_sub_paths(j);
@@ -263,7 +267,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                             END IF;
                         END IF;
                     END IF;
-                ELSE -- Логика для дамки
+                ELSE -- King logic
                     FOR k IN 1 .. 7 LOOP
                         v_capture_idx := p_start_idx + (v_jump / 2 * k);
 
@@ -300,14 +304,19 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                                             v_step.captured_idx := v_capture_idx;
                                             v_new_path.EXTEND;
                                             v_new_path(v_new_path.LAST) := v_step;
+                                            
                                             v_sub_paths := find_capture_paths(v_land_idx, v_decoded_board, p_player_color, 'Y', p_rule_id, v_new_path);
+
+                                            -- << MODIFIED LOGIC >>
                                             IF v_sub_paths.COUNT = 0 THEN
+                                                -- This is a potential leaf path. Don't add to final results yet.
                                                 v_move.path           := v_new_path;
                                                 v_move.is_capture    := 'Y';
                                                 v_move.capture_count := v_new_path.COUNT;
-                                                v_results.EXTEND;
-                                                v_results(v_results.LAST) := v_move;
+                                                v_leaf_paths.EXTEND;
+                                                v_leaf_paths(v_leaf_paths.LAST) := v_move;
                                             ELSE
+                                                -- A longer path was found. These are guaranteed to be valid. Add them.
                                                 FOR j IN 1 .. v_sub_paths.COUNT LOOP
                                                     v_results.EXTEND;
                                                     v_results(v_results.LAST) := v_sub_paths(j);
@@ -325,7 +334,16 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 END IF;
             END;
         END LOOP;
-        RETURN v_results;
+        
+        -- << FINAL DECISION LOGIC >>
+        -- If we found any multi-step paths, they take precedence and we discard all single-step paths.
+        -- If not, then the single-step (leaf) paths are the only valid maximal paths.
+        IF v_results.COUNT > 0 THEN
+            RETURN v_results;
+        ELSE
+            RETURN v_leaf_paths;
+        END IF;
+
     END find_capture_paths;
 
     --------------------------------------------------------------------------------

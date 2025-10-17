@@ -85,6 +85,12 @@ EXCEPTION
 END;
 /
 
+BEGIN
+    C##CHECKERS_APP.game_logic.print_board();
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('[ОШИБКА] ' || SQLERRM);
+END;
 -- =================================================================
 -- == ЭТАП 3: ЗАВЕРШЕНИЕ ПАРТИИ (RESIGN)
 -- == Выполняется в сессии C##DEV_USER
