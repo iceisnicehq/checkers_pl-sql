@@ -844,7 +844,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_player_id  players.player_id%TYPE;
         v_game_id    NUMBER;
         v_winner_id  players.player_id%TYPE;
-        v_new_status games.status%TYPE;
     BEGIN
         v_player_id := get_or_create_player_id(user);
         v_game_id   := get_my_active_game(v_player_id);
@@ -872,7 +871,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             DECLARE
                 v_winner_username players.username%TYPE;
             BEGIN
-                v_new_status := 'V';
+                -- Определяем победителя
                 IF v_player_id = v_game.player_white_id THEN
                     v_winner_id  := v_game.player_black_id;
                 ELSE
@@ -880,10 +879,9 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 END IF;
 
                 UPDATE games
-                SET status             = v_new_status,
+                SET status             = 'R',
                     winner_player_id   = v_winner_id,
-                    end_time           = SYSTIMESTAMP,
-                    is_resigned        = 'Y'
+                    end_time           = SYSTIMESTAMP
                 WHERE game_id = v_game_id;
 
                 SELECT username INTO v_winner_username FROM players WHERE player_id = v_winner_id;
@@ -1017,7 +1015,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_seq_name      VARCHAR2(64);
         v_move_num      NUMBER;
         v_color_str     VARCHAR2(30);
-        
+
         -- Переменные для хранения результата игры
         v_game_rec      games%ROWTYPE;
         v_winner_name   players.username%TYPE;
@@ -1057,51 +1055,44 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
             EXCEPTION
                 WHEN e_replay_finished THEN
-                    -- [ИЗМЕНЕННАЯ ЛОГИКА] Получаем и выводим детальный результат игры
-                    
-                    -- 1. Получаем данные о завершенной игре
                     BEGIN
                         SELECT * INTO v_game_rec FROM games WHERE game_id = p_game_id;
                     EXCEPTION
                         WHEN NO_DATA_FOUND THEN
-                            v_final_message := 'Игра не найдена.'; -- На всякий случай
+                            v_final_message := 'Игра не найдена.';
                     END;
 
-                    -- 2. Формируем сообщение о результате
+                    -- [ИЗМЕНЕННАЯ ЛОГИКА]
                     IF v_game_rec.status = 'D' THEN
                         v_final_message := 'Ничья.';
                     ELSIF v_game_rec.status = 'T' THEN
                         v_final_message := 'Игра завершена по таймауту.';
                     ELSIF v_game_rec.status = 'V' THEN
-                        -- Получаем имя победителя
                         SELECT username INTO v_winner_name FROM players WHERE player_id = v_game_rec.winner_player_id;
-                        
-                        IF v_game_rec.is_resigned = 'Y' THEN
-                            -- Определяем, кто сдался, и получаем его имя
-                            DECLARE
-                                v_loser_id players.player_id%TYPE;
-                            BEGIN
-                                IF v_game_rec.winner_player_id = v_game_rec.player_white_id THEN
-                                    v_loser_id := v_game_rec.player_black_id;
-                                ELSE
-                                    v_loser_id := v_game_rec.player_white_id;
-                                END IF;
-                                
-                                SELECT username INTO v_loser_name FROM players WHERE player_id = v_loser_id;
-                                v_final_message := v_loser_name || ' сдался. Победитель: ' || v_winner_name || '.';
-                            END;
-                        ELSE
-                            v_final_message := 'Победа игрока ' || v_winner_name || '.';
-                        END IF;
+                        v_final_message := 'Победа игрока ' || v_winner_name || '.';
+                    ELSIF v_game_rec.status = 'R' THEN
+                        -- Логика для сдачи партии
+                        SELECT username INTO v_winner_name FROM players WHERE player_id = v_game_rec.winner_player_id;
+                        DECLARE
+                            v_loser_id players.player_id%TYPE;
+                        BEGIN
+                            IF v_game_rec.winner_player_id = v_game_rec.player_white_id THEN
+                                v_loser_id := v_game_rec.player_black_id;
+                            ELSE
+                                v_loser_id := v_game_rec.player_white_id;
+                            END IF;
+                            
+                            SELECT username INTO v_loser_name FROM players WHERE player_id = v_loser_id;
+                            v_final_message := v_loser_name || ' сдался. Победитель: ' || v_winner_name || '.';
+                        END;
                     ELSE
-                        v_final_message := 'Игра завершена с неопределенным статусом.'; -- Резервный вариант
+                        v_final_message := 'Игра завершена с неопределенным статусом.';
                     END IF;
                     
-                    -- 3. Выводим итоговое сообщение
                     DBMS_OUTPUT.PUT_LINE('--[ КОНЕЦ ПАРТИИ ]-- ' || v_final_message);
                     DBMS_OUTPUT.PUT_LINE('-- Для повторного просмотра вызовите start_replay_session.');
                     
-                    EXIT; -- Выходим из цикла FOR
+                    EXIT;
             END;
         END LOOP;
     EXCEPTION

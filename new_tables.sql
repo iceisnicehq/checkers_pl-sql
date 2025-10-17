@@ -109,7 +109,7 @@ CREATE TABLE games (
     creator_player_id   NUMBER(10) NOT NULL,
     player_white_id     NUMBER(10),
     player_black_id     NUMBER(10),
-    status              CHAR(1) NOT NULL, -- O:Open, C:Challenged, A:Active, V:Victory, D:Draw, T:Timeout
+    status              CHAR(1) NOT NULL, -- O:Open, C:Challenged, A:Active, V:Victory, D:Draw, T:Timeout, R:Resigned
     current_turn        CHAR(1) DEFAULT 'W' NOT NULL,
     board_position      VARCHAR2(100) NOT NULL,
     moves_since_capture NUMBER(3) DEFAULT 0 NOT NULL,
@@ -120,7 +120,6 @@ CREATE TABLE games (
     time_limit_move_sec NUMBER(4),
     time_limit_game_sec NUMBER(5),
     ai_difficulty       NUMBER(1),
-    is_resigned         CHAR(1) DEFAULT 'N' NOT NULL,
     CONSTRAINT pk_games PRIMARY KEY (game_id),
     CONSTRAINT fk_games_match FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE SET NULL,
     CONSTRAINT fk_games_rule FOREIGN KEY (rule_id) REFERENCES game_rules(rule_id),
@@ -128,7 +127,7 @@ CREATE TABLE games (
     CONSTRAINT fk_games_player_white FOREIGN KEY (player_white_id) REFERENCES players(player_id) ON DELETE SET NULL,
     CONSTRAINT fk_games_player_black FOREIGN KEY (player_black_id) REFERENCES players(player_id) ON DELETE SET NULL,
     CONSTRAINT fk_games_winner FOREIGN KEY (winner_player_id) REFERENCES players(player_id),
-    CONSTRAINT chk_games_status CHECK (status IN ('O', 'C', 'A', 'V', 'D', 'T')),
+    CONSTRAINT chk_games_status CHECK (status IN ('O', 'C', 'A', 'V', 'D', 'T', 'R')),
     CONSTRAINT chk_games_turn CHECK (current_turn IN ('W', 'B')),
     CONSTRAINT chk_games_active_players CHECK (status <> 'A' OR (player_white_id IS NOT NULL AND player_black_id IS NOT NULL)),
     CONSTRAINT chk_ai_difficulty CHECK (ai_difficulty BETWEEN 0 AND 2)
