@@ -19,10 +19,16 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         notation      VARCHAR2(50),
         path          t_move_path,
         is_capture    CHAR(1),
-        capture_count PLS_INTEGER
+        capture_count PLS_INTEGER,
+        score         PLS_INTEGER  -- << ADD THIS LINE
     );
     TYPE t_move_list IS TABLE OF r_move;
     TYPE t_map_indices IS TABLE OF BOOLEAN INDEX BY PLS_INTEGER;
+
+    TYPE r_minimax_result IS RECORD (
+        score NUMBER,
+        move  r_move
+    );
 
     --------------------------------------------------------------------------------
     -- Функции кодирования/декодирования RLE
@@ -465,6 +471,264 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         RETURN v_simple_moves;
     END find_all_player_moves;
 
+
+    /**
+     * @function get_sorted_possible_moves
+     * @brief Gets all possible moves and sorts them based on a heuristic score.
+     * This is critical for making alpha-beta pruning effective.
+     */
+    FUNCTION get_sorted_possible_moves(
+        p_board IN VARCHAR2,
+        p_color IN CHAR
+    ) RETURN t_move_list IS
+        v_moves t_move_list;
+        v_temp  r_move; -- A temporary record for swapping
+    BEGIN
+        v_moves := find_all_player_moves(p_board, p_color, 1); -- Assuming rule_id=1
+        
+        IF v_moves.COUNT < 2 THEN
+            RETURN v_moves; -- No need to sort if 0 or 1 move
+        END IF;
+
+        -- Assign a score to each move
+        FOR i IN 1..v_moves.COUNT LOOP
+            v_moves(i).score := 0;
+            -- Highest priority: Captures. More captures are better.
+            IF v_moves(i).is_capture = 'Y' THEN
+                v_moves(i).score := 1000 + v_moves(i).capture_count;
+            END IF;
+        END LOOP;
+        
+        -- << ERROR FIX >>
+        -- Sort the collection in PL/SQL using a simple bubble sort
+        FOR i IN 1 .. v_moves.COUNT - 1 LOOP
+            FOR j IN i + 1 .. v_moves.COUNT LOOP
+                -- If the current move has a lower score than the next one, swap them
+                IF v_moves(i).score < v_moves(j).score THEN
+                    v_temp := v_moves(i);
+                    v_moves(i) := v_moves(j);
+                    v_moves(j) := v_temp;
+                END IF;
+            END LOOP;
+        END LOOP;
+
+        RETURN v_moves;
+
+    END get_sorted_possible_moves;
+
+    --------------------------------------------------------------------------------
+    
+    
+    /**
+     * @function evaluate_board
+     * @brief Assigns a numerical score to a given board position.
+     * Positive scores favor the AI, negative scores favor the opponent.
+     */
+    FUNCTION evaluate_board(
+        p_board       IN VARCHAR2,
+        p_ai_color    IN CHAR,
+        p_difficulty  IN NUMBER
+    ) RETURN NUMBER IS
+        v_score         NUMBER := 0;
+        v_piece         CHAR(1);
+        
+        -- Weights for pieces and positions, as per the Python example
+        c_man_value     CONSTANT NUMBER := 10;
+        c_king_value    CONSTANT NUMBER := 50;
+        c_side_val      CONSTANT NUMBER := 20; -- Bonus for being on side columns
+        c_wall_val      CONSTANT NUMBER := 10; -- Bonus for advancing up the board
+
+    BEGIN
+        FOR i IN 1..64 LOOP
+            v_piece := SUBSTR(p_board, i, 1);
+            IF v_piece != c_empty_field THEN
+                DECLARE
+                    v_piece_value   NUMBER;
+                    v_multiplier    NUMBER;
+                    v_piece_color   CHAR(1);
+                    v_row           PLS_INTEGER := 8 - TRUNC((i - 1) / 8); -- Row (1-8)
+                    v_col           PLS_INTEGER := MOD(i - 1, 8) + 1;     -- Col (1-8)
+                    v_position_bonus NUMBER := 0;
+                BEGIN
+                    -- 1. Determine piece ownership and value
+                    v_piece_color := CASE WHEN v_piece IN ('w', 'W') THEN 'W' ELSE 'B' END;
+                    v_multiplier  := CASE WHEN v_piece_color = p_ai_color THEN 1 ELSE -1 END;
+                    v_piece_value := CASE WHEN v_piece IN ('W', 'B') THEN c_king_value ELSE c_man_value END;
+                    
+                    -- Add the basic material score
+                    v_score := v_score + (v_piece_value * v_multiplier);
+
+                    -- 2. Calculate and add positional bonuses (SIDE_VAL and WALL_VAL)
+                    -- This logic only applies to non-hard difficulty as a simplification for now
+                    -- On hard, the pure search depth is more important.
+                    IF p_difficulty < 2 THEN
+                        -- SIDE_VAL: Bonus for pieces on the 'a' or 'h' columns
+                        IF v_col = 1 OR v_col = 8 THEN
+                            v_position_bonus := v_position_bonus + c_side_val;
+                        END IF;
+
+                        -- WALL_VAL: Linear bonus for how far a piece has advanced.
+                        -- A piece on the back rank gets a small bonus, a piece about to be promoted gets the max bonus.
+                        IF v_piece_color = 'W' THEN
+                           v_position_bonus := v_position_bonus + ( (v_row / 8) * c_wall_val );
+                        ELSE -- Piece is Black
+                           v_position_bonus := v_position_bonus + ( ((9 - v_row) / 8) * c_wall_val );
+                        END IF;
+                    END IF;
+                    
+                    v_score := v_score + (v_position_bonus * v_multiplier);
+                END;
+            END IF;
+        END LOOP;
+        
+        -- Check for terminal win/loss state
+        DECLARE
+            v_ai_pieces     PLS_INTEGER := 0;
+            v_opp_pieces    PLS_INTEGER := 0;
+            v_opp_color     CHAR(1) := CASE p_ai_color WHEN 'W' THEN 'B' ELSE 'W' END;
+        BEGIN
+            FOR k IN 1..64 LOOP
+                 IF SUBSTR(p_board, k, 1) != c_empty_field THEN
+                    IF (CASE WHEN SUBSTR(p_board, k, 1) IN ('w', 'W') THEN 'W' ELSE 'B' END) = p_ai_color THEN
+                        v_ai_pieces := 1;
+                    ELSE
+                        v_opp_pieces := 1;
+                    END IF;
+                 END IF;
+                 -- Exit early if we've found pieces for both sides
+                 IF v_ai_pieces > 0 AND v_opp_pieces > 0 THEN
+                    EXIT;
+                 END IF;
+            END LOOP;
+
+            IF v_ai_pieces > 0 AND v_opp_pieces = 0 THEN
+                RETURN 9999; -- AI has won
+            ELSIF v_ai_pieces = 0 AND v_opp_pieces > 0 THEN
+                RETURN -9999; -- AI has lost
+            END IF;
+        END;
+
+        RETURN v_score;
+    END evaluate_board;
+
+    /**
+     * @function apply_move_to_board
+     * @brief Simulates a move and returns the new board state as a string.
+     * This is a non-database version of p_process_move's logic.
+     */
+    FUNCTION apply_move_to_board(
+        p_board IN VARCHAR2,
+        p_move  IN r_move,
+        p_color IN CHAR
+    ) RETURN VARCHAR2 IS
+        v_new_board     VARCHAR2(100) := p_board;
+        v_moving_piece  CHAR(1) := SUBSTR(v_new_board, p_move.path(1).start_idx, 1);
+        v_start_pos     PLS_INTEGER := p_move.path(1).start_idx;
+        v_end_pos       PLS_INTEGER := p_move.path(p_move.path.LAST).end_idx;
+        v_promoted      BOOLEAN := FALSE;
+    BEGIN
+        v_new_board := SUBSTR(v_new_board, 1, v_start_pos - 1) || c_empty_field || SUBSTR(v_new_board, v_start_pos + 1);
+
+        IF p_move.is_capture = 'Y' THEN
+            FOR i IN 1..p_move.path.COUNT LOOP
+                v_new_board := SUBSTR(v_new_board, 1, p_move.path(i).captured_idx - 1) || c_empty_field || SUBSTR(v_new_board, p_move.path(i).captured_idx + 1);
+            END LOOP;
+        END IF;
+
+        IF v_moving_piece IN (c_white_man, c_black_man) THEN
+            DECLARE
+                v_end_row PLS_INTEGER := g_board_map(idx_to_notation(v_end_pos)).row_num;
+                v_is_promotion BOOLEAN := (p_color = 'W' AND v_end_row = 8) OR (p_color = 'B' AND v_end_row = 1);
+            BEGIN
+                IF v_is_promotion THEN
+                    v_moving_piece := CASE p_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
+                END IF;
+            END;
+        END IF;
+
+        v_new_board := SUBSTR(v_new_board, 1, v_end_pos - 1) || v_moving_piece || SUBSTR(v_new_board, v_end_pos + 1);
+        RETURN v_new_board;
+    END apply_move_to_board;
+
+
+/**
+     * @function minimax
+     * @brief The core recursive Minimax algorithm with Alpha-Beta Pruning.
+     */
+    FUNCTION minimax(
+        p_board             IN VARCHAR2,
+        p_depth             IN PLS_INTEGER,
+        p_alpha             IN NUMBER, 
+        p_beta              IN NUMBER, 
+        p_is_maximizing     IN BOOLEAN,
+        p_ai_color          IN CHAR,
+        p_difficulty        IN NUMBER
+    ) RETURN r_minimax_result IS
+        v_result r_minimax_result;
+        v_possible_moves t_move_list; -- Stays the same
+        v_current_color  CHAR(1);
+        v_local_alpha    NUMBER := p_alpha;
+        v_local_beta     NUMBER := p_beta;
+    BEGIN
+        v_current_color := CASE p_is_maximizing WHEN TRUE THEN p_ai_color ELSE CASE p_ai_color WHEN 'W' THEN 'B' ELSE 'W' END END;
+        
+        -- << CRITICAL CHANGE HERE >>
+        -- Use the new sorting function
+        v_possible_moves := get_sorted_possible_moves(p_board, v_current_color);
+
+        IF p_depth = 0 OR v_possible_moves.COUNT = 0 THEN
+            v_result.score := evaluate_board(p_board, p_ai_color, p_difficulty);
+            v_result.move := NULL;
+            RETURN v_result;
+        END IF;
+        
+        IF p_is_maximizing THEN
+            v_result.score := -99999; 
+            FOR i IN 1..v_possible_moves.COUNT LOOP
+                DECLARE
+                    v_new_board     VARCHAR2(100) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color);
+                    v_eval_result   r_minimax_result;
+                BEGIN
+                    v_eval_result := minimax(v_new_board, p_depth - 1, v_local_alpha, v_local_beta, FALSE, p_ai_color, p_difficulty);
+                    
+                    IF v_eval_result.score > v_result.score THEN
+                        v_result.score := v_eval_result.score;
+                        v_result.move  := v_possible_moves(i);
+                    END IF;
+                    
+                    v_local_alpha := GREATEST(v_local_alpha, v_eval_result.score);
+                    
+                    IF v_local_beta <= v_local_alpha THEN
+                        EXIT; -- Pruning
+                    END IF;
+                END;
+            END LOOP;
+            RETURN v_result;
+        ELSE -- Minimizing player
+            v_result.score := 99999;
+            FOR i IN 1..v_possible_moves.COUNT LOOP
+                DECLARE
+                    v_new_board   VARCHAR2(100) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color);
+                    v_eval_result r_minimax_result;
+                BEGIN
+                    v_eval_result := minimax(v_new_board, p_depth - 1, v_local_alpha, v_local_beta, TRUE, p_ai_color, p_difficulty);
+
+                    IF v_eval_result.score < v_result.score THEN
+                        v_result.score := v_eval_result.score;
+                        v_result.move  := v_possible_moves(i);
+                    END IF;
+
+                    v_local_beta := LEAST(v_local_beta, v_eval_result.score);
+
+                    IF v_local_beta <= v_local_alpha THEN
+                        EXIT; -- Pruning
+                    END IF;
+                END;
+            END LOOP;
+            RETURN v_result;
+        END IF;
+    END minimax;
+
     --------------------------------------------------------------------------------
 
     PROCEDURE p_process_move(
@@ -657,28 +921,72 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
     --------------------------------------------------------------------------------
 
+/**
+     * @function get_ai_move
+     * @brief Main entry point for the AI. Determines difficulty and calls the Minimax algorithm.
+     */
     FUNCTION get_ai_move(
         p_board_position IN games.board_position%TYPE,
         p_ai_color       IN games.current_turn%TYPE,
         p_rule_id        IN games.rule_id%TYPE,
         p_difficulty     IN games.ai_difficulty%TYPE
     ) RETURN VARCHAR2 IS
-        v_best_move      VARCHAR2(50);
-        v_possible_moves t_move_list;
+        v_best_move_str  VARCHAR2(50);
         v_chosen_move    r_move;
-        v_decoded_board  games.board_position%TYPE := decode_board(p_board_position); -- ДЕКОДИРОВАНИЕ
+        v_decoded_board  games.board_position%TYPE := decode_board(p_board_position);
+        v_search_depth   PLS_INTEGER;
+        v_minimax_result r_minimax_result;
+        -- NEW: Initial values for Alpha and Beta
+        v_alpha          NUMBER;
+        v_beta           NUMBER;
     BEGIN
-        v_possible_moves := find_all_player_moves(v_decoded_board, p_ai_color, p_rule_id);
-        IF v_possible_moves.COUNT > 0 THEN
-            v_chosen_move := v_possible_moves(TRUNC(DBMS_RANDOM.VALUE(1, v_possible_moves.COUNT + 1)));
-            v_best_move   := idx_to_notation(v_chosen_move.path(1).start_idx);
+        v_search_depth := CASE p_difficulty
+                              WHEN 0 THEN 2 -- 1 move ahead
+                              WHEN 1 THEN 4 -- 2 moves ahead
+                              WHEN 2 THEN 6 -- 3 moves ahead
+                              ELSE 2
+                          END;
+
+        -- NEW: Initialize Alpha and Beta for the root call
+        v_alpha := -99999; -- Negative Infinity
+        v_beta  := 99999;  -- Positive Infinity
+
+        -- Call Minimax with alpha and beta
+        v_minimax_result := minimax(v_decoded_board, v_search_depth, v_alpha, v_beta, TRUE, p_ai_color, p_difficulty);
+        v_chosen_move := v_minimax_result.move;
+
+        IF p_difficulty = 0 AND DBMS_RANDOM.VALUE < 0.25 THEN
+            DECLARE
+                v_random_moves t_move_list := find_all_player_moves(v_decoded_board, p_ai_color, p_rule_id);
+            BEGIN
+                IF v_random_moves.COUNT > 0 THEN
+                    v_chosen_move := v_random_moves(TRUNC(DBMS_RANDOM.VALUE(1, v_random_moves.COUNT + 1)));
+                END IF;
+            END;
+        END IF;
+
+        IF v_chosen_move.path IS NOT NULL AND v_chosen_move.path.COUNT > 0 THEN
+            v_best_move_str := idx_to_notation(v_chosen_move.path(1).start_idx);
             FOR j IN 1 .. v_chosen_move.path.COUNT LOOP
-                v_best_move := v_best_move || CASE v_chosen_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_chosen_move.path(j).end_idx);
+                v_best_move_str := v_best_move_str || CASE v_chosen_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_chosen_move.path(j).end_idx);
             END LOOP;
         ELSE
-            v_best_move := NULL;
+            DECLARE
+                v_fallback_moves t_move_list := find_all_player_moves(v_decoded_board, p_ai_color, p_rule_id);
+            BEGIN
+                 IF v_fallback_moves.COUNT > 0 THEN
+                    v_chosen_move := v_fallback_moves(TRUNC(DBMS_RANDOM.VALUE(1, v_fallback_moves.COUNT + 1)));
+                    v_best_move_str := idx_to_notation(v_chosen_move.path(1).start_idx);
+                    FOR j IN 1 .. v_chosen_move.path.COUNT LOOP
+                        v_best_move_str := v_best_move_str || CASE v_chosen_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_chosen_move.path(j).end_idx);
+                    END LOOP;
+                 ELSE
+                    v_best_move_str := NULL;
+                 END IF;
+            END;
         END IF;
-        RETURN v_best_move;
+
+        RETURN v_best_move_str;
     END get_ai_move;
     
     --------------------------------------------------------------------------------
@@ -1208,7 +1516,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     BEGIN
         v_player_id := get_or_create_player_id(USER);
         v_game_id   := get_my_active_game(v_player_id);
-
+        
         IF v_game_id IS NULL THEN
             RAISE_APPLICATION_ERROR(-20017, 'У вас нет активных игр, чтобы сделать ход.');
         END IF;
