@@ -143,21 +143,55 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     --------------------------------------------------------------------------------
 
     FUNCTION get_initial_position(p_rule_id IN NUMBER) RETURN VARCHAR2 IS
-        v_rule game_rules%ROWTYPE;
+    v_rule      game_rules%ROWTYPE;
+    v_error_msg VARCHAR2(200); -- Переменная для сообщения об ошибке
     BEGIN
-        SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
+        -- Сначала пытаемся найти правило
+        BEGIN
+            SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                -- Обработка случая, если ID правила вообще не найден в таблице
+                v_error_msg := 'Правила игры с ID=' || p_rule_id || ' не найдены.';
+                
+                -- 1) Запись в аудит
+                p_audit_log(
+                    p_player_id => NULL,
+                    p_game_id   => NULL,
+                    p_event_type => v_error_msg
+                );
+                
+                -- 2) Вывод DBMS_OUTPUT
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                
+                -- 3) Завершение функции
+                RETURN NULL;
+        END;
 
+        -- Правило найдено, проверяем, поддерживается ли оно
         IF v_rule.rule_name = 'Русские шашки 8x8' THEN
             RETURN '+b+b+b+b' || -- Row 8
-                   'b+b+b+b+' || -- Row 7
-                   '+b+b+b+b' || -- Row 6
-                   '++++++++' || -- Row 5
-                   '++++++++' || -- Row 4
-                   'w+w+w+w+' || -- Row 3
-                   '+w+w+w+w' || -- Row 2
-                   'w+w+w+w+';  -- Row 1
+                'b+b+b+b+' || -- Row 7
+                '+b+b+b+b' || -- Row 6
+                '++++++++' || -- Row 5
+                '++++++++' || -- Row 4
+                'w+w+w+w+' || -- Row 3
+                '+w+w+w+w' || -- Row 2
+                'w+w+w+w+';  -- Row 1
         ELSE
-            RAISE_APPLICATION_ERROR(-20100, 'Правила игры с ID=' || p_rule_id || ' не поддерживаются.');
+            v_error_msg := 'Правила игры с ID=' || p_rule_id || ' (Имя: ' || v_rule.rule_name || ') не поддерживаются.';
+            -- 1) Запись в аудит (Требование 1)
+            p_audit_log(
+                p_player_id => NULL,
+                p_game_id   => NULL,
+                p_event_type => v_error_msg
+            );
+            
+            -- 2) Вывод DBMS_OUTPUT (Требование 2)
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            
+            -- 3) Завершение функции (Требование 3)
+            RETURN NULL;
         END IF;
     END get_initial_position;
 
@@ -788,6 +822,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_new_board_decoded games.board_position%TYPE;
         v_new_board_encoded games.board_position%TYPE;
         v_move_count        NUMBER;
+        v_error_msg         VARCHAR2(200);
     BEGIN
         SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE;
 
@@ -840,9 +875,23 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
          END LOOP;
 
          IF NOT v_is_move_valid THEN
-            -- ... (обработка e_illegal_move ... остается без изменений) ...
-            RAISE_APPLICATION_ERROR(-20007, 'Нелегальный ход: "' || p_move_notation || '".');
-         END IF;
+            v_error_msg := 'Нелегальный ход: "' || p_move_notation || '".';
+            
+            -- 1) Запись в аудит
+            p_audit_log(
+                p_player_id => p_player_id,
+                p_game_id   => p_game_id,
+                p_event_type => v_error_msg
+            );
+            
+            -- 2) Вывод DBMS_OUTPUT
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            
+            -- 3) Завершение процедуры с сообщением об ошибке
+            p_status_message := v_error_msg;
+            ROLLBACK; -- Отменяем транзакцию (т.к. был SELECT FOR UPDATE)
+            RETURN;
+        END IF;
 
         -- ... (логика применения хода к v_new_board_decoded ... остается без изменений) ...
         v_new_board_decoded := v_decoded_board;
@@ -1060,7 +1109,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_game_id             NUMBER;
         v_status_message      VARCHAR2(1000);
         v_my_active_game_id   NUMBER;
-        
+        v_error_msg           VARCHAR2(255);
     BEGIN
         v_current_player_id := get_or_create_player_id(v_current_username);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_current_player_id;
@@ -1068,12 +1117,18 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         -- Проверка, не занят ли игрок
         v_my_active_game_id := get_my_active_game(v_current_player_id);
         IF v_my_active_game_id IS NOT NULL THEN
-            RAISE_APPLICATION_ERROR(-20001, 'Вы уже участвуете в активной игре. ID вашей игры: ' || v_my_active_game_id);
+            v_error_msg := 'Вы уже участвуете в активной игре. ID вашей игры: ' || v_my_active_game_id;
+            p_audit_log(v_current_player_id, v_my_active_game_id, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
         
         -- [ИЗМЕНЕНИЕ] Проверка на конфликт параметров
         IF p_opponent_username IS NOT NULL AND p_ai_difficulty IS NOT NULL THEN
-            RAISE_APPLICATION_ERROR(-20002, 'Нельзя одновременно указать оппонента (' || p_opponent_username || ') и сложность ИИ.');
+            v_error_msg := 'Нельзя одновременно указать оппонента (' || p_opponent_username || ') и сложность ИИ.';
+            p_audit_log(v_current_player_id, NULL, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
 
         -- Определение цвета
@@ -1088,6 +1143,11 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         END;
 
         v_initial_position := get_initial_position(p_rule_id);
+
+        IF v_initial_position IS NULL THEN
+            RETURN;
+        END IF;
+
         v_encoded_position := encode_board(v_initial_position);
 
         -- [ИЗМЕНЕНИЕ] Логика создания игры PvE
@@ -1115,7 +1175,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             v_status_message := 'Игра против ИИ создана (ID: ' || v_game_id || '). Вы играете за ' || CASE WHEN v_white_player_id = v_current_player_id THEN 'белых (W)' ELSE 'черных (B)' END || '.';
             p_audit_log(v_current_player_id, v_game_id, 'CREATE_PVE_GAME');
 
-            -- [ИЗМЕНЕНИЕ] Проверка на IS NULL и вызов p_process_move с NULL
             IF v_white_player_id IS NULL THEN
                 v_ai_move := get_ai_move(v_initial_position, 'W', p_rule_id, p_ai_difficulty);
                 IF v_ai_move IS NOT NULL THEN
@@ -1126,16 +1185,27 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         
         -- [ИЗМЕНЕНИЕ] Логика создания PvP
         ELSIF p_opponent_username IS NOT NULL THEN
-            IF v_current_username = UPPER(p_opponent_username) THEN RAISE_APPLICATION_ERROR(-20002, 'Нельзя вызвать самого себя.'); END IF;
+        -- Проверка на игру с самим собой
+            IF v_current_username = UPPER(p_opponent_username) THEN 
+                v_error_msg := 'Нельзя вызвать самого себя.';
+                p_audit_log(v_current_player_id, NULL, v_error_msg);
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                RETURN;
+            END IF;
             v_opponent_player_id := get_or_create_player_id(UPPER(p_opponent_username));
 
             -- Проверка, не занят ли оппонент
             DECLARE
-                v_active_game_count NUMBER;
+            v_active_game_count NUMBER;
             BEGIN
-                v_active_game_count := get_my_active_game(v_opponent_player_id);
+            v_active_game_count := get_my_active_game(v_opponent_player_id);
+            
+                -- Проверка занятости оппонента
                 IF v_active_game_count > 0 THEN
-                    RAISE_APPLICATION_ERROR(-20020, 'Игрок "' || p_opponent_username || '" уже занят в другой партии (ID: '|| v_active_game_count ||').');
+                    v_error_msg := 'Игрок "' || p_opponent_username || '" уже занят в другой партии (ID: '|| v_active_game_count ||').';
+                    p_audit_log(v_current_player_id, NULL, v_error_msg);
+                    DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                    RETURN;
                 END IF;
             END;
 
@@ -1200,27 +1270,54 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_game       games%ROWTYPE;
         v_player_id  players.player_id%TYPE;
         v_active_game_id NUMBER;
+        v_error_msg    VARCHAR2(255);
     BEGIN
         v_player_id := get_or_create_player_id(USER);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
 
         v_active_game_id := get_my_active_game(v_player_id);
+
         IF v_active_game_id IS NOT NULL THEN
-            RAISE e_player_is_busy;
+            v_error_msg := 'Вы уже участвуете в активной игре. ID вашей игры: ' || v_active_game_id;
+            p_audit_log(v_player_id, v_active_game_id, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
 
-        SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE;
+    -- Блок try-catch на случай, если игра не найдена
+        BEGIN
+            SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                v_error_msg := 'Игра с ID ' || p_game_id || ' не найдена.';
+                p_audit_log(v_player_id, p_game_id, v_error_msg);
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                RETURN;
+        END;
 
         IF v_game.status = 'C' THEN -- Принятие прямого вызова
             IF NOT (v_player_id IN (v_game.player_white_id, v_game.player_black_id) AND v_player_id != v_game.creator_player_id) THEN
-                RAISE e_access_denied;
+                v_error_msg := 'Доступ запрещен. Этот вызов (ID: ' || p_game_id || ') предназначен не вам.';
+                p_audit_log(v_player_id, p_game_id, v_error_msg);
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                ROLLBACK; -- Нужен, т.к. был SELECT FOR UPDATE
+                RETURN;
             END IF;
         ELSIF v_game.status = 'O' THEN -- Присоединение к открытой игре
+            -- [ИЗМЕНЕНИЕ 3] Замена e_invalid_opponent
             IF v_player_id = v_game.creator_player_id THEN
-                RAISE e_invalid_opponent;
+                v_error_msg := 'Нельзя присоединиться к собственной открытой игре (ID: ' || p_game_id || ').';
+                p_audit_log(v_player_id, p_game_id, v_error_msg);
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                ROLLBACK; -- Нужен, т.к. был SELECT FOR UPDATE
+                RETURN;
             END IF;
         ELSE
-            RAISE_APPLICATION_ERROR(-20019, 'Нельзя присоединиться к этой игре (статус: '|| v_game.status || ').');
+            v_error_msg := 'Нельзя присоединиться к этой игре (ID: ' || p_game_id || ', статус: '|| v_game.status || ').';
+            p_audit_log(v_player_id, p_game_id, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            ROLLBACK; -- Нужен, т.к. был SELECT FOR UPDATE
+            RETURN;
         END IF;
         
         -- Если игра 'O', вписываем ID игрока в пустой слот
@@ -1243,6 +1340,12 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         p_audit_log(v_player_id, p_game_id, 'JOIN_GAME');
         DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || '.');
         COMMIT;
+    EXCEPTION
+    WHEN OTHERS THEN
+        v_error_msg := 'Неожиданная ошибка при присоединении к игре: ' || SQLERRM;
+        p_audit_log(v_player_id, p_game_id, SUBSTR(v_error_msg, 1, 100));
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        ROLLBACK;
     END join_game;
     
     --------------------------------------------------------------------------------
@@ -1252,23 +1355,28 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_player_id players.player_id%TYPE;
         v_game_id   NUMBER;
         v_winner_id players.player_id%TYPE; -- Может быть NULL, если ИИ
+        v_error_msg VARCHAR2(255);
     BEGIN
         v_player_id := get_or_create_player_id(user);
+        UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
         v_game_id   := get_my_active_game(v_player_id);
 
         IF v_game_id IS NULL THEN
-            RAISE_APPLICATION_ERROR(-20017, 'У вас нет активной партии, чтобы сдаться.');
+            v_error_msg := 'У вас нет активной партии, чтобы сдаться.';
+            p_audit_log(v_player_id, NULL, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
         
         SELECT * INTO v_game FROM games WHERE game_id = v_game_id FOR UPDATE;
 
         -- [ИЗМЕНЕНИЕ] Разделение логики. Эта процедура - только для 'A'
         IF v_game.status != 'A' THEN
-             RAISE_APPLICATION_ERROR(-20041, 'Эта партия неактивна (статус '||v_game.status||'). Используйте cancel_game для отмены вызова.');
-        END IF;
-
-        IF v_player_id NOT IN (v_game.player_white_id, v_game.player_black_id) THEN
-            RAISE_APPLICATION_ERROR(-20008, 'Вы не являетесь участником этой игры.');
+            v_error_msg := 'Эта партия (ID: ' || v_game_id || ') неактивна (статус '||v_game.status||'). Используйте cancel_game для отмены вызова.';
+            p_audit_log(v_player_id, v_game_id, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            ROLLBACK; -- Нужен, т.к. был SELECT FOR UPDATE
+            RETURN;
         END IF;
 
         DECLARE
@@ -1306,28 +1414,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     END resign_game;
 
     --------------------------------------------------------------------------------
-
-    -- FUNCTION get_game_status(p_game_id IN NUMBER) RETURN rec_game_status IS
-    --     v_status rec_game_status;
-    -- BEGIN
-    --     SELECT g.game_id, gr.rule_name, g.status, g.current_turn, pw.username, pb.username,
-    --            decode_board(g.board_position), g.last_move_at, g.moves_since_capture, pwin.username -- ДЕКОДИРОВАНИЕ
-    --     INTO v_status
-    --     FROM games g
-    --     JOIN game_rules gr ON g.rule_id = gr.rule_id
-    --     LEFT JOIN players pw ON g.player_white_id = pw.player_id
-    --     LEFT JOIN players pb ON g.player_black_id = pb.player_id
-    --     LEFT JOIN players pwin ON g.winner_player_id = pwin.player_id
-    --     WHERE g.game_id = p_game_id;
-        
-    --     RETURN v_status;
-    -- EXCEPTION
-    --     WHEN NO_DATA_FOUND THEN
-    --         RAISE e_game_not_found;
-    -- END get_game_status;
-    
-    --------------------------------------------------------------------------------
-
+   
     FUNCTION f_get_board_as_clob(
         p_board_position    IN VARCHAR2,
         p_highlight_indices IN t_map_indices DEFAULT t_map_indices()
@@ -1378,18 +1465,25 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_max_moves   NUMBER;
         v_seq_name    VARCHAR2(64);
         v_job_name    VARCHAR2(64);
+        v_error_msg   VARCHAR2(255);
     BEGIN
         v_player_id := get_or_create_player_id(user);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
 
         SELECT status INTO v_game_status FROM games WHERE game_id = p_game_id;
         IF v_game_status IN ('A', 'O', 'C') THEN
-            RAISE_APPLICATION_ERROR(-20010, 'Нельзя просматривать активную партию.');
+            v_error_msg := 'Нельзя просматривать активную (или не начатую) партию (ID: ' || p_game_id || ').';
+            p_audit_log(v_player_id, p_game_id, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
 
         SELECT count(*) INTO v_max_moves FROM game_moves WHERE game_id = p_game_id;
         IF v_max_moves = 0 THEN
-            RAISE_APPLICATION_ERROR(-20011, 'В этой партии нет ходов для просмотра.');
+            v_error_msg := 'В этой партии (ID: ' || p_game_id || ') нет ходов для просмотра.';
+            p_audit_log(v_player_id, p_game_id, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
 
         v_seq_name := 'REPLAY_SEQ_' || p_game_id || '_' || v_player_id;
@@ -1428,7 +1522,10 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_winner_name   players.username%TYPE;
         v_loser_name    players.username%TYPE;
         v_final_message VARCHAR2(250);
-
+        v_error_msg     VARCHAR2(255);
+        v_replay_finished BOOLEAN := FALSE;
+        v_replay_error    BOOLEAN := FALSE;
+        
         CURSOR c_game_moves (cp_game_id NUMBER, cp_move_number NUMBER) IS
             SELECT
                 username,
@@ -1444,15 +1541,72 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
         FOR i IN 1 .. p_moves_to_show LOOP
             BEGIN
+                -- Пытаемся получить следующий номер хода из sequence
                 BEGIN
                     EXECUTE IMMEDIATE 'SELECT ' || v_seq_name || '.NEXTVAL FROM DUAL' INTO v_move_num;
                 EXCEPTION
                     WHEN OTHERS THEN
-                        IF SQLCODE = -8004 THEN RAISE e_replay_finished;
-                        ELSE RAISE e_replay_session_not_started;
+                        IF SQLCODE = -8004 THEN 
+                            -- -8004: sequence.NEXTVAL exceeds MAXVALUE (просмотр завершен)
+                            v_replay_finished := TRUE;
+                        ELSE 
+                            -- -2289: sequence does not exist (сессия не начата) или другая ошибка
+                            v_replay_error := TRUE;
+                            v_error_msg := 'Сессия просмотра не начата или прервана (ID: ' || p_game_id || '). Ошибка: ' || SQLERRM;
+                            p_audit_log(v_player_id, p_game_id, SUBSTR(v_error_msg, 1, 100));
+                            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                            DBMS_OUTPUT.PUT_LINE('--[ВНИМАНИЕ] Вызовите game_logic.start_replay_session(' || p_game_id || ');');
                         END IF;
                 END;
 
+                -- [НОВАЯ ЛОГИКА] Проверяем флаги
+                -- Если была ошибка (сессия не найдена), выходим из цикла
+                IF v_replay_error THEN
+                    EXIT;
+                END IF;
+
+                -- Если просмотр завершен, выводим финальное сообщение и выходим
+                IF v_replay_finished THEN
+                    BEGIN
+                        SELECT * INTO v_game_rec FROM games WHERE game_id = p_game_id;
+                        
+                        IF v_game_rec.status = 'D' THEN
+                            v_final_message := 'Ничья.';
+                        ELSIF v_game_rec.status = 'T' THEN
+                            v_final_message := 'Игра завершена по таймауту.';
+                        ELSIF v_game_rec.status = 'V' THEN
+                            SELECT username INTO v_winner_name FROM players WHERE player_id = v_game_rec.winner_player_id;
+                            v_final_message := 'Победа игрока ' || v_winner_name || '.';
+                        ELSIF v_game_rec.status = 'R' THEN
+                            SELECT username INTO v_winner_name FROM players WHERE player_id = v_game_rec.winner_player_id;
+                            DECLARE
+                                v_loser_id players.player_id%TYPE;
+                            BEGIN
+                                IF v_game_rec.winner_player_id = v_game_rec.player_white_id THEN
+                                    v_loser_id := v_game_rec.player_black_id;
+                                ELSE
+                                    v_loser_id := v_game_rec.player_white_id;
+                                END IF;
+                                SELECT username INTO v_loser_name FROM players WHERE player_id = v_loser_id;
+                                v_final_message := v_loser_name || ' сдался. Победитель: ' || v_winner_name || '.';
+                            END;
+                        ELSE
+                            v_final_message := 'Игра завершена с неопределенным статусом.';
+                        END IF;
+
+                    EXCEPTION
+                        WHEN NO_DATA_FOUND THEN
+                            v_final_message := 'Игра не найдена.';
+                    END;
+                    
+                    DBMS_OUTPUT.PUT_LINE('--[ КОНЕЦ ПАРТИИ ]-- ' || v_final_message);
+                    DBMS_OUTPUT.PUT_LINE('-- Для повторного просмотра вызовите start_replay_session.');
+                    
+                    EXIT; -- Выходим из цикла FOR
+                END IF;
+
+                -- Если мы здесь, значит ошибка не произошла и просмотр не закончен
+                -- Печатаем ход
                 FOR move_rec IN c_game_moves(p_game_id, v_move_num) LOOP
                     v_color_str := CASE WHEN MOD(v_move_num, 2) = 1 THEN '(Белые)' ELSE '(Черные)' END;
                     DBMS_OUTPUT.PUT_LINE('---');
@@ -1460,51 +1614,9 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(move_rec.board_position));
                 END LOOP;
 
-            EXCEPTION
-                WHEN e_replay_finished THEN
-                    BEGIN
-                        SELECT * INTO v_game_rec FROM games WHERE game_id = p_game_id;
-                    EXCEPTION
-                        WHEN NO_DATA_FOUND THEN
-                            v_final_message := 'Игра не найдена.';
-                    END;
-
-                    -- [ИЗМЕНЕННАЯ ЛОГИКА]
-                    IF v_game_rec.status = 'D' THEN
-                        v_final_message := 'Ничья.';
-                    ELSIF v_game_rec.status = 'T' THEN
-                        v_final_message := 'Игра завершена по таймауту.';
-                    ELSIF v_game_rec.status = 'V' THEN
-                        SELECT username INTO v_winner_name FROM players WHERE player_id = v_game_rec.winner_player_id;
-                        v_final_message := 'Победа игрока ' || v_winner_name || '.';
-                    ELSIF v_game_rec.status = 'R' THEN
-                        -- Логика для сдачи партии
-                        SELECT username INTO v_winner_name FROM players WHERE player_id = v_game_rec.winner_player_id;
-                        DECLARE
-                            v_loser_id players.player_id%TYPE;
-                        BEGIN
-                            IF v_game_rec.winner_player_id = v_game_rec.player_white_id THEN
-                                v_loser_id := v_game_rec.player_black_id;
-                            ELSE
-                                v_loser_id := v_game_rec.player_white_id;
-                            END IF;
-                            
-                            SELECT username INTO v_loser_name FROM players WHERE player_id = v_loser_id;
-                            v_final_message := v_loser_name || ' сдался. Победитель: ' || v_winner_name || '.';
-                        END;
-                    ELSE
-                        v_final_message := 'Игра завершена с неопределенным статусом.';
-                    END IF;
-                    
-                    DBMS_OUTPUT.PUT_LINE('--[ КОНЕЦ ПАРТИИ ]-- ' || v_final_message);
-                    DBMS_OUTPUT.PUT_LINE('-- Для повторного просмотра вызовите start_replay_session.');
-                    
-                    EXIT;
             END;
         END LOOP;
     EXCEPTION
-        WHEN e_replay_session_not_started THEN
-            DBMS_OUTPUT.PUT_LINE('[ВНИМАНИЕ] Сессия просмотра не начата. Вызовите game_logic.start_replay_session(' || p_game_id || ');');
         WHEN OTHERS THEN
             RAISE;
     END show_next_replay_move;
@@ -1525,55 +1637,78 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_player_username players.username%TYPE;
         v_move_count      NUMBER;
         c_nl CONSTANT VARCHAR2(1) := CHR(10);
+        v_error_msg        VARCHAR2(255);
+        v_viewer_player_id players.player_id%TYPE;
     BEGIN
+        v_viewer_player_id := get_or_create_player_id(USER);
         -- ... (Логика поиска v_target_game_id ... остается без изменений) ...
         IF p_game_id IS NOT NULL AND p_username IS NOT NULL THEN
-             RAISE_APPLICATION_ERROR(-20015, 'Для поиска передайте процедуре только один параметр (имя пользователя или id игры).');
-         ELSIF p_game_id IS NOT NULL THEN
-             v_target_game_id := p_game_id;
-         ELSIF p_username IS NOT NULL THEN
-             v_target_username := UPPER(p_username);
-             BEGIN
-                 SELECT player_id INTO v_target_user_id FROM players WHERE username = v_target_username;
-             EXCEPTION
-                 WHEN NO_DATA_FOUND THEN
-                     RAISE_APPLICATION_ERROR(-20016, 'Пользователя "' || p_username || '" не существует.');
-             END;
-             v_target_game_id := get_my_active_game(v_target_user_id);
-             IF v_target_game_id IS NULL THEN
-                 RAISE_APPLICATION_ERROR(-20017, 'У пользователя "' || p_username || '" не найдено активных сессий.');
-             END IF;
-         ELSE
-             v_target_user_id := get_or_create_player_id(USER);
-             v_target_game_id := get_my_active_game(v_target_user_id);
-             IF v_target_game_id IS NULL THEN
-                 RAISE_APPLICATION_ERROR(-20017, 'У вас нет активных игр.');
-             END IF;
-         END IF;
+            v_error_msg := 'Для поиска передайте процедуре только один параметр (имя пользователя или id игры).';
+            p_audit_log(v_viewer_player_id, NULL, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
+            
+        ELSIF p_game_id IS NOT NULL THEN
+            v_target_game_id := p_game_id;
+            
+        ELSIF p_username IS NOT NULL THEN
+            v_target_username := UPPER(p_username);
+            BEGIN
+                SELECT player_id INTO v_target_user_id FROM players WHERE username = v_target_username;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    v_error_msg := 'Пользователя "' || p_username || '" не существует.';
+                    p_audit_log(v_viewer_player_id, NULL, v_error_msg);
+                    DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                    RETURN;
+            END;
+            
+            v_target_game_id := get_my_active_game(v_target_user_id);
+            IF v_target_game_id IS NULL THEN
+                v_error_msg := 'У пользователя "' || p_username || '" не найдено активных сессий.';
+                p_audit_log(v_viewer_player_id, NULL, v_error_msg);
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                RETURN;
+            END IF;
+            ELSE
+                v_target_user_id := v_viewer_player_id; 
+                v_target_game_id := get_my_active_game(v_target_user_id);
+                
+                IF v_target_game_id IS NULL THEN
+                    v_error_msg := 'У вас нет активных игр.';
+                    p_audit_log(v_target_user_id, NULL, v_error_msg);
+                    DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                    RETURN;
+                END IF;
+            END IF;
          
-         BEGIN
-             SELECT * INTO v_game FROM games WHERE game_id = v_target_game_id;
-         EXCEPTION
-             WHEN NO_DATA_FOUND THEN
-                 RAISE_APPLICATION_ERROR(-20003, 'Игры с id = ' || v_target_game_id || ' не существует.');
-         END;
+            BEGIN
+                SELECT * INTO v_game FROM games WHERE game_id = v_target_game_id;
+            EXCEPTION
+                -- [ИЗМЕНЕНИЕ 5]
+                WHEN NO_DATA_FOUND THEN
+                    v_error_msg := 'Игры с id = ' || v_target_game_id || ' не существует.';
+                    p_audit_log(v_viewer_player_id, v_target_game_id, v_error_msg);
+                    DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                    RETURN;
+            END;
         -- ... (Конец логики поиска) ...
 
         IF v_game.status NOT IN ('A', 'O', 'C') THEN
-            RAISE_APPLICATION_ERROR(-20018, 'Игра с id = ' || v_target_game_id || ' закончена, вы можете посмотреть повтор игры.');
+            v_error_msg := 'Игра с id = ' || v_target_game_id || ' закончена, вы можете посмотреть повтор игры.';
+            p_audit_log(v_viewer_player_id, v_target_game_id, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
 
         DECLARE
             v_active_player_id  players.player_id%TYPE;
-            v_viewer_player_id  players.player_id%TYPE;
             v_highlight_indices t_map_indices;
             v_legal_moves       t_move_list;
             v_decoded_board     games.board_position%TYPE;
         BEGIN
             v_decoded_board := decode_board(v_game.board_position);
             v_active_player_id := CASE v_game.current_turn WHEN 'W' THEN v_game.player_white_id ELSE v_game.player_black_id END;
-            v_viewer_player_id := get_or_create_player_id(USER);
-
             -- ... (логика подсветки ходов v_highlight_indices ... остается без изменений) ...
 
             IF NOT p_hide_header THEN
@@ -1610,24 +1745,51 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_human_msg VARCHAR2(1000);
         v_ai_msg    VARCHAR2(1000);
         c_nl CONSTANT VARCHAR2(1) := CHR(10);
+        v_error_msg VARCHAR2(200);
     BEGIN
         v_player_id := get_or_create_player_id(USER);
         v_game_id   := get_my_active_game(v_player_id);
-        
+        UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
         IF v_game_id IS NULL THEN
-            RAISE_APPLICATION_ERROR(-20017, 'У вас нет активных игр, чтобы сделать ход.');
+            v_error_msg := 'Нет активных игр, чтобы сделать ход.';
+        
+            -- 1) Аудит
+            p_audit_log(
+                p_player_id => v_player_id, 
+                p_game_id   => NULL, 
+                p_event_type => v_error_msg
+            );
+            
+            -- 2) Вывод
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            
+            -- 3) Выход
+            RETURN;
         END IF;
 
-        UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
         SELECT * INTO v_game FROM games WHERE game_id = v_game_id;
 
-        IF v_game.status <> 'A' THEN RAISE e_game_is_over; END IF;
-        IF v_game.player_white_id != v_player_id AND v_game.player_black_id != v_player_id THEN RAISE e_access_denied; END IF;
-        IF (v_game.current_turn = 'W' AND v_game.player_white_id != v_player_id) OR (v_game.current_turn = 'B' AND v_game.player_black_id != v_player_id) THEN RAISE e_not_your_turn; END IF;
+        IF v_game.status <> 'A' THEN
+            v_error_msg := 'Игра (ID: ' || v_game_id || ') еще не активна. Невозможно сделать ход. Противник не подключился.';
+            p_audit_log(v_player_id, v_game_id, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
+        END IF;        
+        IF (v_game.current_turn = 'W' AND v_game.player_white_id != v_player_id) OR 
+            (v_game.current_turn = 'B' AND v_game.player_black_id != v_player_id) 
+        THEN
+            v_error_msg := 'Сейчас не ваш ход. (ID Игры: ' || v_game_id || ', Очередь: ' || v_game.current_turn || ').';
+            p_audit_log(v_player_id, v_game_id, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+        END IF;
         
         -- Ход человека
         p_process_move(v_game_id, p_move_notation, v_player_id, v_human_msg);
         DBMS_OUTPUT.PUT_LINE(v_human_msg);
+        IF INSTR(LOWER(v_human_msg), 'нелегальный ход') > 0 THEN
+            RETURN;
+        END IF;
         BEGIN
             print_board(p_game_id => v_game_id, p_hide_header => TRUE);
         EXCEPTION
@@ -1665,51 +1827,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             RAISE;
     END make_move;
     
-    --------------------------------------------------------------------------------
-
-    FUNCTION get_possible_moves(p_game_id IN NUMBER) RETURN SYS_REFCURSOR IS
-        v_cursor            SYS_REFCURSOR;
-        v_game              games%ROWTYPE;
-        v_player_id         players.player_id%TYPE;
-        v_player_color      CHAR(1);
-        v_all_legal_moves   t_move_list;
-        v_notations         game_logic.tbl_move_notation := game_logic.tbl_move_notation();
-        v_notation_str      VARCHAR2(100);
-        v_decoded_board     games.board_position%TYPE;
-    BEGIN
-        SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
-        IF v_game.status != 'A' THEN RAISE e_game_is_over; END IF;
-
-        v_player_id := get_or_create_player_id(USER);
-        IF v_game.player_white_id = v_player_id THEN
-            v_player_color := 'W';
-        ELSIF v_game.player_black_id = v_player_id THEN
-            v_player_color := 'B';
-        ELSE
-            RAISE e_access_denied;
-        END IF;
-
-        IF v_game.current_turn != v_player_color THEN RAISE e_not_your_turn; END IF;
-        
-        v_decoded_board := decode_board(v_game.board_position);
-        v_all_legal_moves := find_all_player_moves(v_decoded_board, v_player_color, v_game.rule_id);
-        
-        FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
-            v_notation_str := idx_to_notation(v_all_legal_moves(i).path(1).start_idx);
-            FOR j IN 1 .. v_all_legal_moves(i).path.COUNT LOOP
-                v_notation_str := v_notation_str || CASE v_all_legal_moves(i).is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_all_legal_moves(i).path(j).end_idx);
-            END LOOP;
-            v_notations.EXTEND;
-            v_notations(v_notations.LAST) := game_logic.rec_move_notation(v_notation_str);
-        END LOOP;
-        
-        OPEN v_cursor FOR SELECT * FROM TABLE(v_notations);
-        RETURN v_cursor;
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN
-            RAISE e_game_not_found;
-    END get_possible_moves;
-
     --------------------------------------------------------------------------------
 
     FUNCTION cleanup_stale_games(p_timeout_minutes IN NUMBER) RETURN NUMBER IS
@@ -1751,35 +1868,45 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     -- НОВЫЕ ЗАГЛУШКИ (STUBS)
     -- =========================================================================
 
-    PROCEDURE cancel_game(p_game_id IN NUMBER DEFAULT NULL) IS
-        v_game_id   NUMBER := p_game_id;
+    PROCEDURE cancel_game IS
+        v_game_id   NUMBER; -- [ИЗМЕНЕНИЕ] Убрана инициализация из параметра
         v_player_id players.player_id%TYPE;
         v_game      games%ROWTYPE;
+        v_error_msg VARCHAR2(255);
     BEGIN
         v_player_id := get_or_create_player_id(user);
-        IF v_game_id IS NULL THEN
-            v_game_id := get_my_active_game(v_player_id);
-        END IF;
+        UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
+        v_game_id := get_my_active_game(v_player_id);
         
         IF v_game_id IS NULL THEN
-            DBMS_OUTPUT.PUT_LINE('Нет активных игр или вызовов для отмены.');
+            v_error_msg := 'Нет активных игр или вызовов для отмены.';
+            p_audit_log(v_player_id, NULL, v_error_msg); 
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
             RETURN;
         END IF;
-
+      
         SELECT * INTO v_game FROM games WHERE game_id = v_game_id FOR UPDATE;
 
+        -- Проверка статуса (только 'O' или 'C')
         IF v_game.status NOT IN ('O', 'C') THEN
-            RAISE_APPLICATION_ERROR(-20041, 'Эту игру нельзя отменить (статус '||v_game.status||'). Используйте resign_game, чтобы сдаться.');
+            v_error_msg := 'Эту игру (ID: ' || v_game_id || ') нельзя отменить (статус '||v_game.status||'). Используйте resign_game, чтобы сдаться.';
+            p_audit_log(v_player_id, v_game_id, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            ROLLBACK; -- Нужен, т.к. был SELECT FOR UPDATE
+            RETURN;
         END IF;
-        
-        IF v_game.creator_player_id != v_player_id THEN
-             RAISE_APPLICATION_ERROR(-20008, 'Вы не можете отменить игру, которую не создавали.');
-        END IF;
-        
+               
         DELETE FROM games WHERE game_id = v_game_id;
         p_audit_log(v_player_id, v_game_id, 'CANCEL_GAME');
         DBMS_OUTPUT.PUT_LINE('Ваш вызов/открытая игра (ID: ' || v_game_id || ') был(а) отменен(а).');
         COMMIT;
+    EXCEPTION
+        -- Общий обработчик
+        WHEN OTHERS THEN
+            v_error_msg := 'Неожиданная ошибка при отмене игры: ' || SQLERRM;
+            p_audit_log(v_player_id, v_game_id, SUBSTR(v_error_msg, 1, 100));
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            ROLLBACK;
     END cancel_game;
 
     --------------------------------------------------------------------------------

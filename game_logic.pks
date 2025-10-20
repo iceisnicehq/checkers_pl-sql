@@ -77,7 +77,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
 
     PROCEDURE resign_game;
 
-    PROCEDURE cancel_game(p_game_id IN NUMBER DEFAULT NULL);
+    PROCEDURE cancel_game;
 
     -- =========================================================================
     -- 2. УПРАВЛЕНИЕ НИЧЬЕЙ
@@ -140,8 +140,6 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_username    IN VARCHAR2 DEFAULT NULL,
         p_hide_header IN BOOLEAN  DEFAULT FALSE
     );
-
-    FUNCTION get_possible_moves(p_game_id IN NUMBER) RETURN SYS_REFCURSOR;
 
     PROCEDURE start_replay_session(p_game_id IN NUMBER);
 
