@@ -1,85 +1,266 @@
--- Файл: game_logic.pks (Спецификация)
-
 CREATE OR REPLACE PACKAGE game_logic AS
 
-    -- ... (все типы и исключения остаются как есть) ...
-    c_white_man     CONSTANT VARCHAR2(1) := 'w';
-    c_black_man     CONSTANT VARCHAR2(1) := 'b';
-    c_white_king    CONSTANT VARCHAR2(1) := 'W';
-    c_black_king    CONSTANT VARCHAR2(1) := 'B';
-    c_empty_field   CONSTANT VARCHAR2(1) := '+';
+    -- =========================================================================
+    -- ТИПЫ (Остаются в PKS, т.к. от них зависят публичные функции)
+    -- =========================================================================
 
-    -- TYPE rec_game_status IS RECORD (
-    --     game_id             games.game_id%TYPE,
-    --     rule_name           game_rules.rule_name%TYPE,
-    --     status              games.status%TYPE,
-    --     current_turn        games.current_turn%TYPE,
-    --     player_white        players.username%TYPE,
-    --     player_black        players.username%TYPE,
-    --     board_position      games.board_position%TYPE,
-    --     last_move_at        games.last_move_at%TYPE,
-    --     moves_since_capture games.moves_since_capture%TYPE,
-    --     winner              players.username%TYPE
-    -- );
-
+    -- Тип для возврата списка ходов
     TYPE rec_move_notation IS RECORD (
         move_notation VARCHAR2(100)
     );
     TYPE tbl_move_notation IS TABLE OF rec_move_notation;
 
-    e_player_is_busy            EXCEPTION;
-    e_invalid_opponent          EXCEPTION;
-    e_game_not_found            EXCEPTION;
-    e_not_your_turn             EXCEPTION;
-    e_game_is_over              EXCEPTION;
-    e_invalid_move_notation     EXCEPTION;
-    e_illegal_move              EXCEPTION;
-    e_access_denied             EXCEPTION;
-    e_replay_session_not_started EXCEPTION;
-    e_replay_finished           EXCEPTION;
-    e_opponent_is_busy          EXCEPTION; 
+    -- Типы для Задачника
+    TYPE rec_puzzle_list_item IS RECORD (
+        puzzle_id        puzzles.puzzle_id%TYPE,
+        difficulty_level puzzles.difficulty_level%TYPE,
+        moves_to_solve   puzzles.moves_to_solve%TYPE,
+        creator_username players.username%TYPE,
+        board_position   puzzles.board_position%TYPE,
+        turn_to_move     puzzles.turn_to_move%TYPE
+    );
+    TYPE tbl_puzzle_list IS TABLE OF rec_puzzle_list_item;
 
-    PRAGMA EXCEPTION_INIT(e_player_is_busy, -20001);
-    PRAGMA EXCEPTION_INIT(e_invalid_opponent, -20002);
-    PRAGMA EXCEPTION_INIT(e_game_not_found, -20003);
-    PRAGMA EXCEPTION_INIT(e_not_your_turn, -20004);
-    PRAGMA EXCEPTION_INIT(e_game_is_over, -20005);
-    PRAGMA EXCEPTION_INIT(e_invalid_move_notation, -20006);
-    PRAGMA EXCEPTION_INIT(e_illegal_move, -20007);
-    PRAGMA EXCEPTION_INIT(e_access_denied, -20008);
-    PRAGMA EXCEPTION_INIT(e_replay_session_not_started, -20009);
-    PRAGMA EXCEPTION_INIT(e_replay_finished, -20012);
-    PRAGMA EXCEPTION_INIT(e_opponent_is_busy, -20020);
+    TYPE rec_daily_puzzle_info IS RECORD (
+        puzzle_date      daily_puzzles.puzzle_date%TYPE,
+        puzzle_id        puzzles.puzzle_id%TYPE,
+        difficulty_level puzzles.difficulty_level%TYPE,
+        moves_to_solve   puzzles.moves_to_solve%TYPE,
+        turn_to_move     puzzles.turn_to_move%TYPE,
+        board_position   puzzles.board_position%TYPE
+    );
+    TYPE tbl_daily_puzzle_info IS TABLE OF rec_daily_puzzle_info;
 
-    -- ========================= [ НАЧАЛО ИЗМЕНЕНИЙ ] =========================
+    -- Типы, необходимые для бывших "приватных" функций
+    TYPE r_move_step IS RECORD(
+        start_idx    PLS_INTEGER,
+        end_idx      PLS_INTEGER,
+        captured_idx PLS_INTEGER
+    );
+    TYPE t_move_path IS TABLE OF r_move_step;
+
+    TYPE r_move IS RECORD(
+        notation      VARCHAR2(50),
+        path          t_move_path,
+        is_capture    CHAR(1),
+        capture_count PLS_INTEGER,
+        score         PLS_INTEGER
+    );
+    TYPE t_move_list IS TABLE OF r_move;
+    
+    TYPE t_map_indices IS TABLE OF BOOLEAN INDEX BY PLS_INTEGER;
+
+    TYPE r_minimax_result IS RECORD (
+        score NUMBER,
+        move  r_move
+    );
+
+    PROCEDURE get_info;
+
+    -- =========================================================================
+    -- 1. УПРАВЛЕНИЕ ИГРОЙ (PvP и PvE)
+    -- =========================================================================
     PROCEDURE create_game(
         p_opponent_username   IN VARCHAR2 DEFAULT NULL,
+        p_ai_difficulty       IN NUMBER   DEFAULT NULL,
         p_player_color        IN CHAR     DEFAULT NULL,
         p_rule_id             IN NUMBER   DEFAULT 1,
-        p_ai_difficulty       IN NUMBER   DEFAULT 1,
         p_time_limit_move_sec IN NUMBER   DEFAULT NULL,
-        p_time_limit_game_sec IN NUMBER   DEFAULT NULL
+        p_time_limit_game_sec IN NUMBER   DEFAULT NULL,
+        p_draw_moves_limit    IN NUMBER   DEFAULT 50,
+        p_enable_pos_rep_draw IN CHAR     DEFAULT 'Y'
     );
-    -- ========================== [ КОНЕЦ ИЗМЕНЕНИЙ ] ==========================
 
-    PROCEDURE make_move(
-            p_move_notation  IN VARCHAR2
+    PROCEDURE join_game(p_game_id IN NUMBER);
+
+    PROCEDURE make_move(p_move_notation IN VARCHAR2);
+
+    PROCEDURE resign_game;
+
+    PROCEDURE cancel_game(p_game_id IN NUMBER DEFAULT NULL);
+
+    -- =========================================================================
+    -- 2. УПРАВЛЕНИЕ НИЧЬЕЙ
+    -- =========================================================================
+    PROCEDURE offer_draw;
+    
+    PROCEDURE accept_draw;
+    
+    PROCEDURE decline_draw;
+
+    -- =========================================================================
+    -- 3. УПРАВЛЕНИЕ МАТЧАМИ
+    -- =========================================================================
+    PROCEDURE create_match(
+        p_opponent_username IN VARCHAR2,
+        p_games_to_win      IN NUMBER,
+        p_rule_id           IN NUMBER DEFAULT 1
+    );
+
+    PROCEDURE resign_match;
+
+    PROCEDURE cancel_match;
+
+    -- =========================================================================
+    -- 4. РЕЖИМ ЗАДАЧ (Puzzles)
+    -- =========================================================================
+    PROCEDURE start_puzzle(
+        p_puzzle_id IN NUMBER,
+        p_is_daily  IN CHAR DEFAULT 'N'
     );
     
+    PROCEDURE make_puzzle_move(p_move_notation IN VARCHAR2);
+    
+    PROCEDURE create_puzzle(
+        p_board_position   IN VARCHAR2,
+        p_turn_to_move     IN CHAR,
+        p_moves_to_solve   IN NUMBER DEFAULT NULL,
+        p_difficulty_level IN NUMBER
+    );
+    
+    PROCEDURE show_puzzles(p_difficulty IN NUMBER DEFAULT NULL);
+    
+    PROCEDURE show_my_puzzles;
+    
+    PROCEDURE delete_my_puzzle(p_puzzle_id IN NUMBER);
+    
+    PROCEDURE show_daily_puzzle(p_date_str IN VARCHAR2 DEFAULT NULL);
+    
+    PROCEDURE start_daily_puzzle;
+    
+    PROCEDURE print_puzzle_board;
+    
+    PROCEDURE quit_puzzle_attempt;
+
+    -- =========================================================================
+    -- 5. ПРОСМОТР И СТАТУС
+    -- =========================================================================
     PROCEDURE print_board(
         p_game_id     IN NUMBER   DEFAULT NULL,
         p_username    IN VARCHAR2 DEFAULT NULL,
         p_hide_header IN BOOLEAN  DEFAULT FALSE
     );
-    
-    PROCEDURE resign_game;
-    PROCEDURE join_game(p_game_id IN NUMBER);
-    PROCEDURE start_replay_session(p_game_id IN NUMBER);
-    PROCEDURE show_next_replay_move( p_game_id IN NUMBER, p_moves_to_show IN NUMBER DEFAULT 1 );
 
-    -- FUNCTION get_game_status(p_game_id IN NUMBER) RETURN rec_game_status;
     FUNCTION get_possible_moves(p_game_id IN NUMBER) RETURN SYS_REFCURSOR;
+
+    PROCEDURE start_replay_session(p_game_id IN NUMBER);
+
+    PROCEDURE show_next_replay_move(
+        p_game_id       IN NUMBER,
+        p_moves_to_show IN NUMBER DEFAULT 1
+    );
+
+    -- =========================================================================
+    -- 6. ОБСЛУЖИВАНИЕ
+    -- =========================================================================
     FUNCTION cleanup_stale_games(p_timeout_minutes IN NUMBER) RETURN NUMBER;
+    
+    FUNCTION enforce_move_timeouts RETURN NUMBER;
+
+    -- =========================================================================
+    -- 7. БЫВШИЕ "ПРИВАТНЫЕ" ПРОЦЕДУРЫ И ФУНКЦИИ
+    -- (Теперь публичные по требованию)
+    -- =========================================================================
+    
+    -- --- (Процедуры логирования и обновления) ---
+    PROCEDURE p_audit_log(
+        p_player_id  IN players.player_id%TYPE,
+        p_game_id    IN games.game_id%TYPE,
+        p_event_type IN audit_log.event_type%TYPE
+    );
+
+    PROCEDURE p_update_ratings(
+        p_game_id IN games.game_id%TYPE
+    );
+
+    PROCEDURE p_process_move(
+        p_game_id        IN NUMBER,
+        p_move_notation  IN VARCHAR2,
+        p_player_id      IN NUMBER, -- NULL для ИИ
+        p_status_message OUT VARCHAR2
+    );
+
+    -- --- (Функции кодирования и утилиты) ---
+    FUNCTION encode_board(
+        p_decoded_board IN VARCHAR2
+    ) RETURN VARCHAR2;
+
+    FUNCTION decode_board(
+        p_encoded_board IN VARCHAR2
+    ) RETURN VARCHAR2;
+
+    FUNCTION get_my_active_game(
+        p_user_id IN players.player_id%TYPE
+    ) RETURN NUMBER;
+
+    FUNCTION get_or_create_player_id(
+        p_username IN VARCHAR2
+    ) RETURN NUMBER;
+
+    FUNCTION get_initial_position(
+        p_rule_id IN NUMBER
+    ) RETURN VARCHAR2;
+
+    FUNCTION idx_to_notation(
+        p_idx IN PLS_INTEGER
+    ) RETURN VARCHAR2;
+    
+    FUNCTION f_get_board_as_clob(
+        p_board_position  IN VARCHAR2,
+        p_highlight_indices IN t_map_indices DEFAULT t_map_indices()
+    ) RETURN CLOB;
+
+    -- --- (Функции поиска ходов) ---
+    FUNCTION find_capture_paths(
+        p_start_idx    IN PLS_INTEGER,
+        p_board        IN VARCHAR2,
+        p_player_color IN CHAR,
+        p_is_king      IN CHAR,
+        p_rule_id      IN NUMBER,
+        p_visited_path IN t_move_path DEFAULT t_move_path()
+    ) RETURN t_move_list;
+
+    FUNCTION find_all_player_moves(
+        p_board        IN VARCHAR2,
+        p_player_color IN CHAR,
+        p_rule_id      IN NUMBER
+    ) RETURN t_move_list;
+
+    FUNCTION get_sorted_possible_moves(
+        p_board IN VARCHAR2,
+        p_color IN CHAR
+    ) RETURN t_move_list;
+    
+    -- --- (Функции ИИ) ---
+    FUNCTION evaluate_board(
+        p_board      IN VARCHAR2,
+        p_ai_color   IN CHAR,
+        p_difficulty IN NUMBER
+    ) RETURN NUMBER;
+
+    FUNCTION apply_move_to_board(
+        p_board IN VARCHAR2,
+        p_move  IN r_move,
+        p_color IN CHAR
+    ) RETURN VARCHAR2;
+
+    FUNCTION minimax(
+        p_board          IN VARCHAR2,
+        p_depth          IN PLS_INTEGER,
+        p_alpha          IN NUMBER,
+        p_beta           IN NUMBER,
+        p_is_maximizing  IN BOOLEAN,
+        p_ai_color       IN CHAR,
+        p_difficulty     IN NUMBER
+    ) RETURN r_minimax_result;
+
+    FUNCTION get_ai_move(
+        p_board_position IN games.board_position%TYPE,
+        p_ai_color       IN games.current_turn%TYPE,
+        p_rule_id        IN games.rule_id%TYPE,
+        p_difficulty     IN games.ai_difficulty%TYPE
+    ) RETURN VARCHAR2;
+
 
 END game_logic;
 /

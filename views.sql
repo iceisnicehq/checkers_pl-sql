@@ -26,17 +26,19 @@ CREATE OR REPLACE VIEW v_game_protocol AS
 SELECT
     gm.game_id,
     gm.move_number,
-    p.username,
+    -- Используем NVL, чтобы показать 'AI' для ходов, где player_id IS NULL
+    NVL(p.username, 'ИИ Игрок') AS username,
     gm.move_notation,
     gm.is_capture,
     gm.move_timestamp,
     gm.board_position
 FROM
     game_moves gm
-JOIN
+-- Заменяем на LEFT JOIN
+LEFT JOIN
     players p ON gm.player_id = p.player_id;
 
-COMMENT ON TABLE v_game_protocol IS 'Протокол ходов с именами игроков для удобного просмотра.';
+COMMENT ON TABLE v_game_protocol IS 'Протокол ходов (включая ИИ) для удобного просмотра.';
 
 --- V_ACTIVE_GAMES
 CREATE OR REPLACE VIEW v_active_games AS
