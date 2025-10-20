@@ -105,7 +105,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
     --------------------------------------------------------------------------------
 
-    FUNCTION get_my_active_game(p_user_id IN players.player_id%TYPE) RETURN NUMBER IS
+    FUNCTION get_active_game(p_user_id IN players.player_id%TYPE) RETURN NUMBER IS
         v_game_id games.game_id%TYPE;
     BEGIN
         SELECT g.game_id
@@ -119,7 +119,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
             RETURN NULL;
-    END get_my_active_game;
+    END get_active_game;
 
     --------------------------------------------------------------------------------
 
@@ -1115,7 +1115,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_current_player_id;
 
         -- Проверка, не занят ли игрок
-        v_my_active_game_id := get_my_active_game(v_current_player_id);
+        v_my_active_game_id := get_active_game(v_current_player_id);
         IF v_my_active_game_id IS NOT NULL THEN
             v_error_msg := 'Вы уже участвуете в активной игре. ID вашей игры: ' || v_my_active_game_id;
             p_audit_log(v_current_player_id, v_my_active_game_id, v_error_msg);
@@ -1198,7 +1198,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             DECLARE
             v_active_game_count NUMBER;
             BEGIN
-            v_active_game_count := get_my_active_game(v_opponent_player_id);
+            v_active_game_count := get_active_game(v_opponent_player_id);
             
                 -- Проверка занятости оппонента
                 IF v_active_game_count > 0 THEN
@@ -1275,7 +1275,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_player_id := get_or_create_player_id(USER);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
 
-        v_active_game_id := get_my_active_game(v_player_id);
+        v_active_game_id := get_active_game(v_player_id);
 
         IF v_active_game_id IS NOT NULL THEN
             v_error_msg := 'Вы уже участвуете в активной игре. ID вашей игры: ' || v_active_game_id;
@@ -1359,7 +1359,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     BEGIN
         v_player_id := get_or_create_player_id(user);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
-        v_game_id   := get_my_active_game(v_player_id);
+        v_game_id   := get_active_game(v_player_id);
 
         IF v_game_id IS NULL THEN
             v_error_msg := 'У вас нет активной партии, чтобы сдаться.';
@@ -1663,7 +1663,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     RETURN;
             END;
             
-            v_target_game_id := get_my_active_game(v_target_user_id);
+            v_target_game_id := get_active_game(v_target_user_id);
             IF v_target_game_id IS NULL THEN
                 v_error_msg := 'У пользователя "' || p_username || '" не найдено активных сессий.';
                 p_audit_log(v_viewer_player_id, NULL, v_error_msg);
@@ -1672,7 +1672,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             END IF;
             ELSE
                 v_target_user_id := v_viewer_player_id; 
-                v_target_game_id := get_my_active_game(v_target_user_id);
+                v_target_game_id := get_active_game(v_target_user_id);
                 
                 IF v_target_game_id IS NULL THEN
                     v_error_msg := 'У вас нет активных игр.';
@@ -1748,7 +1748,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_error_msg VARCHAR2(200);
     BEGIN
         v_player_id := get_or_create_player_id(USER);
-        v_game_id   := get_my_active_game(v_player_id);
+        v_game_id   := get_active_game(v_player_id);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
         IF v_game_id IS NULL THEN
             v_error_msg := 'Нет активных игр, чтобы сделать ход.';
@@ -1827,42 +1827,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             RAISE;
     END make_move;
     
-    --------------------------------------------------------------------------------
-
-    FUNCTION cleanup_stale_games(p_timeout_minutes IN NUMBER) RETURN NUMBER IS
-        v_cleaned_count NUMBER := 0;
-    BEGIN
-        FOR r IN (
-            SELECT game_id, status, player_white_id, player_black_id, current_turn
-            FROM games
-            WHERE status IN ('A', 'O', 'C')
-              AND last_move_at < (SYSTIMESTAMP - NUMTODSINTERVAL(p_timeout_minutes, 'MINUTE'))
-            FOR UPDATE
-        ) LOOP
-            DECLARE
-                v_new_status games.status%TYPE;
-                v_winner_id  games.winner_player_id%TYPE;
-            BEGIN
-                IF r.status IN ('O', 'C') THEN
-                    v_new_status := 'T';
-                    v_winner_id  := NULL;
-                ELSE
-                    v_new_status := 'V';
-                    v_winner_id  := CASE r.current_turn WHEN 'W' THEN r.player_black_id ELSE r.player_white_id END;
-                END IF;
-
-                UPDATE games
-                SET status           = v_new_status,
-                    winner_player_id = v_winner_id,
-                    end_time         = SYSTIMESTAMP
-                WHERE game_id = r.game_id;
-                
-                v_cleaned_count := v_cleaned_count + 1;
-            END;
-        END LOOP;
-        COMMIT;
-        RETURN v_cleaned_count;
-    END cleanup_stale_games;
 
     -- =========================================================================
     -- НОВЫЕ ЗАГЛУШКИ (STUBS)
@@ -1876,7 +1840,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     BEGIN
         v_player_id := get_or_create_player_id(user);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
-        v_game_id := get_my_active_game(v_player_id);
+        v_game_id := get_active_game(v_player_id);
         
         IF v_game_id IS NULL THEN
             v_error_msg := 'Нет активных игр или вызовов для отмены.';
@@ -1914,7 +1878,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     PROCEDURE offer_draw IS
     BEGIN
         -- TODO:
-        -- 1. Найти активную игру (get_my_active_game)
+        -- 1. Найти активную игру (get_active_game)
         -- 2. Проверить, что статус 'A'
         -- 3. Проверить, что сейчас *не* твой ход (или по правилам)
         -- 4. UPDATE games SET draw_offered_by = v_player_id, draw_offer_status = 'O', draw_offered_at = SYSTIMESTAMP
@@ -1975,20 +1939,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         RAISE_APPLICATION_ERROR(-50000, 'Функция cancel_match еще не реализована.');
     END cancel_match;
 
-    --------------------------------------------------------------------------------
-
-    FUNCTION enforce_move_timeouts RETURN NUMBER IS
-    BEGIN
-        -- TODO:
-        -- 1. SELECT ... FROM games WHERE status = 'A' AND time_limit_move_sec IS NOT NULL
-        -- 2. ... AND (last_move_at + NUMTODSINTERVAL(time_limit_move_sec, 'SECOND')) < SYSTIMESTAMP
-        -- 3. FOR r IN (cursor) LOOP
-        -- 4.    UPDATE games SET status = 'T', winner_player_id = (оппонент)
-        -- 5.    p_audit_log, p_update_ratings
-        -- 6. END LOOP
-        -- 7. RETURN v_count;
-        RETURN 0;
-    END enforce_move_timeouts;
 
     --------------------------------------------------------------------------------
     -- ЗАГЛУШКИ ДЛЯ ЗАДАЧ (PUZZLES)

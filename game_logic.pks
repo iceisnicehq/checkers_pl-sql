@@ -67,8 +67,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_rule_id             IN NUMBER   DEFAULT 1,
         p_time_limit_move_sec IN NUMBER   DEFAULT NULL,
         p_time_limit_game_sec IN NUMBER   DEFAULT NULL,
-        p_draw_moves_limit    IN NUMBER   DEFAULT 50,
-        p_enable_pos_rep_draw IN CHAR     DEFAULT 'Y'
+        p_draw_moves_limit    IN NUMBER   DEFAULT NULL,
+        p_enable_pos_rep_draw IN CHAR     DEFAULT 'N'
     );
 
     PROCEDURE join_game(p_game_id IN NUMBER);
@@ -105,8 +105,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
     -- 4. РЕЖИМ ЗАДАЧ (Puzzles)
     -- =========================================================================
     PROCEDURE start_puzzle(
-        p_puzzle_id IN NUMBER,
-        p_is_daily  IN CHAR DEFAULT 'N'
+        p_puzzle_id IN NUMBER
+        -- p_is_daily  IN CHAR DEFAULT 'N'
     );
     
     PROCEDURE make_puzzle_move(p_move_notation IN VARCHAR2);
@@ -115,7 +115,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_board_position   IN VARCHAR2,
         p_turn_to_move     IN CHAR,
         p_moves_to_solve   IN NUMBER DEFAULT NULL,
-        p_difficulty_level IN NUMBER
+        p_difficulty_level IN NUMBER DEFAULT 1
     );
     
     PROCEDURE show_puzzles(p_difficulty IN NUMBER DEFAULT NULL);
@@ -148,12 +148,12 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_moves_to_show IN NUMBER DEFAULT 1
     );
 
-    -- =========================================================================
-    -- 6. ОБСЛУЖИВАНИЕ
-    -- =========================================================================
-    FUNCTION cleanup_stale_games(p_timeout_minutes IN NUMBER) RETURN NUMBER;
+    -- -- =========================================================================
+    -- -- 6. ОБСЛУЖИВАНИЕ SCHEDULER !!!!!!
+    -- -- =========================================================================
+    -- FUNCTION cleanup_stale_games(p_timeout_minutes IN NUMBER) RETURN NUMBER;
     
-    FUNCTION enforce_move_timeouts RETURN NUMBER;
+    -- FUNCTION enforce_move_timeouts RETURN NUMBER;
 
     -- =========================================================================
     -- 7. БЫВШИЕ "ПРИВАТНЫЕ" ПРОЦЕДУРЫ И ФУНКЦИИ
@@ -187,7 +187,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_encoded_board IN VARCHAR2
     ) RETURN VARCHAR2;
 
-    FUNCTION get_my_active_game(
+    FUNCTION get_active_game(
         p_user_id IN players.player_id%TYPE
     ) RETURN NUMBER;
 
