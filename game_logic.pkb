@@ -489,6 +489,58 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         RETURN v_simple_moves;
     END find_all_player_moves;
 
+        --------------------------------------------------------------------------------
+    -- PUZZLE HELPER FUNCTION
+    --------------------------------------------------------------------------------
+    /**
+     * @function is_valid_board_position
+     * @brief Validates the syntax and basic rules of a board position string.
+     */
+    FUNCTION is_valid_board_position(p_board_position IN VARCHAR2) RETURN BOOLEAN IS
+        v_len PLS_INTEGER := LENGTH(p_board_position);
+        v_char CHAR(1);
+        v_row PLS_INTEGER;
+        v_col PLS_INTEGER;
+        v_is_dark_square BOOLEAN;
+    BEGIN
+        -- 1. Check Length
+        IF v_len NOT IN (64, 100) THEN
+            DBMS_OUTPUT.PUT_LINE('[Validation ERROR] Board string length must be 64 or 100.');
+            RETURN FALSE;
+        END IF;
+
+        -- 2. Check Characters and Placement
+        FOR i IN 1 .. v_len LOOP
+            v_char := SUBSTR(p_board_position, i, 1);
+
+            -- Check valid characters
+            IF v_char NOT IN (c_empty_field, c_white_man, c_black_man, c_white_king, c_black_king) THEN
+                 DBMS_OUTPUT.PUT_LINE('[Validation ERROR] Invalid character "' || v_char || '" at position ' || i);
+                 RETURN FALSE;
+            END IF;
+
+            -- Check if pieces are on dark squares only
+            IF v_char != c_empty_field THEN
+                IF v_len = 64 THEN -- 8x8 board
+                   v_row := 8 - TRUNC((i - 1) / 8);
+                   v_col := MOD(i - 1, 8) + 1;
+                   v_is_dark_square := (MOD(v_row + v_col, 2) = 0);
+                ELSE -- 10x10 board (Assuming similar dark square pattern)
+                   v_row := 10 - TRUNC((i - 1) / 10);
+                   v_col := MOD(i - 1, 10) + 1;
+                   -- Common 10x10 pattern: bottom-left (a1) is dark
+                   v_is_dark_square := (MOD(v_row + v_col, 2) != 0); -- Adjust if your 10x10 is different
+                END IF;
+
+                IF NOT v_is_dark_square THEN
+                    DBMS_OUTPUT.PUT_LINE('[Validation ERROR] Piece "' || v_char || '" found on a light square at index ' || i || ' (Row:'||v_row||', Col:'||v_col||').');
+                    RETURN FALSE;
+                END IF;
+            END IF;
+        END LOOP;
+
+        RETURN TRUE;
+    END is_valid_board_position;
 
     /**
      * @function get_sorted_possible_moves
@@ -752,12 +804,12 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     PROCEDURE p_process_move(
         p_game_id        IN NUMBER,
         p_move_notation  IN VARCHAR2,
-        p_player_id      IN NUMBER,
+        p_player_id      IN NUMBER, -- Now accepts NULL for AI
         p_status_message OUT VARCHAR2
     ) IS
         v_game              games%ROWTYPE;
         v_rule              game_rules%ROWTYPE;
-        v_player_color      CHAR(1);
+        v_player_color      CHAR(1); -- The color making the move
         v_all_legal_moves   t_move_list;
         v_chosen_move       r_move;
         v_is_move_valid     BOOLEAN := FALSE;
@@ -765,15 +817,31 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_new_board_decoded games.board_position%TYPE;
         v_new_board_encoded games.board_position%TYPE;
         v_move_count        NUMBER;
+        v_is_ai_move        BOOLEAN := (p_player_id IS NULL); -- Flag if it's an AI move
     BEGIN
         SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE;
         
-        v_decoded_board := decode_board(v_game.board_position); -- ДЕКОДИРОВАНИЕ
+        v_decoded_board := decode_board(v_game.board_position);
 
-        IF v_game.player_white_id = p_player_id THEN
-            v_player_color := 'W';
+        -- >> CORE LOGIC CHANGE << Determine color correctly
+        IF v_is_ai_move THEN
+            v_player_color := v_game.current_turn; -- AI moves on the current turn
         ELSE
-            v_player_color := 'B';
+            -- Determine human player's color
+            IF v_game.player_white_id = p_player_id THEN
+                v_player_color := 'W';
+            ELSIF v_game.player_black_id = p_player_id THEN
+                v_player_color := 'B';
+            ELSE
+                 -- This case should ideally not be reached if called correctly, but good to handle.
+                 -- Could happen if trying to process a move for a player not in the game.
+                 RAISE e_access_denied;
+            END IF;
+        END IF;
+
+        -- Validate the turn is correct (redundant check if make_move calls it right, but safe)
+        IF v_game.current_turn != v_player_color THEN
+            RAISE e_not_your_turn;
         END IF;
 
         v_all_legal_moves := find_all_player_moves(v_decoded_board, v_player_color, v_game.rule_id);
@@ -782,17 +850,21 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             UPDATE games
             SET status             = 'V',
                 end_time           = SYSTIMESTAMP,
-                winner_player_id   = CASE v_player_color WHEN 'W' THEN v_game.player_black_id ELSE v_game.player_white_id END
+                winner_player_id   = CASE v_player_color -- Winner is the OPPONENT of the player who can't move
+                                        WHEN 'W' THEN v_game.player_black_id
+                                        ELSE v_game.player_white_id
+                                     END
             WHERE game_id = p_game_id;
             p_status_message := 'Ходов нет. Вы проиграли!';
             COMMIT;
             RETURN;
         END IF;
 
+        -- Find the chosen move from legal moves based on notation
         FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
             DECLARE
                 v_legal_move r_move := v_all_legal_moves(i);
-                v_notation   VARCHAR2(50);
+                v_notation   VARCHAR2(100); -- Increased size just in case
             BEGIN
                 v_notation := idx_to_notation(v_legal_move.path(1).start_idx);
                 FOR j IN 1 .. v_legal_move.path.COUNT LOOP
@@ -808,7 +880,8 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         END LOOP;
 
         IF NOT v_is_move_valid THEN
-            IF v_all_legal_moves.COUNT > 0 AND v_all_legal_moves(1).is_capture = 'Y' THEN
+           -- (Error handling for illegal move remains the same)
+             IF v_all_legal_moves.COUNT > 0 AND v_all_legal_moves(1).is_capture = 'Y' THEN
                 DECLARE
                     v_error_msg    VARCHAR2(2000) := 'Неверный ход. Взятие обязательно! Доступные варианты: ';
                     v_notation_str VARCHAR2(100);
@@ -827,47 +900,10 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             END IF;
         END IF;
 
-        v_new_board_decoded := v_decoded_board;
-        DECLARE
-            v_moving_piece              CHAR(1) := SUBSTR(v_new_board_decoded, v_chosen_move.path(1).start_idx, 1);
-            v_start_pos                 PLS_INTEGER := v_chosen_move.path(1).start_idx;
-            v_end_pos                   PLS_INTEGER := v_chosen_move.path(v_chosen_move.path.LAST).end_idx;
-            v_promoted                  BOOLEAN := FALSE;
-        BEGIN
-            v_new_board_decoded := SUBSTR(v_new_board_decoded, 1, v_start_pos - 1) || c_empty_field || SUBSTR(v_new_board_decoded, v_start_pos + 1);
-            IF v_chosen_move.is_capture = 'Y' THEN
-                FOR i IN 1 .. v_chosen_move.path.COUNT LOOP
-                    v_new_board_decoded := SUBSTR(v_new_board_decoded, 1, v_chosen_move.path(i).captured_idx - 1) || c_empty_field || SUBSTR(v_new_board_decoded, v_chosen_move.path(i).captured_idx + 1);
-                END LOOP;
-            END IF;
-            IF v_moving_piece IN (c_white_man, c_black_man) THEN
-                IF v_game.rule_id = 1 AND v_chosen_move.is_capture = 'Y' THEN
-                    FOR i IN 1 .. v_chosen_move.path.COUNT LOOP
-                        DECLARE
-                            v_intermediate_pos PLS_INTEGER := v_chosen_move.path(i).end_idx;
-                            v_intermediate_row PLS_INTEGER := g_board_map(idx_to_notation(v_intermediate_pos)).row_num;
-                        BEGIN
-                            IF (v_player_color = 'W' AND v_intermediate_row = 8) OR (v_player_color = 'B' AND v_intermediate_row = 1) THEN
-                                v_promoted := TRUE;
-                                EXIT;
-                            END IF;
-                        END;
-                    END LOOP;
-                END IF;
-                DECLARE
-                    v_end_row                   PLS_INTEGER := g_board_map(idx_to_notation(v_end_pos)).row_num;
-                    v_is_final_square_promotion BOOLEAN := (v_player_color = 'W' AND v_end_row = 8) OR (v_player_color = 'B' AND v_end_row = 1);
-                BEGIN
-                    IF v_promoted OR v_is_final_square_promotion THEN
-                        v_moving_piece := CASE v_player_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
-                    END IF;
-                END;
-            END IF;
-            v_new_board_decoded := SUBSTR(v_new_board_decoded, 1, v_end_pos - 1) || v_moving_piece || SUBSTR(v_new_board_decoded, v_end_pos + 1);
-        END;
+        -- Apply move logic (remains the same)
+        v_new_board_decoded := apply_move_to_board(v_decoded_board, v_chosen_move, v_player_color);
+        v_new_board_encoded := encode_board(v_new_board_decoded);
 
-        v_new_board_encoded := encode_board(v_new_board_decoded); -- КОДИРОВАНИЕ
-        
         SELECT COUNT(*) + 1 INTO v_move_count FROM game_moves WHERE game_id = p_game_id;
 
         UPDATE games
@@ -877,60 +913,62 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             moves_since_capture = CASE v_chosen_move.is_capture WHEN 'Y' THEN 0 ELSE v_game.moves_since_capture + 1 END
         WHERE game_id = p_game_id;
 
+        -- >> CORE LOGIC CHANGE << Insert NULL for AI player_id
         INSERT INTO game_moves (game_id, move_number, player_id, move_notation, is_capture, board_position)
         VALUES (p_game_id, v_move_count, p_player_id, p_move_notation, v_chosen_move.is_capture, v_new_board_encoded);
         
-        IF p_player_id = 0 THEN
-             p_status_message := 'Ход(#' || v_move_count || ') ИИ: ' || p_move_notation;
+        -- >> CORE LOGIC CHANGE << Adjust status message for AI
+        IF v_is_ai_move THEN
+             p_status_message := 'Ход(#' || v_move_count || ') ИИ ('||v_player_color||'): ' || p_move_notation;
         ELSE
              p_status_message := 'Ход(#' || v_move_count || '): ' || p_move_notation || ' принят.';
         END IF;
 
+        -- Check for game end conditions (remains mostly the same, just be careful with winner logic if p_player_id is NULL)
         DECLARE
             v_next_turn_color       CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
             v_next_player_moves     t_move_list;
             v_opponent_pieces_exist BOOLEAN := FALSE;
             v_repetition_count      NUMBER;
+            v_winner_id             players.player_id%TYPE; -- Explicit winner ID
         BEGIN
+            -- Determine winner based on the player who just moved (p_player_id or implied AI)
+             IF v_is_ai_move THEN
+                v_winner_id := NULL;
+             ELSE
+                 v_winner_id := p_player_id; -- Human wins, use their ID
+             END IF;
+                 
+            -- Check opponent pieces
             IF v_next_turn_color = 'W' THEN
-                IF INSTR(v_new_board_decoded, c_white_man) > 0 OR INSTR(v_new_board_decoded, c_white_king) > 0 THEN
-                    v_opponent_pieces_exist := TRUE;
-                END IF;
+                IF INSTR(v_new_board_decoded, c_white_man) > 0 OR INSTR(v_new_board_decoded, c_white_king) > 0 THEN v_opponent_pieces_exist := TRUE; END IF;
             ELSE
-                IF INSTR(v_new_board_decoded, c_black_man) > 0 OR INSTR(v_new_board_decoded, c_black_king) > 0 THEN
-                    v_opponent_pieces_exist := TRUE;
-                END IF;
-            END IF;
-            IF NOT v_opponent_pieces_exist THEN
-                UPDATE games SET status = 'V', end_time = SYSTIMESTAMP, winner_player_id = p_player_id WHERE game_id = p_game_id;
-                p_status_message := p_status_message || ' Победа! У противника не осталось фигур.';
-                COMMIT;
-                RETURN;
+                IF INSTR(v_new_board_decoded, c_black_man) > 0 OR INSTR(v_new_board_decoded, c_black_king) > 0 THEN v_opponent_pieces_exist := TRUE; END IF;
             END IF;
 
+            IF NOT v_opponent_pieces_exist THEN
+                UPDATE games SET status = 'V', end_time = SYSTIMESTAMP, winner_player_id = v_winner_id WHERE game_id = p_game_id; -- Correct winner
+                p_status_message := p_status_message || ' Победа! У противника не осталось фигур.'; COMMIT; RETURN;
+            END IF;
+
+            -- Check if opponent is blocked
             v_next_player_moves := find_all_player_moves(v_new_board_decoded, v_next_turn_color, v_game.rule_id);
             IF v_next_player_moves.COUNT = 0 THEN
-                UPDATE games SET status = 'V', end_time = SYSTIMESTAMP, winner_player_id = p_player_id WHERE game_id = p_game_id;
-                p_status_message := p_status_message || ' Победа! Противник заблокирован.';
-                COMMIT;
-                RETURN;
+                UPDATE games SET status = 'V', end_time = SYSTIMESTAMP, winner_player_id = v_winner_id WHERE game_id = p_game_id; -- Correct winner
+                p_status_message := p_status_message || ' Победа! Противник заблокирован.'; COMMIT; RETURN;
             END IF;
 
+            -- Check draw conditions (remains the same)
             SELECT * INTO v_rule FROM game_rules WHERE rule_id = v_game.rule_id;
             IF v_chosen_move.is_capture = 'N' AND (v_game.moves_since_capture + 1) >= v_rule.draw_moves_limit THEN
                 UPDATE games SET status = 'D', end_time = SYSTIMESTAMP WHERE game_id = p_game_id;
-                p_status_message := p_status_message || ' Ничья! Превышен лимит ходов без взятия.';
-                COMMIT;
-                RETURN;
+                p_status_message := p_status_message || ' Ничья! Превышен лимит ходов без взятия.'; COMMIT; RETURN;
             END IF;
-
             IF v_rule.enable_pos_repetition_draw = 'Y' THEN
                 SELECT COUNT(*) INTO v_repetition_count FROM game_moves WHERE game_id = p_game_id AND board_position = v_new_board_encoded;
                 IF v_repetition_count >= 2 THEN
                     UPDATE games SET status = 'D', end_time = SYSTIMESTAMP WHERE game_id = p_game_id;
-                    p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.';
-                    COMMIT;
-                    RETURN;
+                    p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.'; COMMIT; RETURN;
                 END IF;
             END IF;
         END;
@@ -939,7 +977,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
     --------------------------------------------------------------------------------
 
-/**
+     /**
      * @function get_ai_move
      * @brief Main entry point for the AI. Determines difficulty and calls the Minimax algorithm.
      */
@@ -1013,29 +1051,30 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         p_opponent_username   IN VARCHAR2 DEFAULT NULL,
         p_player_color        IN CHAR DEFAULT NULL,
         p_rule_id             IN NUMBER DEFAULT 1,
-        p_ai_difficulty       IN NUMBER DEFAULT 1,
+        p_ai_difficulty       IN NUMBER DEFAULT NULL, -- << DEFAULT CHANGED TO NULL
         p_time_limit_move_sec IN NUMBER DEFAULT NULL,
-        p_time_limit_game_sec IN NUMBER DEFAULT NULL
+        p_time_limit_game_sec IN NUMBER DEFAULT NULL,
+        p_start_position      IN VARCHAR2 DEFAULT NULL -- << Added from Puzzle Logic
+        -- p_game_type        IN VARCHAR2 DEFAULT 'STANDARD' -- Optional: Can add later
     ) IS
         v_current_username   players.username%TYPE := USER;
         v_current_player_id  players.player_id%TYPE;
         v_opponent_player_id players.player_id%TYPE;
-        v_white_player_id    players.player_id%TYPE;
-        v_black_player_id    players.player_id%TYPE;
-        v_initial_position   games.board_position%TYPE;
-        v_encoded_position   games.board_position%TYPE;
+        v_white_player_id    players.player_id%TYPE := NULL; -- Initialize as NULL
+        v_black_player_id    players.player_id%TYPE := NULL; -- Initialize as NULL
+        v_board_position     games.board_position%TYPE; -- Starting position (decoded)
+        v_encoded_position   games.board_position%TYPE; -- Starting position (encoded)
         v_status             games.status%TYPE;
         v_ai_move            VARCHAR2(50);
         v_ai_msg             VARCHAR2(1000);
         v_game_id            NUMBER;
         v_status_message     VARCHAR2(1000);
-        c_ai_username CONSTANT players.username%TYPE := 'AI';
+        -- c_ai_username CONSTANT players.username%TYPE := 'AI'; -- Removed
     BEGIN
         v_current_player_id := get_or_create_player_id(v_current_username);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_current_player_id;
 
-        DECLARE
-            v_my_active_game_id NUMBER;
+        DECLARE v_my_active_game_id NUMBER;
         BEGIN
             v_my_active_game_id := get_my_active_game(v_current_player_id);
             IF v_my_active_game_id IS NOT NULL THEN
@@ -1043,8 +1082,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             END IF;
         END;
 
-        DECLARE
-            v_color_choice CHAR(1) := NVL(UPPER(p_player_color), CASE WHEN DBMS_RANDOM.VALUE < 0.5 THEN 'W' ELSE 'B' END);
+        DECLARE v_color_choice CHAR(1) := NVL(UPPER(p_player_color), CASE WHEN DBMS_RANDOM.VALUE < 0.5 THEN 'W' ELSE 'B' END);
         BEGIN
             IF v_color_choice = 'W' THEN
                 v_white_player_id := v_current_player_id;
@@ -1052,46 +1090,60 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 v_black_player_id := v_current_player_id;
             END IF;
         END;
+            v_board_position := get_initial_position(p_rule_id);
 
-        v_initial_position := get_initial_position(p_rule_id);
-        v_encoded_position := encode_board(v_initial_position); -- КОДИРОВАНИЕ
+        -- -- Determine starting position
+        -- IF p_start_position IS NULL THEN
+        --     v_board_position := get_initial_position(p_rule_id);
+        -- ELSE
+        --     -- Validate the provided custom start position
+        --     IF NOT is_valid_board_position(decode_board(p_start_position)) THEN
+        --          RAISE_APPLICATION_ERROR(-20035, 'Invalid starting board position provided.');
+        --     END IF;
+        --     v_board_position := p_start_position; -- Keep encoded for now
+        -- END IF;
+        v_encoded_position := encode_board(decode_board(v_board_position)); -- Ensure it's correctly encoded
 
-        IF UPPER(p_opponent_username) = c_ai_username THEN
+        -- >> CORE LOGIC CHANGE <<
+        IF p_ai_difficulty IS NOT NULL THEN
+            -- --- GAME VS AI ---
             v_status := 'A';
-            IF v_white_player_id IS NULL THEN v_white_player_id := 0; ELSE v_black_player_id := 0; END IF;
+            -- Assign NULL to the player ID that isn't the current user
+            IF v_white_player_id = v_current_player_id THEN
+                v_black_player_id := NULL;
+            ELSE
+                v_white_player_id := NULL;
+            END IF;
 
             INSERT INTO games (creator_player_id, rule_id, player_white_id, player_black_id, status, current_turn, board_position, ai_difficulty, time_limit_move_sec, time_limit_game_sec)
             VALUES (v_current_player_id, p_rule_id, v_white_player_id, v_black_player_id, v_status, 'W', v_encoded_position, p_ai_difficulty, p_time_limit_move_sec, p_time_limit_game_sec)
             RETURNING game_id INTO v_game_id;
 
-            v_status_message := 'Игра против ИИ создана (ID: ' || v_game_id || '). Вы играете за ' || CASE WHEN v_white_player_id = v_current_player_id THEN 'белых (W)' ELSE 'черных (B)' END || '.';
-            
-            IF v_white_player_id = 0 THEN
-                v_ai_move := get_ai_move(v_initial_position, 'W', p_rule_id, p_ai_difficulty);
+            v_status_message := 'Игра против ИИ (Сложность: '|| p_ai_difficulty ||') создана (ID: ' || v_game_id || '). Вы играете за ' || CASE WHEN v_white_player_id = v_current_player_id THEN 'белых (W)' ELSE 'черных (B)' END || '.';
+
+            -- If AI is White, make the first move
+            IF v_white_player_id IS NULL THEN
+                v_ai_move := get_ai_move(v_encoded_position, 'W', p_rule_id, p_ai_difficulty);
                 IF v_ai_move IS NOT NULL THEN
-                    p_process_move(v_game_id, v_ai_move, 0, v_ai_msg);
+                    p_process_move(v_game_id, v_ai_move, NULL, v_ai_msg); -- Pass NULL for AI player_id
                     v_status_message := v_status_message || ' ИИ начинает с хода: ' || v_ai_move;
                 END IF;
             END IF;
 
         ELSIF p_opponent_username IS NOT NULL THEN
+             -- --- DIRECT CHALLENGE (PvP) ---
             IF v_current_username = UPPER(p_opponent_username) THEN RAISE_APPLICATION_ERROR(-20002, 'Нельзя вызвать самого себя.'); END IF;
             v_opponent_player_id := get_or_create_player_id(UPPER(p_opponent_username));
 
-            DECLARE
-                v_active_game_count NUMBER;
+            DECLARE v_active_game_count NUMBER;
             BEGIN
-                SELECT COUNT(*)
-                INTO v_active_game_count
-                FROM games
+                SELECT COUNT(*) INTO v_active_game_count FROM games
                 WHERE status IN ('O', 'C', 'A')
                   AND (player_white_id = v_opponent_player_id OR player_black_id = v_opponent_player_id OR creator_player_id = v_opponent_player_id);
-                IF v_active_game_count > 0 THEN
-                    RAISE_APPLICATION_ERROR(-20020, 'Игрок "' || p_opponent_username || '" уже занят в другой партии.');
-                END IF;
+                IF v_active_game_count > 0 THEN RAISE_APPLICATION_ERROR(-20020, 'Игрок "' || p_opponent_username || '" уже занят в другой партии.'); END IF;
             END;
 
-            IF v_white_player_id IS NULL THEN v_white_player_id := v_opponent_player_id; ELSE v_black_player_id := v_opponent_player_id; END IF;
+            IF v_white_player_id = v_current_player_id THEN v_black_player_id := v_opponent_player_id; ELSE v_white_player_id := v_opponent_player_id; END IF;
             v_status := 'C';
 
             INSERT INTO games (creator_player_id, rule_id, player_white_id, player_black_id, status, current_turn, board_position, time_limit_move_sec, time_limit_game_sec)
@@ -1101,7 +1153,10 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             v_status_message := 'Вызов игроку ' || p_opponent_username || ' брошен. Game ID: ' || v_game_id || '. Ожидайте принятия.';
 
         ELSE
+            -- --- OPEN GAME (PvP) ---
+            -- This case is reached if p_ai_difficulty IS NULL AND p_opponent_username IS NULL
             v_status := 'O';
+            -- One player ID will be set, the other remains NULL until someone joins
             INSERT INTO games (creator_player_id, rule_id, player_white_id, player_black_id, status, current_turn, board_position, time_limit_move_sec, time_limit_game_sec)
             VALUES (v_current_player_id, p_rule_id, v_white_player_id, v_black_player_id, v_status, 'W', v_encoded_position, p_time_limit_move_sec, p_time_limit_game_sec)
             RETURNING game_id INTO v_game_id;
@@ -1111,13 +1166,14 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
         COMMIT;
         DBMS_OUTPUT.PUT_LINE(v_status_message);
-            IF v_white_player_id = 0 THEN
-                BEGIN
-                    print_board(p_game_id => v_game_id, p_hide_header => TRUE);
-                EXCEPTION
-                    WHEN OTHERS THEN NULL;
-                END;
-            END IF;
+
+        -- Print board after AI's first move if applicable
+        IF p_ai_difficulty IS NOT NULL AND v_white_player_id IS NULL AND v_ai_move IS NOT NULL THEN
+            BEGIN
+                print_board(p_game_id => v_game_id, p_hide_header => FALSE); -- Show header here
+            EXCEPTION WHEN OTHERS THEN NULL;
+            END;
+        END IF;
 
     EXCEPTION
         WHEN OTHERS THEN
@@ -1546,33 +1602,34 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         IF v_game.player_white_id != v_player_id AND v_game.player_black_id != v_player_id THEN RAISE e_access_denied; END IF;
         IF (v_game.current_turn = 'W' AND v_game.player_white_id != v_player_id) OR (v_game.current_turn = 'B' AND v_game.player_black_id != v_player_id) THEN RAISE e_not_your_turn; END IF;
         
+        -- Human Move
         p_process_move(v_game_id, p_move_notation, v_player_id, v_human_msg);
         DBMS_OUTPUT.PUT_LINE(v_human_msg);
         BEGIN
             print_board(p_game_id => v_game_id, p_hide_header => TRUE);
-        EXCEPTION
-            WHEN OTHERS THEN NULL;
+        EXCEPTION WHEN OTHERS THEN NULL;
         END;
         
+        -- Check for AI Response
         DECLARE
             v_next_game_state games%ROWTYPE;
             v_ai_move         VARCHAR2(50);
         BEGIN
             SELECT * INTO v_next_game_state FROM games WHERE game_id = v_game_id;
 
+            -- >> CORE LOGIC CHANGE << Check if AI's turn (player_id IS NULL)
             IF v_next_game_state.status = 'A' AND v_next_game_state.ai_difficulty IS NOT NULL AND
-               ((v_next_game_state.current_turn = 'W' AND v_next_game_state.player_white_id = 0) OR
-                (v_next_game_state.current_turn = 'B' AND v_next_game_state.player_black_id = 0))
+               ((v_next_game_state.current_turn = 'W' AND v_next_game_state.player_white_id IS NULL) OR
+                (v_next_game_state.current_turn = 'B' AND v_next_game_state.player_black_id IS NULL))
             THEN
                 v_ai_move := get_ai_move(v_next_game_state.board_position, v_next_game_state.current_turn, v_next_game_state.rule_id, v_next_game_state.ai_difficulty);
 
                 IF v_ai_move IS NOT NULL THEN
-                    p_process_move(v_game_id, v_ai_move, 0, v_ai_msg);
+                    p_process_move(v_game_id, v_ai_move, NULL, v_ai_msg); -- Pass NULL for AI player_id
                     DBMS_OUTPUT.PUT_LINE(c_nl || v_ai_msg);
                     BEGIN
                         print_board(p_game_id => v_game_id, p_hide_header => TRUE);
-                    EXCEPTION
-                        WHEN OTHERS THEN NULL;
+                    EXCEPTION WHEN OTHERS THEN NULL;
                     END;
                 END IF;
             END IF;
@@ -1627,6 +1684,549 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         WHEN NO_DATA_FOUND THEN
             RAISE e_game_not_found;
     END get_possible_moves;
+
+    --------------------------------------------------------------------------------
+
+    --------------------------------------------------------------------------------
+    -- PUZZLE PROCEDURES & FUNCTIONS
+    --------------------------------------------------------------------------------
+
+    PROCEDURE create_puzzle(
+        p_board_position   IN VARCHAR2,
+        p_turn_to_move     IN CHAR,
+        p_moves_to_solve   IN NUMBER DEFAULT NULL, -- << MADE NULLABLE
+        p_difficulty_level IN NUMBER
+    ) IS
+        v_player_id players.player_id%TYPE;
+        v_encoded_board VARCHAR2(100);
+    BEGIN
+        v_player_id := get_or_create_player_id(USER);
+
+        IF NOT is_valid_board_position(decode_board(p_board_position)) THEN
+            RAISE_APPLICATION_ERROR(-20035, 'Invalid board position provided.');
+        END IF;
+
+        IF UPPER(p_turn_to_move) NOT IN ('W', 'B') THEN
+            RAISE_APPLICATION_ERROR(-20036, 'Invalid turn_to_move. Must be W or B.');
+        END IF;
+
+        -- Optional: Validate moves_to_solve if provided
+        IF p_moves_to_solve IS NOT NULL AND p_moves_to_solve <= 0 THEN
+             RAISE_APPLICATION_ERROR(-20037, 'Moves_to_solve must be a positive number if provided.');
+        END IF;
+
+        v_encoded_board := encode_board(p_board_position);
+
+        INSERT INTO puzzles (
+            board_position,
+            turn_to_move,
+            moves_to_solve, -- Can be NULL now
+            difficulty_level,
+            created_by_player_id
+        ) VALUES (
+            v_encoded_board,
+            UPPER(p_turn_to_move),
+            p_moves_to_solve,
+            p_difficulty_level,
+            v_player_id
+        );
+        COMMIT;
+        DBMS_OUTPUT.PUT_LINE('[OK] Custom puzzle created successfully.');
+
+    END create_puzzle;
+
+    -- Helper function to get rule name from board length
+    FUNCTION get_rule_name_from_len(p_len IN NUMBER) RETURN VARCHAR2 IS
+    BEGIN
+        IF p_len = 64 THEN RETURN 'Русские шашки 8x8';
+        ELSIF p_len = 100 THEN RETURN 'Международные шашки 10x10'; -- Assuming rule_id 2
+        ELSE RETURN 'Unknown Rule';
+        END IF;
+    END;
+     -- Helper function to get rule id from board length
+    FUNCTION get_rule_id_from_len(p_len IN NUMBER) RETURN NUMBER IS
+    BEGIN
+        IF p_len = 64 THEN RETURN 1;
+        ELSIF p_len = 100 THEN RETURN 2; -- Assuming rule_id 2
+        ELSE RETURN NULL;
+        END IF;
+    END;
+
+    PROCEDURE show_puzzles(
+        p_difficulty     IN NUMBER DEFAULT NULL
+    ) IS
+        v_decoded_board VARCHAR2(100);
+        v_rule_name     VARCHAR2(50);
+        v_found         BOOLEAN := FALSE;
+    BEGIN
+        DBMS_OUTPUT.PUT_LINE(CHR(10) || '--- Available Server Puzzles ' || CASE WHEN p_difficulty IS NOT NULL THEN '(Difficulty: '||p_difficulty||')' ELSE '(All Difficulties)' END || ' ---');
+        FOR rec IN (
+            SELECT
+                p.puzzle_id,
+                p.difficulty_level,
+                p.moves_to_solve,
+                p.board_position, -- Get encoded
+                p.turn_to_move
+            FROM puzzles p
+            WHERE p.created_by_player_id IS NULL -- Only server-created puzzles
+              AND (p_difficulty IS NULL OR p.difficulty_level = p.difficulty_level) -- Corrected filter
+            ORDER BY p.difficulty_level, p.puzzle_id
+        ) LOOP
+            v_found := TRUE;
+            v_decoded_board := decode_board(rec.board_position); -- Decode here
+            v_rule_name := CASE LENGTH(v_decoded_board)
+                               WHEN 64 THEN '8x8'
+                               WHEN 100 THEN '10x10'
+                               ELSE 'Unknown'
+                           END;
+
+            -- Print puzzle details
+            DBMS_OUTPUT.PUT_LINE('------------------------------------');
+            DBMS_OUTPUT.PUT_LINE(
+                'ID: ' || rec.puzzle_id ||
+                ' | Difficulty: ' || rec.difficulty_level ||
+                ' | Moves: ' || NVL(TO_CHAR(rec.moves_to_solve), '-') ||
+                ' | Rule: ' || v_rule_name ||
+                ' | Turn: ' || rec.turn_to_move
+            );
+            
+            -- Print the decoded board
+            DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_decoded_board)); -- << CHANGED
+
+        END LOOP;
+
+        IF NOT v_found THEN
+            DBMS_OUTPUT.PUT_LINE('No server puzzles found' || CASE WHEN p_difficulty IS NOT NULL THEN ' for difficulty '||p_difficulty||'.' ELSE '.' END);
+        END IF;
+         DBMS_OUTPUT.PUT_LINE('------------------------------------'); -- Footer line
+    END show_puzzles;
+
+    PROCEDURE show_my_puzzles IS
+        v_player_id     players.player_id%TYPE;
+        v_decoded_board VARCHAR2(100);
+        v_rule_name     VARCHAR2(50);
+        v_found         BOOLEAN := FALSE;
+    BEGIN
+        v_player_id := get_or_create_player_id(USER);
+        DBMS_OUTPUT.PUT_LINE(CHR(10) || '--- Your Custom Puzzles ---');
+        FOR rec IN (
+            SELECT
+                p.puzzle_id,
+                p.difficulty_level,
+                p.moves_to_solve,
+                p.board_position,
+                p.turn_to_move
+            FROM puzzles p
+            WHERE p.created_by_player_id = v_player_id
+            ORDER BY p.puzzle_id
+        ) LOOP
+             v_found := TRUE;
+             v_decoded_board := decode_board(rec.board_position);
+             v_rule_name := CASE LENGTH(v_decoded_board)
+                                WHEN 64 THEN '8x8'
+                                WHEN 100 THEN '10x10'
+                                ELSE 'Unknown'
+                            END;
+             DBMS_OUTPUT.PUT_LINE(
+                'ID: ' || RPAD(rec.puzzle_id, 5) ||
+                ' | Difficulty: ' || rec.difficulty_level ||
+                ' | Moves: ' || NVL(TO_CHAR(rec.moves_to_solve), '-') || -- Moves might be NULL
+                ' | Rule: ' || RPAD(v_rule_name, 5) ||
+                ' | Turn: ' || rec.turn_to_move ||
+                ' | Position: ' || rec.board_position -- Show encoded position
+            );
+        END LOOP;
+
+        IF NOT v_found THEN
+            DBMS_OUTPUT.PUT_LINE('You have not created any custom puzzles.');
+        END IF;
+    END show_my_puzzles;
+
+    PROCEDURE delete_my_puzzle(p_puzzle_id IN NUMBER) IS
+        v_player_id players.player_id%TYPE;
+        v_row_count PLS_INTEGER;
+    BEGIN
+        v_player_id := get_or_create_player_id(USER);
+
+        DELETE FROM puzzles
+        WHERE puzzle_id = p_puzzle_id
+          AND created_by_player_id = v_player_id;
+
+        v_row_count := SQL%ROWCOUNT;
+        COMMIT;
+
+        IF v_row_count = 1 THEN
+            DBMS_OUTPUT.PUT_LINE('[OK] Puzzle ID ' || p_puzzle_id || ' deleted successfully.');
+        ELSE
+            DBMS_OUTPUT.PUT_LINE('[WARNING] Puzzle ID ' || p_puzzle_id || ' not found or you do not own it.');
+        END IF;
+    END delete_my_puzzle;
+
+    PROCEDURE show_daily_puzzle(
+        p_date_str IN VARCHAR2 DEFAULT NULL -- Format 'DD.MM.YYYY'
+    ) IS
+        v_target_date DATE;
+        v_puzzle_rec puzzles%ROWTYPE;
+        v_decoded_board VARCHAR2(100);
+        v_rule_name VARCHAR2(50);
+    BEGIN
+        IF p_date_str IS NULL THEN
+            v_target_date := TRUNC(SYSDATE);
+        ELSE
+            BEGIN
+                v_target_date := TO_DATE(p_date_str, 'DD.MM.YYYY');
+            EXCEPTION
+                WHEN OTHERS THEN RAISE_APPLICATION_ERROR(-20038, 'Invalid date format. Please use DD.MM.YYYY');
+            END;
+        END IF;
+
+        DBMS_OUTPUT.PUT_LINE(CHR(10) || '--- Daily Puzzle for ' || TO_CHAR(v_target_date, 'DD.MM.YYYY') || ' ---');
+
+        BEGIN
+            SELECT p.* INTO v_puzzle_rec
+            FROM daily_puzzles dp
+            JOIN puzzles p ON dp.puzzle_id = p.puzzle_id
+            WHERE dp.puzzle_date = v_target_date;
+
+            v_decoded_board := decode_board(v_puzzle_rec.board_position);
+            v_rule_name := CASE LENGTH(v_decoded_board)
+                               WHEN 64 THEN '8x8'
+                               WHEN 100 THEN '10x10'
+                               ELSE 'Unknown'
+                           END;
+
+            DBMS_OUTPUT.PUT_LINE('Puzzle ID: ' || v_puzzle_rec.puzzle_id);
+            DBMS_OUTPUT.PUT_LINE('Difficulty: ' || v_puzzle_rec.difficulty_level);
+            DBMS_OUTPUT.PUT_LINE('Moves to Solve: ' || NVL(TO_CHAR(v_puzzle_rec.moves_to_solve), 'N/A'));
+            DBMS_OUTPUT.PUT_LINE('Rule: ' || v_rule_name);
+            DBMS_OUTPUT.PUT_LINE('Turn: ' || v_puzzle_rec.turn_to_move);
+            DBMS_OUTPUT.PUT_LINE('Board:');
+            DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_decoded_board));
+            DBMS_OUTPUT.PUT_LINE('To play, use start_daily_puzzle() or start_puzzle('||v_puzzle_rec.puzzle_id||').');
+
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                 DBMS_OUTPUT.PUT_LINE('Ежедневной позиции для этого дня ('|| TO_CHAR(v_target_date, 'DD.MM.YYYY') ||') не найдено.');
+                 RAISE e_daily_puzzle_missing; -- Raise exception as required by original spec
+        END;
+
+    END show_daily_puzzle;
+
+    PROCEDURE start_puzzle(p_puzzle_id IN NUMBER, p_is_daily IN CHAR DEFAULT 'N') IS -- Added internal flag
+        v_player_id     players.player_id%TYPE;
+        v_puzzle_rec    puzzles%ROWTYPE;
+        v_attempt_count PLS_INTEGER;
+        v_attempt_id    puzzle_attempts.attempt_id%TYPE;
+        v_decoded_start_board VARCHAR2(100);
+    BEGIN
+        v_player_id := get_or_create_player_id(USER);
+
+        -- Get puzzle details
+        BEGIN
+            SELECT * INTO v_puzzle_rec FROM puzzles WHERE puzzle_id = p_puzzle_id;
+        EXCEPTION
+             WHEN NO_DATA_FOUND THEN RAISE e_puzzle_not_found;
+        END;
+
+        -- Decode the board for printing and potential PvE game start
+        v_decoded_start_board := decode_board(v_puzzle_rec.board_position);
+
+        -- Check if it's a custom puzzle owned by the player
+        IF v_puzzle_rec.created_by_player_id = v_player_id THEN
+            DBMS_OUTPUT.PUT_LINE('[INFO] Starting custom puzzle ID ' || p_puzzle_id || ' as a PvE game...');
+            create_game(
+                p_ai_difficulty     => v_puzzle_rec.difficulty_level,
+                p_player_color      => v_puzzle_rec.turn_to_move,
+                p_rule_id           => get_rule_id_from_len(LENGTH(v_decoded_start_board)), -- Use decoded length
+                p_start_position    => v_puzzle_rec.board_position -- Pass encoded original
+                -- Removed p_opponent_username, as p_ai_difficulty handles it
+            );
+            RETURN;
+        ELSIF v_puzzle_rec.created_by_player_id IS NOT NULL AND v_puzzle_rec.created_by_player_id != v_player_id THEN
+             RAISE_APPLICATION_ERROR(-20039, 'You cannot play puzzles created by other users.');
+        END IF;
+
+        -- Check if an attempt is already in progress by this player for ANY puzzle
+        SELECT COUNT(*) INTO v_attempt_count
+        FROM puzzle_attempts
+        WHERE player_id = v_player_id AND status = 'P';
+
+        IF v_attempt_count > 0 THEN
+            RAISE_APPLICATION_ERROR(-20031, 'You already have another puzzle attempt in progress. Use quit_puzzle_attempt first.');
+        END IF;
+
+        -- Create a new attempt for a predefined/daily puzzle
+        INSERT INTO puzzle_attempts ( puzzle_id, player_id, status, move_number, board_position, is_daily )
+        VALUES ( p_puzzle_id, v_player_id, 'P', 0, v_puzzle_rec.board_position, p_is_daily ) -- Store encoded
+        RETURNING attempt_id INTO v_attempt_id;
+
+        COMMIT;
+
+        DBMS_OUTPUT.PUT_LINE('--- Puzzle Attempt Started (Attempt ID: ' || v_attempt_id || ') ---');
+        DBMS_OUTPUT.PUT_LINE('Puzzle ID: ' || p_puzzle_id);
+        DBMS_OUTPUT.PUT_LINE('Difficulty: ' || v_puzzle_rec.difficulty_level || ', Moves to Solve: ' || v_puzzle_rec.moves_to_solve);
+        DBMS_OUTPUT.PUT_LINE('It is ' || CASE v_puzzle_rec.turn_to_move WHEN 'W' THEN 'White' ELSE 'Black' END || '''s turn.');
+        DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_decoded_start_board));
+        DBMS_OUTPUT.PUT_LINE('Use make_puzzle_move(''your-move'') to play.');
+
+    END start_puzzle;
+
+    PROCEDURE start_daily_puzzle IS
+         v_daily_puzzle_id puzzles.puzzle_id%TYPE;
+    BEGIN
+        -- Find today's daily puzzle ID
+        BEGIN
+            SELECT puzzle_id INTO v_daily_puzzle_id
+            FROM daily_puzzles WHERE TRUNC(puzzle_date) = TRUNC(SYSDATE);
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                 RAISE e_daily_puzzle_missing;
+        END;
+        
+        -- Call start_puzzle, passing the daily flag
+        start_puzzle(p_puzzle_id => v_daily_puzzle_id, p_is_daily => 'Y');
+        
+    END start_daily_puzzle;
+
+    PROCEDURE print_puzzle_board IS
+        v_player_id     players.player_id%TYPE;
+        v_attempt       puzzle_attempts%ROWTYPE;
+        v_puzzle        puzzles%ROWTYPE;
+        v_decoded_board VARCHAR2(100);
+    BEGIN
+        v_player_id := get_or_create_player_id(USER);
+
+        -- Find the player's active puzzle attempt
+        BEGIN
+            SELECT * INTO v_attempt
+            FROM puzzle_attempts
+            WHERE player_id = v_player_id AND status = 'P';
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                DBMS_OUTPUT.PUT_LINE('[INFO] У вас нет активной попытки решения задачи.');
+                RETURN;
+            WHEN TOO_MANY_ROWS THEN
+                DBMS_OUTPUT.PUT_LINE('[ERROR] Найдено несколько активных задач. Пожалуйста, завершите их через quit_puzzle_attempt.');
+                RETURN;
+        END;
+
+        -- Get the puzzle's metadata
+        SELECT * INTO v_puzzle FROM puzzles WHERE puzzle_id = v_attempt.puzzle_id;
+
+        -- Decode the board for printing
+        v_decoded_board := decode_board(v_attempt.board_position);
+
+        -- Print the header and the board
+        DBMS_OUTPUT.PUT_LINE('--- Текущее состояние задачи (Попытка ID: ' || v_attempt.attempt_id || ') ---');
+        
+        -- << ADDED LINE: Check if it's the daily puzzle >>
+        IF v_attempt.is_daily = 'Y' THEN
+            DBMS_OUTPUT.PUT_LINE('** Ежедневная задача! **');
+        END IF;
+        
+        DBMS_OUTPUT.PUT_LINE('Задача ID: ' || v_puzzle.puzzle_id || ' | Ход ' || (v_attempt.move_number + 1) || ' из ' || NVL(TO_CHAR(v_puzzle.moves_to_solve), '?')); -- Handle NULL moves_to_solve
+        DBMS_OUTPUT.PUT_LINE('Сложность: ' || v_puzzle.difficulty_level);
+        DBMS_OUTPUT.PUT_LINE('Ход: ' || CASE v_puzzle.turn_to_move WHEN 'W' THEN 'Белых' ELSE 'Черных' END);
+        DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_decoded_board));
+
+    END print_puzzle_board;
+
+    PROCEDURE make_puzzle_move(p_move_notation IN VARCHAR2) IS
+        v_player_id     players.player_id%TYPE;
+        v_attempt       puzzle_attempts%ROWTYPE;
+        v_puzzle        puzzles%ROWTYPE;
+        v_player_color  CHAR(1);
+        v_opponent_color CHAR(1);
+
+        -- Player's move
+        v_legal_moves   t_move_list;
+        v_chosen_move   r_move;
+        v_is_move_valid BOOLEAN := FALSE;
+        v_player_move_notation VARCHAR2(100);
+
+        -- AI calculation for validation/hint
+        v_ai_best_move_for_player_notation VARCHAR2(100);
+        v_required_depth       PLS_INTEGER; -- << Key change: Depth based on moves remaining
+        v_best_move_result     r_minimax_result; -- Result of deep validation search
+
+        -- Board states
+        v_board_after_player      VARCHAR2(100); -- Decoded
+        v_encoded_board_after_player VARCHAR2(100); -- Encoded
+
+        -- Opponent move finding
+        v_opponent_moves        t_move_list;
+        v_correct_opponent_move r_move;
+        v_correct_opponent_notation VARCHAR2(100);
+        v_found_correct_opp_move BOOLEAN := FALSE;
+        v_worst_losing_score    NUMBER := 99999;
+        v_board_after_opponent  VARCHAR2(100); -- Decoded
+        v_encoded_board_after_opponent VARCHAR2(100); -- Encoded
+
+        v_alpha NUMBER;
+        v_beta  NUMBER;
+        v_validation_result r_minimax_result; -- Result when checking opponent moves
+        c_terminal_win_score CONSTANT NUMBER := 9999;
+
+    BEGIN
+        v_player_id := get_or_create_player_id(USER);
+
+        -- 1. Find active attempt
+        BEGIN SELECT * INTO v_attempt FROM puzzle_attempts WHERE player_id = v_player_id AND status = 'P';
+        EXCEPTION WHEN NO_DATA_FOUND THEN RAISE e_no_active_puzzle; END;
+        SELECT * INTO v_puzzle FROM puzzles WHERE puzzle_id = v_attempt.puzzle_id;
+        v_player_color := v_puzzle.turn_to_move;
+        v_opponent_color := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
+
+        -- 2. Validate player move (syntax and legality)
+        v_legal_moves := find_all_player_moves(v_attempt.board_position, v_player_color, 1);
+        v_player_move_notation := REPLACE(LOWER(p_move_notation), 'x', ':');
+        FOR i IN 1..v_legal_moves.COUNT LOOP DECLARE v_notation VARCHAR2(100); BEGIN
+                v_notation := idx_to_notation(v_legal_moves(i).path(1).start_idx);
+                FOR j IN 1..v_legal_moves(i).path.COUNT LOOP v_notation := v_notation || CASE v_legal_moves(i).is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_legal_moves(i).path(j).end_idx); END LOOP;
+                IF v_player_move_notation = v_notation THEN v_chosen_move := v_legal_moves(i); v_is_move_valid := TRUE; EXIT; END IF;
+        END; END LOOP;
+        IF NOT v_is_move_valid THEN RAISE_APPLICATION_ERROR(-20007, 'Illegal move: "' || p_move_notation || '". Try again.'); END IF;
+
+        -- 3. Calculate Required Depth and AI's Best Move (Validation)
+        IF v_puzzle.moves_to_solve IS NOT NULL THEN
+            -- Calculate depth needed to see to the end of the puzzle
+            -- Need (Player Moves Left * 2) - 1 half-moves minimum. Add buffer.
+            v_required_depth := LEAST(10, GREATEST(4, (v_puzzle.moves_to_solve - v_attempt.move_number) * 2 )); -- Cap at 10, min 4
+        ELSE
+            v_required_depth := 6; -- Default reasonable depth if moves_to_solve is NULL
+        END IF;
+
+        DBMS_OUTPUT.PUT_LINE('[DEBUG] Calculating best move with depth: ' || v_required_depth); -- Debugging line
+
+        -- Use minimax directly for validation with calculated depth
+        v_alpha := -99999; v_beta := 99999;
+        BEGIN
+           v_best_move_result := minimax(
+                                    decode_board(v_attempt.board_position),
+                                    v_required_depth,
+                                    v_alpha, v_beta, TRUE, v_player_color,
+                                    v_puzzle.difficulty_level -- Use puzzle difficulty for eval nuances if needed
+                                );
+            IF v_best_move_result.move.path IS NOT NULL THEN
+                v_ai_best_move_for_player_notation := idx_to_notation(v_best_move_result.move.path(1).start_idx);
+                FOR j IN 1 .. v_best_move_result.move.path.COUNT LOOP v_ai_best_move_for_player_notation := v_ai_best_move_for_player_notation || CASE v_best_move_result.move.is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_best_move_result.move.path(j).end_idx); END LOOP;
+                v_ai_best_move_for_player_notation := REPLACE(LOWER(v_ai_best_move_for_player_notation), 'x', ':');
+            ELSE v_ai_best_move_for_player_notation := NULL; END IF;
+        END;
+
+        -- 4. Compare Player's move with AI's calculation using appropriate depth
+        IF v_player_move_notation = v_ai_best_move_for_player_notation THEN
+            -- CORRECT MOVE! Now determine opponent's response.
+            DBMS_OUTPUT.PUT_LINE('✅ Correct move (' || p_move_notation || ').');
+            v_board_after_player := apply_move_to_board(decode_board(v_attempt.board_position), v_chosen_move, v_player_color);
+            v_encoded_board_after_player := encode_board(v_board_after_player);
+
+            -- 5. Check if this correct move was the FINAL move required
+            IF v_puzzle.moves_to_solve IS NOT NULL AND v_attempt.move_number + 1 = v_puzzle.moves_to_solve THEN
+                -- Check if the resulting position is actually winning
+                v_alpha := -99999; v_beta := 99999;
+                -- Use a decent depth (e.g., 4 or 6) to evaluate the final board state
+                v_validation_result := minimax(v_board_after_player, 4, v_alpha, v_beta, TRUE, v_player_color, v_puzzle.difficulty_level);
+
+                IF v_validation_result.score >= (c_terminal_win_score / 2) THEN -- Win threshold
+                     UPDATE puzzle_attempts SET status = 'S', end_time = SYSTIMESTAMP, move_number = move_number + 1, board_position = v_encoded_board_after_player WHERE attempt_id = v_attempt.attempt_id; COMMIT;
+                     DECLARE v_time_taken INTERVAL DAY TO SECOND := SYSTIMESTAMP - v_attempt.start_time; BEGIN
+                         DBMS_OUTPUT.PUT_LINE('Puzzle Solved! Correct sequence completed.');
+                         DBMS_OUTPUT.PUT_LINE('Time taken: ' || EXTRACT(HOUR FROM v_time_taken)||'h '|| EXTRACT(MINUTE FROM v_time_taken)||'m '|| TRUNC(EXTRACT(SECOND FROM v_time_taken))||'s');
+                         DBMS_OUTPUT.PUT_LINE('-- Final Board --'); DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_board_after_player));
+                     END; RETURN;
+                ELSE
+                    -- This case means the puzzle definition might be wrong, or depth wasn't enough initially
+                    DBMS_OUTPUT.PUT_LINE('❌ Move (' || p_move_notation || ') seemed correct, but the final position is not winning. Puzzle logic might be flawed.');
+                    -- We will still allow the move but warn the user. Update state.
+                     UPDATE puzzle_attempts SET board_position = v_encoded_board_after_player, move_number = v_attempt.move_number + 1 WHERE attempt_id = v_attempt.attempt_id; COMMIT;
+                     DBMS_OUTPUT.PUT_LINE('-- Board After Your Move --');
+                     DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_board_after_player));
+                    RETURN; -- Stop here as it's the last move
+                END IF;
+            END IF;
+
+            -- 6. Find Opponent's "Worst Best Losing" Move (if not final player move)
+            v_opponent_moves := find_all_player_moves(v_encoded_board_after_player, v_opponent_color, 1);
+            IF v_opponent_moves.COUNT = 0 THEN
+                 -- Opponent blocked after player's move -> Solved!
+                 UPDATE puzzle_attempts SET status = 'S', end_time = SYSTIMESTAMP, move_number = move_number + 1, board_position = v_encoded_board_after_player WHERE attempt_id = v_attempt.attempt_id; COMMIT;
+                 DECLARE v_time_taken INTERVAL DAY TO SECOND := SYSTIMESTAMP - v_attempt.start_time; BEGIN
+                     DBMS_OUTPUT.PUT_LINE('Puzzle Solved! Opponent has no reply.');
+                     DBMS_OUTPUT.PUT_LINE('Time taken: ' || EXTRACT(HOUR FROM v_time_taken)||'h '|| EXTRACT(MINUTE FROM v_time_taken)||'m '|| TRUNC(EXTRACT(SECOND FROM v_time_taken))||'s');
+                     DBMS_OUTPUT.PUT_LINE('-- Final Board --'); DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_board_after_player));
+                 END; RETURN;
+            END IF;
+
+            v_found_correct_opp_move := FALSE; v_worst_losing_score := 99999;
+            FOR opp_move IN 1..v_opponent_moves.COUNT LOOP
+                 v_board_after_opponent := apply_move_to_board(v_board_after_player, v_opponent_moves(opp_move), v_opponent_color);
+                 v_alpha := -99999; v_beta := 99999;
+                 -- Validate if player still wins, using depth appropriate for *next* player move
+                 DECLARE v_next_req_depth PLS_INTEGER := LEAST(10, GREATEST(4, (v_puzzle.moves_to_solve - (v_attempt.move_number + 1)) * 2));
+                 BEGIN v_validation_result := minimax(v_board_after_opponent, v_next_req_depth, v_alpha, v_beta, TRUE, v_player_color, v_puzzle.difficulty_level); END;
+
+                 IF v_validation_result.score >= c_terminal_win_score THEN
+                     DECLARE v_opp_score_alpha NUMBER := -99999; v_opp_score_beta  NUMBER := 99999; v_opp_eval_result r_minimax_result; BEGIN
+                        v_opp_eval_result := minimax(v_board_after_opponent, 1, v_opp_score_alpha, v_opp_score_beta, TRUE, v_opponent_color, 0);
+                        IF v_opp_eval_result.score < v_worst_losing_score THEN
+                             v_worst_losing_score := v_opp_eval_result.score; v_correct_opponent_move := v_opponent_moves(opp_move); v_found_correct_opp_move := TRUE;
+                        END IF;
+                     END;
+                 END IF;
+            END LOOP;
+
+            IF NOT v_found_correct_opp_move THEN
+                 DBMS_OUTPUT.PUT_LINE('❌ Incorrect move (' || p_move_notation || '). Although it seemed initially optimal, it does not guarantee a win against any opponent reply. Try again.');
+                 IF v_ai_best_move_for_player_notation IS NOT NULL THEN DBMS_OUTPUT.PUT_LINE('💡 Hint: The initially suggested move was ' || v_ai_best_move_for_player_notation || ', but a different approach might be needed.');
+                 ELSE DBMS_OUTPUT.PUT_LINE('💡 Hint: AI could not determine a best move.'); END IF;
+                 RETURN; -- Do not update state
+            END IF;
+
+            -- 7. Apply the chosen opponent move
+            v_board_after_opponent := apply_move_to_board(v_board_after_player, v_correct_opponent_move, v_opponent_color);
+            v_encoded_board_after_opponent := encode_board(v_board_after_opponent);
+            v_correct_opponent_notation := idx_to_notation(v_correct_opponent_move.path(1).start_idx);
+            FOR j IN 1..v_correct_opponent_move.path.COUNT LOOP v_correct_opponent_notation := v_correct_opponent_notation || CASE v_correct_opponent_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_correct_opponent_move.path(j).end_idx); END LOOP;
+
+            -- 8. Update state for next player move
+            UPDATE puzzle_attempts SET board_position = v_encoded_board_after_opponent, move_number = v_attempt.move_number + 1 WHERE attempt_id = v_attempt.attempt_id; COMMIT;
+            DBMS_OUTPUT.PUT_LINE('Opponent responds: ' || v_correct_opponent_notation || '. Your turn.');
+            DBMS_OUTPUT.PUT_LINE('-- Current Board --');
+            DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(v_board_after_opponent));
+
+        ELSE
+            -- INCORRECT MOVE (Player's move didn't match AI's DEEPER calculation)
+            DBMS_OUTPUT.PUT_LINE('❌ Incorrect move (' || p_move_notation || '). Try again.');
+            IF v_ai_best_move_for_player_notation IS NOT NULL THEN
+                DBMS_OUTPUT.PUT_LINE('💡 Hint: Consider move ' || v_ai_best_move_for_player_notation);
+            ELSE DBMS_OUTPUT.PUT_LINE('💡 Hint: AI could not determine a best move.'); END IF;
+        END IF;
+
+    END make_puzzle_move;
+
+
+    PROCEDURE quit_puzzle_attempt IS
+        v_player_id players.player_id%TYPE;
+        v_attempt_id puzzle_attempts.attempt_id%TYPE;
+        v_row_count PLS_INTEGER;
+    BEGIN
+        v_player_id := get_or_create_player_id(USER);
+
+        UPDATE puzzle_attempts
+        SET status = 'F', end_time = SYSTIMESTAMP
+        WHERE player_id = v_player_id AND status = 'P'
+        RETURNING attempt_id INTO v_attempt_id; -- Get the ID if found
+
+        v_row_count := SQL%ROWCOUNT;
+        COMMIT;
+
+        IF v_row_count = 1 THEN
+            DBMS_OUTPUT.PUT_LINE('[OK] Active puzzle attempt (ID: ' || v_attempt_id || ') marked as failed.');
+        ELSE
+            DBMS_OUTPUT.PUT_LINE('[INFO] No active puzzle attempt found to quit.');
+        END IF;
+    END quit_puzzle_attempt;
 
     --------------------------------------------------------------------------------
 
