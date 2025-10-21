@@ -1748,9 +1748,14 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     v_legal_moves := find_all_player_moves(v_decoded_board, v_game.current_turn, v_game.rule_id);
                     
                     IF v_legal_moves.COUNT > 0 AND v_legal_moves(1).is_capture = 'Y' THEN
+                        -- Перебираем ВСЕ легальные ходы
                         FOR i IN 1 .. v_legal_moves.COUNT LOOP
-                            -- [ИСПРАВЛЕНИЕ] Возвращаем TRUE вместо 1
-                            v_highlight_indices(v_legal_moves(i).path(v_legal_moves(i).path.LAST).end_idx) := TRUE;
+                            -- Вложенный цикл: перебираем ВСЕ шаги в этом ходе
+                            FOR j IN 1 .. v_legal_moves(i).path.COUNT LOOP
+                                -- Подсвечиваем КОНЕЧНОЕ поле каждого шага ('c3', 'd5', 'f7')
+                                v_highlight_indices(v_legal_moves(i).path(j).end_idx) := TRUE;
+                            END LOOP;
+                            
                         END LOOP;
                     END IF;
                 END IF;
