@@ -55,14 +55,14 @@ CREATE OR REPLACE PACKAGE game_logic AS
         move  r_move
     );
 
-    PROCEDURE get_info;
+    PROCEDURE info;
 
     -- =========================================================================
     -- 1. УПРАВЛЕНИЕ ИГРОЙ (PvP и PvE)
     -- =========================================================================
     PROCEDURE create_game(
         p_opponent_username   IN VARCHAR2 DEFAULT NULL,
-        p_ai_difficulty       IN NUMBER   DEFAULT NULL,
+        p_ai_difficulty       IN CHAR     DEFAULT NULL,
         p_player_color        IN CHAR     DEFAULT NULL,
         p_rule_id             IN NUMBER   DEFAULT 1,
         p_time_limit_move_sec IN NUMBER   DEFAULT NULL,

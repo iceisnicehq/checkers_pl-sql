@@ -134,8 +134,7 @@ CREATE TABLE games (
 
     CONSTRAINT chk_games_status CHECK (status IN ('O', 'C', 'A', 'V', 'D', 'T', 'R')),
     CONSTRAINT chk_games_turn CHECK (current_turn IN ('W', 'B')),
-    CONSTRAINT chk_games_active_players CHECK (status <> 'A' OR (player_white_id IS NOT NULL AND player_black_id IS NOT NULL)),
-    CONSTRAINT chk_ai_difficulty CHECK (ai_difficulty BETWEEN 0 AND 2),
+    CONSTRAINT chk_ai_difficulty CHECK (ai_difficulty IN ('E', 'M', 'H') OR ai_difficulty IS NULL),
     
     CONSTRAINT chk_games_draw_status CHECK (draw_offer_status IN ('O', 'S', 'D')),
     CONSTRAINT chk_games_draw_offer_logic CHECK (
@@ -231,10 +230,10 @@ CREATE INDEX idx_puzzle_attempts_player ON puzzle_attempts(player_id);
 -- =============================================================================
 -- IV. НАЧАЛЬНЫЕ ДАННЫЕ
 -- =============================================================================
-INSERT INTO game_rules (rule_id, rule_name, rule_description)
-VALUES (1, 'Русские шашки 8x8', 8, "Blah blah blah Russan checkers rules description.");
+INSERT INTO game_rules (rule_id, rule_name, board_size,rule_description)
+VALUES (1, 'Русские шашки 8x8', 8, 'Blah blah blah Russan checkers rules description.');
 INSERT INTO game_rules (rule_id, rule_name, board_size, rule_description)
-VALUES (2, 'Международные шашки 10x10', 10, "Blah blah blah International checkers rules description.");
+VALUES (2, 'Международные шашки 10x10', 10, 'Blah blah blah International checkers rules description.');
 
 
 -- Run this block once to set up the puzzles

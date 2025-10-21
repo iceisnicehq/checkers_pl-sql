@@ -139,7 +139,7 @@ END;
 -- -----------------------------------------------------------------
 BEGIN
     C##CHECKERS_APP.game_logic.create_game(
-        p_opponent_username => 'AI',
+        p_ai_difficulty => '1',
         p_player_color      => 'B'
     );
 EXCEPTION
