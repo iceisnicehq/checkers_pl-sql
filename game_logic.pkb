@@ -1066,9 +1066,9 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_beta           NUMBER;
     BEGIN
         v_search_depth := CASE p_difficulty
-                              WHEN 'E' THEN 2
-                              WHEN 'M' THEN 4
-                              WHEN 'H' THEN 6
+                              WHEN 'E' THEN 4
+                              WHEN 'M' THEN 8
+                              WHEN 'H' THEN 12
                               ELSE 2
                           END;
         v_alpha := -99999;
@@ -1879,11 +1879,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             RAISE;
     END make_move;
     
-
-    -- =========================================================================
-    -- НОВЫЕ ЗАГЛУШКИ (STUBS)
-    -- =========================================================================
-
     PROCEDURE cancel_game IS
         v_game_id   NUMBER; -- [ИЗМЕНЕНИЕ] Убрана инициализация из параметра
         v_player_id players.player_id%TYPE;
@@ -1926,7 +1921,10 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     END cancel_game;
 
     --------------------------------------------------------------------------------
-    
+    -- =========================================================================
+    -- НОВЫЕ ЗАГЛУШКИ (STUBS)
+    -- =========================================================================
+
     PROCEDURE offer_draw IS
     BEGIN
         -- TODO:
