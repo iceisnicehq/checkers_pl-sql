@@ -55,7 +55,7 @@ EXCEPTION
     WHEN NO_DATA_FOUND THEN
         DBMS_OUTPUT.PUT_LINE('[ERROR] Прямых вызовов для ' || USER || ' не найдено!');
 END;
-/
+
 
 -- =================================================================
 -- == ЭТАП 2: ВЫПОЛНЕНИЕ ХОДОВ В PvP
@@ -71,7 +71,7 @@ EXCEPTION
     WHEN OTHERS THEN
         DBMS_OUTPUT.PUT_LINE('[ОШИБКА] ' || SQLERRM);
 END;
-/
+
 
 -- -----------------------------------------------------------------
 -- ШАГ 2.2: Ход Черных (C##DEV2_USER). Процедура сама найдет игру.
@@ -79,17 +79,15 @@ END;
 BEGIN
     DBMS_OUTPUT.PUT_LINE(CHR(10) || '--- ЭТАП 2.2: Ход Черных (C##DEV2_USER) ---');
     C##CHECKERS_APP.game_logic.make_move(p_move_notation => 'd6-c5');
-EXCEPTION
-    WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('[ОШИБКА] ' || SQLERRM);
 END;
 /
 
 BEGIN
     C##CHECKERS_APP.game_logic.print_board();
-EXCEPTION
-    WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('[ОШИБКА] ' || SQLERRM);
+END;
+
+BEGIN
+    C##CHECKERS_APP.game_logic.print_board(p_wait_for_turn => 'Y');
 END;
 -- =================================================================
 -- == ЭТАП 3: ЗАВЕРШЕНИЕ ПАРТИИ (RESIGN)
@@ -97,9 +95,6 @@ END;
 -- =================================================================
 BEGIN
     C##CHECKERS_APP.game_logic.resign_game();
-EXCEPTION
-    WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('[ОШИБКА] ' || SQLERRM);
 END;
 /
 

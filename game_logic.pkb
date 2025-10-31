@@ -1,4 +1,4 @@
-CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
+create or replace PACKAGE BODY                 game_logic AS
 
     -- =========================================================================
     -- КОНСТАНТЫ
@@ -153,17 +153,17 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             WHEN NO_DATA_FOUND THEN
                 -- Обработка случая, если ID правила вообще не найден в таблице
                 v_error_msg := 'Правила игры с ID=' || p_rule_id || ' не найдены.';
-                
+
                 -- 1) Запись в аудит
                 p_audit_log(
                     p_player_id => NULL,
                     p_game_id   => NULL,
                     p_event_type => v_error_msg
                 );
-                
+
                 -- 2) Вывод DBMS_OUTPUT
                 DBMS_OUTPUT.PUT_LINE(v_error_msg);
-                
+
                 -- 3) Завершение функции
                 RETURN NULL;
         END;
@@ -186,10 +186,10 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 p_game_id   => NULL,
                 p_event_type => v_error_msg
             );
-            
+
             -- 2) Вывод DBMS_OUTPUT (Требование 2)
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
-            
+
             -- 3) Завершение функции (Требование 3)
             RETURN NULL;
         END IF;
@@ -336,7 +336,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                                             v_step.captured_idx := v_capture_idx;
                                             v_new_path.EXTEND;
                                             v_new_path(v_new_path.LAST) := v_step;
-                                            
+
                                             v_sub_paths := find_capture_paths(v_land_idx, v_decoded_board, p_player_color, 'Y', p_rule_id, v_new_path);
 
                                             -- << MODIFIED LOGIC >>
@@ -366,7 +366,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 END IF;
             END;
         END LOOP;
-        
+
         -- << FINAL DECISION LOGIC >>
         -- If we found any multi-step paths, they take precedence and we discard all single-step paths.
         -- If not, then the single-step (leaf) paths are the only valid maximal paths.
@@ -400,7 +400,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             v_player_man  := c_black_man;
             v_player_king := c_black_king;
         END IF;
-        
+
         FOR i IN 1 .. 64 LOOP
             DECLARE
                 v_piece   CHAR(1) := SUBSTR(v_decoded_board, i, 1);
@@ -535,7 +535,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_temp  r_move; -- A temporary record for swapping
     BEGIN
         v_moves := find_all_player_moves(p_board, p_color, 1); -- Assuming rule_id=1
-        
+
         IF v_moves.COUNT < 2 THEN
             RETURN v_moves; -- No need to sort if 0 or 1 move
         END IF;
@@ -548,7 +548,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 v_moves(i).score := 1000 + v_moves(i).capture_count;
             END IF;
         END LOOP;
-        
+
         -- << ERROR FIX >>
         -- Sort the collection in PL/SQL using a simple bubble sort
         FOR i IN 1 .. v_moves.COUNT - 1 LOOP
@@ -567,8 +567,8 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     END get_sorted_possible_moves;
 
     --------------------------------------------------------------------------------
-    
-    
+
+
     /**
      * @function evaluate_board
      * @brief Assigns a numerical score to a given board position.
@@ -581,7 +581,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     ) RETURN NUMBER IS
         v_score         NUMBER := 0;
         v_piece         CHAR(1);
-        
+
         -- Weights for pieces and positions, as per the Python example
         c_man_value     CONSTANT NUMBER := 10;
         c_king_value    CONSTANT NUMBER := 50;
@@ -604,7 +604,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     v_piece_color := CASE WHEN v_piece IN ('w', 'W') THEN 'W' ELSE 'B' END;
                     v_multiplier  := CASE WHEN v_piece_color = p_ai_color THEN 1 ELSE -1 END;
                     v_piece_value := CASE WHEN v_piece IN ('W', 'B') THEN c_king_value ELSE c_man_value END;
-                    
+
                     -- Add the basic material score
                     v_score := v_score + (v_piece_value * v_multiplier);
 
@@ -625,12 +625,12 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                            v_position_bonus := v_position_bonus + ( ((9 - v_row) / 8) * c_wall_val );
                         END IF;
                     END IF;
-                    
+
                     v_score := v_score + (v_position_bonus * v_multiplier);
                 END;
             END IF;
         END LOOP;
-        
+
         -- Check for terminal win/loss state
         DECLARE
             v_ai_pieces     PLS_INTEGER := 0;
@@ -721,7 +721,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_local_beta     NUMBER := p_beta;
     BEGIN
         v_current_color := CASE p_is_maximizing WHEN TRUE THEN p_ai_color ELSE CASE p_ai_color WHEN 'W' THEN 'B' ELSE 'W' END END;
-        
+
         -- << CRITICAL CHANGE HERE >>
         -- Use the new sorting function
         v_possible_moves := get_sorted_possible_moves(p_board, v_current_color);
@@ -731,7 +731,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             v_result.move := NULL;
             RETURN v_result;
         END IF;
-        
+
         IF p_is_maximizing THEN
             v_result.score := -99999; 
             FOR i IN 1..v_possible_moves.COUNT LOOP
@@ -740,14 +740,14 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     v_eval_result   r_minimax_result;
                 BEGIN
                     v_eval_result := minimax(v_new_board, p_depth - 1, v_local_alpha, v_local_beta, FALSE, p_ai_color, p_difficulty);
-                    
+
                     IF v_eval_result.score > v_result.score THEN
                         v_result.score := v_eval_result.score;
                         v_result.move  := v_possible_moves(i);
                     END IF;
-                    
+
                     v_local_alpha := GREATEST(v_local_alpha, v_eval_result.score);
-                    
+
                     IF v_local_beta <= v_local_alpha THEN
                         EXIT; -- Pruning
                     END IF;
@@ -822,7 +822,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_new_board_decoded games.board_position%TYPE;
         v_new_board_encoded games.board_position%TYPE;
         v_move_count        NUMBER;
-        
+
         -- [ИЗМЕНЕНИЕ 1] Увеличен размер для подсказок об обязательном взятии
         v_error_msg         VARCHAR2(2000); 
     BEGIN
@@ -856,7 +856,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             COMMIT;
             RETURN;
         END IF;
-        
+
         -- ... (логика валидации p_move_notation ... остается без изменений) ...
         FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
             DECLARE
@@ -867,7 +867,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 FOR j IN 1 .. v_legal_move.path.COUNT LOOP
                     v_notation := v_notation || CASE v_legal_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_legal_move.path(j).end_idx);
                 END LOOP;
-                
+
                 IF REPLACE(LOWER(p_move_notation), 'x', ':') = v_notation THEN
                     v_chosen_move   := v_legal_move;
                     v_is_move_valid := TRUE;
@@ -878,7 +878,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
         -- [ИЗМЕНЕНИЕ 2] Возвращена логика подсказки об обязательном взятии
         IF NOT v_is_move_valid THEN
-            
+
             -- Проверяем, была ли причина в пропущенном взятии
             -- (find_all_player_moves вернет *только* взятия, если они есть)
             IF v_all_legal_moves.COUNT > 0 AND v_all_legal_moves(1).is_capture = 'Y' THEN
@@ -892,7 +892,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                         FOR j IN 1 .. v_all_legal_moves(i).path.COUNT LOOP
                             v_notation_str := v_notation_str || CASE v_all_legal_moves(i).is_capture WHEN 'Y' THEN ':' ELSE '-' END || idx_to_notation(v_all_legal_moves(i).path(j).end_idx);
                         END LOOP;
-                        
+
                         -- Добавляем, пока помещается в v_error_msg
                         IF LENGTH(v_error_msg || v_notation_str || ' ') <= 2000 THEN
                             v_error_msg := v_error_msg || v_notation_str || ' ';
@@ -914,9 +914,9 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 p_game_id    => p_game_id,
                 p_event_type => SUBSTR(v_error_msg, 1, 100) -- p_audit_log сам обрежет
             );
-            
+
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
-            
+
             p_status_message := v_error_msg;
             ROLLBACK; -- Отменяем транзакцию (т.к. был SELECT FOR UPDATE)
             RETURN;
@@ -969,7 +969,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         -- Записываем ход. p_player_id будет NULL, если это ИИ.
         INSERT INTO game_moves (game_id, move_number, player_id, move_notation, is_capture, board_position)
         VALUES (p_game_id, v_move_count, p_player_id, p_move_notation, v_chosen_move.is_capture, v_new_board_encoded);
-        
+
         -- [ИЗМЕНЕНИЕ] Проверяем p_player_id через IS NULL
         IF p_player_id IS NULL THEN
             p_status_message := 'Ход(#' || v_move_count || ') ИИ: ' || p_move_notation;
@@ -994,7 +994,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     v_opponent_pieces_exist := TRUE;
                 END IF;
             END IF;
-            
+
             IF NOT v_opponent_pieces_exist THEN
                 UPDATE games SET status = 'V', end_time = SYSTIMESTAMP, winner_player_id = p_player_id WHERE game_id = p_game_id;
                 p_status_message := p_status_message || ' Победа! У противника не осталось фигур.';
@@ -1040,7 +1040,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 END IF;
             END IF;
         END;
-        
+
         COMMIT;
     END p_process_move;
 
@@ -1066,9 +1066,9 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_beta           NUMBER;
     BEGIN
         v_search_depth := CASE p_difficulty
-                              WHEN 'E' THEN 4
-                              WHEN 'M' THEN 8
-                              WHEN 'H' THEN 12
+                              WHEN 'E' THEN 2
+                              WHEN 'M' THEN 4
+                              WHEN 'H' THEN 6
                               ELSE 2
                           END;
         v_alpha := -99999;
@@ -1113,7 +1113,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
         RETURN v_best_move_str;
     END get_ai_move;
-    
+
     --------------------------------------------------------------------------------
 
     PROCEDURE create_game(
@@ -1152,7 +1152,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             RETURN;
         END IF;
-        
+
         -- [ИЗМЕНЕНИЕ] Проверка на конфликт параметров
         IF p_opponent_username IS NOT NULL AND p_ai_difficulty IS NOT NULL THEN
             v_error_msg := 'Нельзя одновременно указать оппонента (' || p_opponent_username || ') и сложность ИИ.';
@@ -1212,7 +1212,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     v_status_message := v_status_message || ' ИИ начинает с хода: ' || v_ai_move;
                 END IF;
             END IF;
-        
+
         -- [ИЗМЕНЕНИЕ] Логика создания PvP
         ELSIF p_opponent_username IS NOT NULL THEN
         -- Проверка на игру с самим собой
@@ -1229,7 +1229,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             v_active_game_count NUMBER;
             BEGIN
             v_active_game_count := get_active_game(v_opponent_player_id);
-            
+
                 -- Проверка занятости оппонента
                 IF v_active_game_count > 0 THEN
                     v_error_msg := 'Игрок "' || p_opponent_username || '" уже занят в другой партии (ID: '|| v_active_game_count ||').';
@@ -1256,7 +1256,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
             v_status_message := 'Вызов игроку ' || p_opponent_username || ' брошен. Game ID: ' || v_game_id || '. Ожидайте принятия.';
             p_audit_log(v_current_player_id, v_game_id, 'CREATE_CHALLENGE');
-            
+
         -- [ИЗМЕНЕНИЕ] Логика создания открытой игры
         ELSE
             v_status := 'O'; -- Open
@@ -1278,7 +1278,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
         COMMIT;
         DBMS_OUTPUT.PUT_LINE(v_status_message);
-        
+
         -- Вывод доски, если ИИ сделал первый ход
         IF p_ai_difficulty IS NOT NULL AND v_white_player_id IS NULL THEN
              BEGIN
@@ -1349,7 +1349,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             ROLLBACK; -- Нужен, т.к. был SELECT FOR UPDATE
             RETURN;
         END IF;
-        
+
         -- Если игра 'O', вписываем ID игрока в пустой слот
         IF v_game.status = 'O' THEN
             UPDATE games
@@ -1366,7 +1366,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 last_move_at = SYSTIMESTAMP
             WHERE game_id = p_game_id;
         END IF;
-        
+
         p_audit_log(v_player_id, p_game_id, 'JOIN_GAME');
         DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || '.');
         COMMIT;
@@ -1377,7 +1377,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         ROLLBACK;
     END join_game;
-    
+
     --------------------------------------------------------------------------------
 
     PROCEDURE resign_game IS
@@ -1397,7 +1397,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             RETURN;
         END IF;
-        
+
         SELECT * INTO v_game FROM games WHERE game_id = v_game_id FOR UPDATE;
 
         -- [ИЗМЕНЕНИЕ] Разделение логики. Эта процедура - только для 'A'
@@ -1430,12 +1430,12 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             ELSE
                 v_winner_username := 'AI (Server)';
             END IF;
-            
+
             p_audit_log(v_player_id, v_game_id, 'RESIGN_GAME');
             p_update_ratings(v_game_id);
             DBMS_OUTPUT.PUT_LINE('[OK] Вы сдались в партии ' || v_game_id || '. Победитель: ' || v_winner_username || '.');
         END;
-        
+
         COMMIT;
     EXCEPTION
         WHEN OTHERS THEN
@@ -1444,7 +1444,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     END resign_game;
 
     --------------------------------------------------------------------------------
-   
+
     FUNCTION f_get_board_as_clob(
         p_board_position    IN VARCHAR2,
         p_highlight_indices IN t_map_indices DEFAULT t_map_indices()
@@ -1481,7 +1481,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             DBMS_LOB.append(v_clob, '| ' || r);
             DBMS_LOB.append(v_clob, c_nl);
         END LOOP;
-        
+
         DBMS_LOB.append(v_clob, '--+------------------------+--' || c_nl);
         DBMS_LOB.append(v_clob, '  | A  B  C  D  E  F  G  H |' || c_nl);
         RETURN v_clob;
@@ -1523,7 +1523,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         BEGIN DBMS_SCHEDULER.DROP_JOB(v_job_name, force => TRUE); EXCEPTION WHEN OTHERS THEN NULL; END;
 
         EXECUTE IMMEDIATE 'CREATE SEQUENCE ' || v_seq_name || ' START WITH 1 INCREMENT BY 1 MINVALUE 1 MAXVALUE ' || v_max_moves || ' NOCYCLE NOCACHE';
-        
+
         DBMS_SCHEDULER.create_job(
             job_name   => v_job_name,
             job_type   => 'PLSQL_BLOCK',
@@ -1555,7 +1555,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_error_msg     VARCHAR2(255);
         v_replay_finished BOOLEAN := FALSE;
         v_replay_error    BOOLEAN := FALSE;
-        
+
         CURSOR c_game_moves (cp_game_id NUMBER, cp_move_number NUMBER) IS
             SELECT
                 username,
@@ -1599,7 +1599,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 IF v_replay_finished THEN
                     BEGIN
                         SELECT * INTO v_game_rec FROM games WHERE game_id = p_game_id;
-                        
+
                         IF v_game_rec.status = 'D' THEN
                             v_final_message := 'Ничья.';
                         ELSIF v_game_rec.status = 'T' THEN
@@ -1628,10 +1628,10 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                         WHEN NO_DATA_FOUND THEN
                             v_final_message := 'Игра не найдена.';
                     END;
-                    
+
                     DBMS_OUTPUT.PUT_LINE('--[ КОНЕЦ ПАРТИИ ]-- ' || v_final_message);
                     DBMS_OUTPUT.PUT_LINE('-- Для повторного просмотра вызовите start_replay_session.');
-                    
+
                     EXIT; -- Выходим из цикла FOR
                 END IF;
 
@@ -1650,13 +1650,14 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         WHEN OTHERS THEN
             RAISE;
     END show_next_replay_move;
-    
+
     --------------------------------------------------------------------------------
 
     PROCEDURE print_board(
-        p_game_id     IN NUMBER   DEFAULT NULL,
-        p_username    IN VARCHAR2 DEFAULT NULL,
-        p_hide_header IN BOOLEAN  DEFAULT FALSE
+        p_game_id       IN NUMBER   DEFAULT NULL,
+        p_username      IN VARCHAR2 DEFAULT NULL,
+        p_hide_header   IN BOOLEAN  DEFAULT FALSE,
+        p_wait_for_turn IN CHAR     DEFAULT 'N' -- <--- ДОБАВЛЕНО
     ) IS
         v_target_game_id  games.game_id%TYPE;
         v_target_user_id  players.player_id%TYPE;
@@ -1671,17 +1672,16 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_viewer_player_id players.player_id%TYPE;
     BEGIN
         v_viewer_player_id := get_or_create_player_id(USER);
-        
+
         -- [ЛОГИКА ПОИСКА И ОШИБОК]
+        -- ... (весь ваш код поиска v_target_game_id остается здесь без изменений) ...
         IF p_game_id IS NOT NULL AND p_username IS NOT NULL THEN
             v_error_msg := 'Для поиска передайте процедуре только один параметр (имя пользователя или id игры).';
             p_audit_log(v_viewer_player_id, NULL, v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             RETURN;
-            
         ELSIF p_game_id IS NOT NULL THEN
             v_target_game_id := p_game_id;
-            
         ELSIF p_username IS NOT NULL THEN
             v_target_username := UPPER(p_username);
             BEGIN
@@ -1693,8 +1693,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     DBMS_OUTPUT.PUT_LINE(v_error_msg);
                     RETURN;
             END;
-            
-            -- [ИСПРАВЛЕНИЕ] Используем get_active_game
             v_target_game_id := get_active_game(v_target_user_id);
             IF v_target_game_id IS NULL THEN
                 v_error_msg := 'У пользователя "' || p_username || '" не найдено активных сессий.';
@@ -1704,9 +1702,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             END IF;
         ELSE
             v_target_user_id := v_viewer_player_id; 
-            -- [ИСПРАВЛЕНИЕ] Используем get_active_game
             v_target_game_id := get_active_game(v_target_user_id); 
-            
             IF v_target_game_id IS NULL THEN
                 v_error_msg := 'У вас нет активных игр.';
                 p_audit_log(v_target_user_id, NULL, v_error_msg);
@@ -1737,38 +1733,95 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             v_highlight_indices t_map_indices;
             v_legal_moves       t_move_list;
             v_decoded_board     games.board_position%TYPE;
-            -- v_viewer_player_id уже определен во внешней области
+            
+            -- [НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ЦИКЛА]
+            v_my_color          CHAR(1);
+            v_loop_start_time   TIMESTAMP;
+            v_timeout_sec       NUMBER;
+            v_wait_message      VARCHAR2(200);
+
         BEGIN
+            -- [НОВАЯ ЛОГИКА] Определение "моего" цвета
+            IF v_game.player_white_id = v_viewer_player_id THEN
+                v_my_color := 'W';
+            ELSIF v_game.player_black_id = v_viewer_player_id THEN
+                v_my_color := 'B';
+            ELSE
+                v_my_color := NULL; -- Зритель
+            END IF;
+
+            -- [НОВАЯ ЛОГИКА] Цикл ожидания
+            IF UPPER(p_wait_for_turn) = 'Y' 
+            AND v_my_color IS NOT NULL           -- Мы должны быть игроком
+            AND v_game.current_turn != v_my_color -- Сейчас не наш ход
+            AND v_game.status = 'A'              -- Игра активна
+            THEN
+                v_loop_start_time := SYSTIMESTAMP;
+                -- Используем лимит из игры, или 5 минут (300 сек) по умолчанию
+                v_timeout_sec := NVL(v_game.time_limit_move_sec, 300); 
+
+                DBMS_OUTPUT.PUT_LINE('---');
+                DBMS_OUTPUT.PUT_LINE('Ожидание вашего хода... (Тайм-аут: ' || v_timeout_sec || ' сек)');
+                DBMS_OUTPUT.PUT_LINE('(SQL Developer "зависнет", пока ход не будет сделан или не выйдет тайм-аут)');
+                
+                -- Цикл ждет, пока не наступит наш ход, ИЛИ игра не закончится, ИЛИ не выйдет тайм-аут
+                WHILE v_game.current_turn != v_my_color 
+                AND v_game.status = 'A' 
+                AND SYSTIMESTAMP < v_loop_start_time + NUMTODSINTERVAL(v_timeout_sec, 'SECOND') 
+                LOOP
+                    dbms_session.sleep(3); -- Пауза 3 секунды
+                    
+                    -- Перечитываем *всю* строку v_game, чтобы обновить ее статус
+                    SELECT * INTO v_game FROM games WHERE game_id = v_target_game_id;
+                END LOOP;
+                
+                -- Формируем сообщение о выходе из цикла
+                IF v_game.current_turn = v_my_color THEN
+                    v_wait_message := 'ВАШ ХОД!';
+                ELSIF v_game.status != 'A' THEN
+                    v_wait_message := 'Игра завершилась во время ожидания (Статус: ' || v_game.status || ').';
+                ELSE -- Тайм-аут
+                    v_wait_message := 'Тайм-аут ожидания. Ход не сделан.';
+                END IF;
+                
+            END IF;
+            -- [КОНЕЦ НОВОЙ ЛОГИКИ]
+
+
+            -- [СУЩЕСТВУЮЩАЯ ЛОГИКА] (теперь она использует v_game, 
+            -- который мог обновиться в цикле)
+
             v_decoded_board := decode_board(v_game.board_position);
             v_active_player_id := CASE v_game.current_turn WHEN 'W' THEN v_game.player_white_id ELSE v_game.player_black_id END;
             
-            -- [ЛОГИКА ПОДСВЕТКИ]
+            -- [ЛОГИКА ПОДСВЕТКИ] (без изменений)
             BEGIN
                 IF v_game.status = 'A' AND v_viewer_player_id = v_active_player_id THEN
                     v_legal_moves := find_all_player_moves(v_decoded_board, v_game.current_turn, v_game.rule_id);
-                    
                     IF v_legal_moves.COUNT > 0 AND v_legal_moves(1).is_capture = 'Y' THEN
-                        -- Перебираем ВСЕ легальные ходы
                         FOR i IN 1 .. v_legal_moves.COUNT LOOP
-                            -- Вложенный цикл: перебираем ВСЕ шаги в этом ходе
                             FOR j IN 1 .. v_legal_moves(i).path.COUNT LOOP
-                                -- Подсвечиваем КОНЕЧНОЕ поле каждого шага ('c3', 'd5', 'f7')
                                 v_highlight_indices(v_legal_moves(i).path(j).end_idx) := TRUE;
                             END LOOP;
-                            
                         END LOOP;
                     END IF;
                 END IF;
             EXCEPTION
                 WHEN OTHERS THEN
-                    NULL; -- Ошибка подсветки не должна мешать печати
+                    NULL; 
             END;
-            -- [КОНЕЦ ЛОГИКИ ПОДСВЕТКИ]
             
+            -- [ЛОГИКА ПЕЧАТИ]
             IF NOT p_hide_header THEN
+                
+                -- [НОВОЕ] Печатаем сообщение о выходе из цикла, если оно есть
+                IF v_wait_message IS NOT NULL THEN
+                    DBMS_OUTPUT.PUT_LINE('---');
+                    DBMS_OUTPUT.PUT_LINE(v_wait_message);
+                END IF;
+
                 IF v_game.status = 'A' THEN
                     SELECT COUNT(*) INTO v_move_count FROM game_moves WHERE game_id = v_target_game_id;
-                    
                     IF v_active_player_id IS NOT NULL THEN
                         SELECT p.username INTO v_player_username FROM players p WHERE p.player_id = v_active_player_id;
                     ELSIF v_game.ai_difficulty IS NOT NULL THEN
@@ -1776,7 +1829,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     ELSE
                         v_player_username := '(ожидание)';
                     END IF;
-                    
                     v_status_header := 'Ход(#' || (v_move_count + 1) || ') игрока: ' || v_player_username || ' (' || v_game.current_turn || ')';
                 ELSE
                     v_status_header := 'Состояние доски: ' || v_game.status;
@@ -1805,17 +1857,17 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
         IF v_game_id IS NULL THEN
             v_error_msg := 'Нет активных игр, чтобы сделать ход.';
-        
+
             -- 1) Аудит
             p_audit_log(
                 p_player_id => v_player_id, 
                 p_game_id   => NULL, 
                 p_event_type => v_error_msg
             );
-            
+
             -- 2) Вывод
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
-            
+
             -- 3) Выход
             RETURN;
         END IF;
@@ -1836,7 +1888,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
         END IF;
-        
+
         -- Ход человека
         p_process_move(v_game_id, p_move_notation, v_player_id, v_human_msg);
         IF INSTR(LOWER(v_human_msg), 'нелегальный ход') > 0 THEN
@@ -1847,7 +1899,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         EXCEPTION
             WHEN OTHERS THEN NULL;
         END;
-        
+
         -- Ход ИИ (если применимо)
         DECLARE
             v_next_game_state games%ROWTYPE;
@@ -1878,7 +1930,12 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             ROLLBACK;
             RAISE;
     END make_move;
-    
+
+
+    -- =========================================================================
+    -- НОВЫЕ ЗАГЛУШКИ (STUBS)
+    -- =========================================================================
+
     PROCEDURE cancel_game IS
         v_game_id   NUMBER; -- [ИЗМЕНЕНИЕ] Убрана инициализация из параметра
         v_player_id players.player_id%TYPE;
@@ -1888,14 +1945,14 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_player_id := get_or_create_player_id(user);
         UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
         v_game_id := get_active_game(v_player_id);
-        
+
         IF v_game_id IS NULL THEN
             v_error_msg := 'Нет активных игр или вызовов для отмены.';
             p_audit_log(v_player_id, NULL, v_error_msg); 
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             RETURN;
         END IF;
-      
+
         SELECT * INTO v_game FROM games WHERE game_id = v_game_id FOR UPDATE;
 
         -- Проверка статуса (только 'O' или 'C')
@@ -1906,7 +1963,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             ROLLBACK; -- Нужен, т.к. был SELECT FOR UPDATE
             RETURN;
         END IF;
-               
+
         DELETE FROM games WHERE game_id = v_game_id;
         p_audit_log(v_player_id, v_game_id, 'CANCEL_GAME');
         DBMS_OUTPUT.PUT_LINE('Ваш вызов/открытая игра (ID: ' || v_game_id || ') был(а) отменен(а).');
@@ -1921,9 +1978,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     END cancel_game;
 
     --------------------------------------------------------------------------------
-    -- =========================================================================
-    -- НОВЫЕ ЗАГЛУШКИ (STUBS)
-    -- =========================================================================
 
     PROCEDURE offer_draw IS
     BEGIN
@@ -1934,7 +1988,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         -- 4. UPDATE games SET draw_offered_by = v_player_id, draw_offer_status = 'O', draw_offered_at = SYSTIMESTAMP
         RAISE_APPLICATION_ERROR(-50000, 'Функция offer_draw еще не реализована.');
     END offer_draw;
-    
+
     PROCEDURE accept_draw IS
     BEGIN
         -- TODO:
@@ -1946,15 +2000,15 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         -- 6. p_update_ratings
         RAISE_APPLICATION_ERROR(-50000, 'Функция accept_draw еще не реализована.');
     END accept_draw;
-    
-    PROCEDURE cancel_draw_offer IS
+
+    PROCEDURE decline_draw IS
     BEGIN
         -- TODO:
         -- 1. Найти активную игру
         -- 2. Проверить, что draw_offer_status = 'O' и draw_offered_by != v_player_id
         -- 3. UPDATE games SET draw_offer_status = 'D'
-        RAISE_APPLICATION_ERROR(-50000, 'Функция cancel_draw_offer еще не реализована.');
-    END cancel_draw_offer;
+        RAISE_APPLICATION_ERROR(-50000, 'Функция decline_draw еще не реализована.');
+    END decline_draw;
 
     --------------------------------------------------------------------------------
 
@@ -1971,15 +2025,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         -- 4. INSERT INTO matches (...)
         RAISE_APPLICATION_ERROR(-50000, 'Функция create_match еще не реализована.');
     END create_match;
-
-    PROCEDURE join_match IS
-    BEGIN
-        -- TODO:
-        -- 1. Найти активный матч игрока
-        -- 2. UPDATE matches SET status = 'C', winner_player_id = opponent_id
-        -- 3. Отменить текущую активную игру (если есть)
-        RAISE_APPLICATION_ERROR(-50000, 'Функция join_match еще не реализована.');
-    END join_match;
 
     PROCEDURE resign_match IS
     BEGIN
@@ -2006,47 +2051,47 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     BEGIN
         RAISE_APPLICATION_ERROR(-50000, 'Функция start_puzzle еще не реализована.');
     END start_puzzle;
-    
+
     PROCEDURE make_puzzle_move(p_move_notation IN VARCHAR2) IS
     BEGIN
         RAISE_APPLICATION_ERROR(-50000, 'Функция make_puzzle_move еще не реализована.');
     END make_puzzle_move;
-    
+
     PROCEDURE create_puzzle(p_board_position IN VARCHAR2, p_turn_to_move IN CHAR, p_moves_to_solve IN NUMBER DEFAULT NULL, p_difficulty_level IN NUMBER) IS
     BEGIN
         RAISE_APPLICATION_ERROR(-50000, 'Функция create_puzzle еще не реализована.');
     END create_puzzle;
-    
+
     PROCEDURE show_puzzles(p_difficulty IN NUMBER DEFAULT NULL) IS
     BEGIN
         RAISE_APPLICATION_ERROR(-50000, 'Функция show_puzzles еще не реализована.');
     END show_puzzles;
-    
+
     PROCEDURE show_my_puzzles IS
     BEGIN
         RAISE_APPLICATION_ERROR(-50000, 'Функция show_my_puzzles еще не реализована.');
     END show_my_puzzles;
-    
+
     PROCEDURE delete_my_puzzle(p_puzzle_id IN NUMBER) IS
     BEGIN
         RAISE_APPLICATION_ERROR(-50000, 'Функция delete_my_puzzle еще не реализована.');
     END delete_my_puzzle;
-    
+
     PROCEDURE show_daily_puzzle(p_date_str IN VARCHAR2 DEFAULT NULL) IS
     BEGIN
         RAISE_APPLICATION_ERROR(-50000, 'Функция show_daily_puzzle еще не реализована.');
     END show_daily_puzzle;
-    
+
     PROCEDURE start_daily_puzzle IS
     BEGIN
         RAISE_APPLICATION_ERROR(-50000, 'Функция start_daily_puzzle еще не реализована.');
     END start_daily_puzzle;
-    
+
     PROCEDURE print_puzzle_board IS
     BEGIN
         RAISE_APPLICATION_ERROR(-50000, 'Функция print_puzzle_board еще не реализована.');
     END print_puzzle_board;
-    
+
     PROCEDURE quit_puzzle_attempt IS
     BEGIN
         RAISE_APPLICATION_ERROR(-50000, 'Функция quit_puzzle_attempt еще не реализована.');
@@ -2058,7 +2103,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     END info;
 
 
-     
+
 --------------------------------------------------------------------------------
 BEGIN -- Package Initialization Block
     FOR r IN 1 .. 8 LOOP
@@ -2075,4 +2120,3 @@ BEGIN -- Package Initialization Block
         END LOOP;
     END LOOP;
 END game_logic;
-/
