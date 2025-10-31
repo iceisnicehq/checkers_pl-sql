@@ -1947,14 +1947,14 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         RAISE_APPLICATION_ERROR(-50000, 'Функция accept_draw еще не реализована.');
     END accept_draw;
     
-    PROCEDURE decline_draw IS
+    PROCEDURE cancel_draw_offer IS
     BEGIN
         -- TODO:
         -- 1. Найти активную игру
         -- 2. Проверить, что draw_offer_status = 'O' и draw_offered_by != v_player_id
         -- 3. UPDATE games SET draw_offer_status = 'D'
-        RAISE_APPLICATION_ERROR(-50000, 'Функция decline_draw еще не реализована.');
-    END decline_draw;
+        RAISE_APPLICATION_ERROR(-50000, 'Функция cancel_draw_offer еще не реализована.');
+    END cancel_draw_offer;
 
     --------------------------------------------------------------------------------
 
@@ -1971,6 +1971,15 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         -- 4. INSERT INTO matches (...)
         RAISE_APPLICATION_ERROR(-50000, 'Функция create_match еще не реализована.');
     END create_match;
+
+    PROCEDURE join_match IS
+    BEGIN
+        -- TODO:
+        -- 1. Найти активный матч игрока
+        -- 2. UPDATE matches SET status = 'C', winner_player_id = opponent_id
+        -- 3. Отменить текущую активную игру (если есть)
+        RAISE_APPLICATION_ERROR(-50000, 'Функция join_match еще не реализована.');
+    END join_match;
 
     PROCEDURE resign_match IS
     BEGIN
