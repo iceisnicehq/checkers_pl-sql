@@ -18,8 +18,19 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         row_num  PLS_INTEGER,
         col_num  PLS_INTEGER
     );
-    TYPE map_notation_to_field IS TABLE OF rec_board_field INDEX BY VARCHAR2(2);
-    g_board_map map_notation_to_field;
+    -- Тип для карты "нотация -> поле"
+    TYPE map_notation_to_field IS TABLE OF rec_board_field INDEX BY VARCHAR2(10); -- Увеличено до 10 (для 'j10')
+    
+    -- Тип для карты "индекс -> поле"
+    TYPE map_idx_to_field IS TABLE OF rec_board_field INDEX BY PLS_INTEGER;
+
+    -- Наши глобальные переменные-кэши
+    g_map_by_notation   map_notation_to_field;
+    g_map_by_idx        map_idx_to_field;
+    
+    -- "Флаг" который говорит нам, карта какого размера сейчас в кэше
+    g_current_map_size  PLS_INTEGER := 0;
+
     -- Эти типы теперь объявлены в спецификации, т.к. используются "публичными" функциями
     -- TYPE r_move_step IS RECORD(...);
     -- TYPE t_move_path IS TABLE OF r_move_step;
@@ -211,19 +222,75 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         END IF;
     END get_initial_position;
 
+    ---------------------------------------------------------------------------------
+    
+    /**
+     * @procedure p_init_board_map
+     * @brief (НОВАЯ) Инициализирует или перестраивает глобальные карты (g_map_by_notation, g_map_by_idx)
+     * для доски заданного размера. Работает как кэш: если карта нужного
+     * размера уже создана, ничего не делает.
+     */
+    PROCEDURE p_init_board_map(p_board_size IN NUMBER) IS
+        v_idx       PLS_INTEGER;
+        v_notation  VARCHAR2(10);
+        v_field_rec rec_board_field;
+    BEGIN
+        -- 1. Проверяем кэш. Если карта нужного размера уже загружена, выходим.
+        IF p_board_size = g_current_map_size THEN
+            RETURN;
+        END IF;
+        
+        -- 2. Очищаем старые карты
+        g_map_by_notation.DELETE;
+        g_map_by_idx.DELETE;
+        
+        -- 3. Генерируем новые карты
+        FOR r IN 1 .. p_board_size LOOP
+            FOR c IN 1 .. p_board_size LOOP
+                v_idx := ((p_board_size - r) * p_board_size) + c;
+                
+                -- Нотация (например, 'a1', 'h8', 'j10')
+                v_notation := CHR(ASCII('a') + c - 1);
+                IF c > 8 THEN -- Для 10x10 (i, j)
+                   v_notation := CHR(ASCII('a') + c - 1);
+                END IF;
+                v_notation := v_notation || r;
+
+                -- Собираем запись
+                v_field_rec.idx        := v_idx;
+                v_field_rec.notation   := v_notation;
+                v_field_rec.row_num    := r;
+                v_field_rec.col_num    := c;
+
+                -- Заполняем ОБЕ карты
+                g_map_by_notation(v_notation) := v_field_rec;
+                g_map_by_idx(v_idx)           := v_field_rec;
+                
+            END LOOP;
+        END LOOP;
+        
+        -- 4. Обновляем "флаг" кэша
+        g_current_map_size := p_board_size;
+        
+    END p_init_board_map;
+
     --------------------------------------------------------------------------------
 
-    FUNCTION idx_to_notation(p_idx IN PLS_INTEGER) RETURN VARCHAR2 IS
-        v_key VARCHAR2(2);
+    FUNCTION idx_to_notation(
+        p_idx IN PLS_INTEGER, 
+        p_board_size IN NUMBER -- <-- НОВЫЙ ПАРАМЕТР
+    ) RETURN VARCHAR2 IS
     BEGIN
-        v_key := g_board_map.FIRST;
-        WHILE v_key IS NOT NULL LOOP
-            IF g_board_map(v_key).idx = p_idx THEN
-                RETURN v_key;
-            END IF;
-            v_key := g_board_map.NEXT(v_key);
-        END LOOP;
-        RETURN NULL;
+        -- 1. Убедиться, что кэш нужного размера загружен
+        p_init_board_map(p_board_size); 
+        
+        -- 2. Мгновенно получить нотацию из кэша по индексу
+        RETURN g_map_by_idx(p_idx).notation;
+        
+    EXCEPTION
+        -- Если индекса нет (например, p_idx = 101), вернуть NULL
+        WHEN NO_DATA_FOUND THEN
+            RETURN NULL;
     END idx_to_notation;
 
     --------------------------------------------------------------------------------
@@ -2077,18 +2144,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
      
 --------------------------------------------------------------------------------
 BEGIN -- Package Initialization Block
-    FOR r IN 1 .. 8 LOOP
-        FOR c IN 1 .. 8 LOOP
-            DECLARE
-                v_idx      PLS_INTEGER := ((8 - r) * 8) + c;
-                v_notation VARCHAR2(2) := CHR(ASCII('a') + c - 1) || r;
-            BEGIN
-                g_board_map(v_notation).idx       := v_idx;
-                g_board_map(v_notation).notation  := v_notation;
-                g_board_map(v_notation).row_num   := r;
-                g_board_map(v_notation).col_num   := c;
-            END;
-        END LOOP;
-    END LOOP;
+    -- Больше нет нужды в статической инициализации.
+    -- Карта будет создаваться "на лету" при первом вызове.
+    NULL;
 END game_logic;
-/
