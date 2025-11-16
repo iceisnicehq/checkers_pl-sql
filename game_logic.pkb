@@ -111,9 +111,9 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         SELECT g.game_id
         INTO v_game_id
         FROM games g
-        WHERE g.status IN ('A', 'O', 'C')
-          AND (g.player_white_id = p_user_id OR g.player_black_id = p_user_id OR g.creator_player_id = p_user_id)
-          AND ROWNUM = 1;
+        WHERE g.status IN ('A', 'O', 'C') -- Активна, Открыта (мной) или Вызов (мной/мне)
+        AND (g.player_white_id = p_user_id OR g.player_black_id = p_user_id)
+        AND ROWNUM = 1;
 
         RETURN v_game_id;
     EXCEPTION
@@ -143,8 +143,8 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     --------------------------------------------------------------------------------
 
     FUNCTION get_initial_position(p_rule_id IN NUMBER) RETURN VARCHAR2 IS
-    v_rule      game_rules%ROWTYPE;
-    v_error_msg VARCHAR2(200); -- Переменная для сообщения об ошибке
+        v_rule      game_rules%ROWTYPE;
+        v_error_msg VARCHAR2(200); -- Переменная для сообщения об ошибке
     BEGIN
         -- Сначала пытаемся найти правило
         BEGIN
@@ -168,8 +168,9 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 RETURN NULL;
         END;
 
-        -- Правило найдено, проверяем, поддерживается ли оно
-        IF v_rule.rule_name = 'Русские шашки 8x8' THEN
+        -- [ИЗМЕНЕНИЕ] Правило найдено, проверяем РАЗМЕР ДОСКИ
+        IF v_rule.board_size = 8 THEN
+            -- 8x8 (Например, Русские шашки)
             RETURN '+b+b+b+b' || -- Row 8
                 'b+b+b+b+' || -- Row 7
                 '+b+b+b+b' || -- Row 6
@@ -177,20 +178,35 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                 '++++++++' || -- Row 4
                 'w+w+w+w+' || -- Row 3
                 '+w+w+w+w' || -- Row 2
-                'w+w+w+w+';  -- Row 1
+                'w+w+w+w+';  -- Row 1 (Всего 64 символа)
+
+        ELSIF v_rule.board_size = 10 THEN
+            -- 10x10 (Например, Международные шашки)
+            RETURN 'b+b+b+b+b' || -- Row 10
+                '+b+b+b+b+b' || -- Row 9
+                'b+b+b+b+b' || -- Row 8
+                '+b+b+b+b+b' || -- Row 7
+                '++++++++++' || -- Row 6
+                '++++++++++' || -- Row 5
+                'w+w+w+w+w' || -- Row 4
+                '+w+w+w+w+w' || -- Row 3
+                'w+w+w+w+w' || -- Row 2
+                '+w+w+w+w+w'; -- Row 1 (Всего 100 символов)
         ELSE
-            v_error_msg := 'Правила игры с ID=' || p_rule_id || ' (Имя: ' || v_rule.rule_name || ') не поддерживаются.';
-            -- 1) Запись в аудит (Требование 1)
+            -- Неподдерживаемый размер
+            v_error_msg := 'Правила игры с ID=' || p_rule_id || ' (Размер: ' || v_rule.board_size || ') не поддерживаются.';
+            
+            -- 1) Запись в аудит
             p_audit_log(
                 p_player_id => NULL,
                 p_game_id   => NULL,
                 p_event_type => v_error_msg
             );
             
-            -- 2) Вывод DBMS_OUTPUT (Требование 2)
+            -- 2) Вывод DBMS_OUTPUT
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             
-            -- 3) Завершение функции (Требование 3)
+            -- 3) Завершение функции
             RETURN NULL;
         END IF;
     END get_initial_position;
