@@ -720,13 +720,15 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
      * This is critical for making alpha-beta pruning effective.
      */
     FUNCTION get_sorted_possible_moves(
-        p_board IN VARCHAR2,
-        p_color IN CHAR
+        p_board   IN VARCHAR2,
+        p_color   IN CHAR,
+        p_rule_id IN NUMBER -- [ИЗМЕНЕНИЕ] Этот параметр КРИТИЧЕСКИ необходим
     ) RETURN t_move_list IS
         v_moves t_move_list;
         v_temp  r_move; -- A temporary record for swapping
     BEGIN
-        v_moves := find_all_player_moves(p_board, p_color, 1); -- Assuming rule_id=1
+        -- [ИЗМЕНЕНИЕ] Вызываем find_all_player_moves с p_rule_id, а не '1'
+        v_moves := find_all_player_moves(p_board, p_color, p_rule_id);
         
         IF v_moves.COUNT < 2 THEN
             RETURN v_moves; -- No need to sort if 0 or 1 move
@@ -741,7 +743,6 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             END IF;
         END LOOP;
         
-        -- << ERROR FIX >>
         -- Sort the collection in PL/SQL using a simple bubble sort
         FOR i IN 1 .. v_moves.COUNT - 1 LOOP
             FOR j IN i + 1 .. v_moves.COUNT LOOP
@@ -767,29 +768,45 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
      * Positive scores favor the AI, negative scores favor the opponent.
      */
     FUNCTION evaluate_board(
-        p_board       IN VARCHAR2,
-        p_ai_color    IN CHAR,
-        p_difficulty  IN NUMBER
+        p_board      IN VARCHAR2,
+        p_ai_color   IN CHAR,
+        p_difficulty IN NUMBER
     ) RETURN NUMBER IS
         v_score         NUMBER := 0;
         v_piece         CHAR(1);
         
-        -- Weights for pieces and positions, as per the Python example
+        -- [ИЗМЕНЕНИЕ] Динамические переменные
+        v_total_squares PLS_INTEGER;
+        v_board_size    PLS_INTEGER;
+        
+        -- Weights for pieces and positions (остаются без изменений)
         c_man_value     CONSTANT NUMBER := 10;
         c_king_value    CONSTANT NUMBER := 50;
-        c_side_val      CONSTANT NUMBER := 20; -- Bonus for being on side columns
-        c_wall_val      CONSTANT NUMBER := 10; -- Bonus for advancing up the board
+        c_side_val      CONSTANT NUMBER := 20; 
+        c_wall_val      CONSTANT NUMBER := 10; 
 
     BEGIN
-        FOR i IN 1..64 LOOP
+        -- [ИЗМЕНЕНИЕ] Определяем размер доски "на лету"
+        v_total_squares := LENGTH(p_board);
+        v_board_size    := SQRT(v_total_squares);
+        
+        -- [ИЗМЕНЕНИЕ] Убеждаемся, что кэш карт (g_map_*) готов
+        p_init_board_map(v_board_size);
+    
+        -- [ИЗМЕНЕНИЕ] Цикл по v_total_squares
+        FOR i IN 1..v_total_squares LOOP
             v_piece := SUBSTR(p_board, i, 1);
             IF v_piece != c_empty_field THEN
                 DECLARE
-                    v_piece_value   NUMBER;
-                    v_multiplier    NUMBER;
-                    v_piece_color   CHAR(1);
-                    v_row           PLS_INTEGER := 8 - TRUNC((i - 1) / 8); -- Row (1-8)
-                    v_col           PLS_INTEGER := MOD(i - 1, 8) + 1;     -- Col (1-8)
+                    v_piece_value    NUMBER;
+                    v_multiplier     NUMBER;
+                    v_piece_color    CHAR(1);
+                    
+                    -- [ИЗМЕНЕНИЕ] Получаем v_row и v_col из кэша
+                    v_field_rec      rec_board_field := g_map_by_idx(i);
+                    v_row            PLS_INTEGER     := v_field_rec.row_num;
+                    v_col            PLS_INTEGER     := v_field_rec.col_num;
+                    
                     v_position_bonus NUMBER := 0;
                 BEGIN
                     -- 1. Determine piece ownership and value
@@ -800,21 +817,18 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     -- Add the basic material score
                     v_score := v_score + (v_piece_value * v_multiplier);
 
-                    -- 2. Calculate and add positional bonuses (SIDE_VAL and WALL_VAL)
-                    -- This logic only applies to non-hard difficulty as a simplification for now
-                    -- On hard, the pure search depth is more important.
+                    -- 2. Calculate and add positional bonuses
                     IF p_difficulty < 2 THEN
-                        -- SIDE_VAL: Bonus for pieces on the 'a' or 'h' columns
-                        IF v_col = 1 OR v_col = 8 THEN
+                        -- [ИЗМЕНЕНИЕ] Бонус за борт (1 или 8 -> 1 или v_board_size)
+                        IF v_col = 1 OR v_col = v_board_size THEN
                             v_position_bonus := v_position_bonus + c_side_val;
                         END IF;
 
-                        -- WALL_VAL: Linear bonus for how far a piece has advanced.
-                        -- A piece on the back rank gets a small bonus, a piece about to be promoted gets the max bonus.
+                        -- [ИЗМЕНЕНИЕ] Бонус за продвижение
                         IF v_piece_color = 'W' THEN
-                           v_position_bonus := v_position_bonus + ( (v_row / 8) * c_wall_val );
+                           v_position_bonus := v_position_bonus + ( (v_row / v_board_size) * c_wall_val );
                         ELSE -- Piece is Black
-                           v_position_bonus := v_position_bonus + ( ((9 - v_row) / 8) * c_wall_val );
+                           v_position_bonus := v_position_bonus + ( (( (v_board_size + 1) - v_row) / v_board_size) * c_wall_val );
                         END IF;
                     END IF;
                     
@@ -825,22 +839,21 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         
         -- Check for terminal win/loss state
         DECLARE
-            v_ai_pieces     PLS_INTEGER := 0;
-            v_opp_pieces    PLS_INTEGER := 0;
-            v_opp_color     CHAR(1) := CASE p_ai_color WHEN 'W' THEN 'B' ELSE 'W' END;
+            v_ai_pieces    PLS_INTEGER := 0;
+            v_opp_pieces   PLS_INTEGER := 0;
         BEGIN
-            FOR k IN 1..64 LOOP
-                 IF SUBSTR(p_board, k, 1) != c_empty_field THEN
+            -- [ИЗМЕНЕНИЕ] Цикл по v_total_squares
+            FOR k IN 1..v_total_squares LOOP
+                IF SUBSTR(p_board, k, 1) != c_empty_field THEN
                     IF (CASE WHEN SUBSTR(p_board, k, 1) IN ('w', 'W') THEN 'W' ELSE 'B' END) = p_ai_color THEN
                         v_ai_pieces := 1;
                     ELSE
                         v_opp_pieces := 1;
                     END IF;
-                 END IF;
-                 -- Exit early if we've found pieces for both sides
-                 IF v_ai_pieces > 0 AND v_opp_pieces > 0 THEN
+                END IF;
+                IF v_ai_pieces > 0 AND v_opp_pieces > 0 THEN
                     EXIT;
-                 END IF;
+                END IF;
             END LOOP;
 
             IF v_ai_pieces > 0 AND v_opp_pieces = 0 THEN
@@ -853,6 +866,8 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         RETURN v_score;
     END evaluate_board;
 
+    ---------------------------------------------------------------------------------
+
     /**
      * @function apply_move_to_board
      * @brief Simulates a move and returns the new board state as a string.
@@ -863,24 +878,38 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         p_move  IN r_move,
         p_color IN CHAR
     ) RETURN VARCHAR2 IS
-        v_new_board     VARCHAR2(100) := p_board;
-        v_moving_piece  CHAR(1) := SUBSTR(v_new_board, p_move.path(1).start_idx, 1);
-        v_start_pos     PLS_INTEGER := p_move.path(1).start_idx;
-        v_end_pos       PLS_INTEGER := p_move.path(p_move.path.LAST).end_idx;
-        v_promoted      BOOLEAN := FALSE;
+        v_new_board    VARCHAR2(200) := p_board; -- [ИЗМЕНЕНИЕ] Увеличен размер
+        v_moving_piece CHAR(1) := SUBSTR(v_new_board, p_move.path(1).start_idx, 1);
+        v_start_pos    PLS_INTEGER := p_move.path(1).start_idx;
+        v_end_pos      PLS_INTEGER := p_move.path(p_move.path.LAST).end_idx;
+        v_promoted     BOOLEAN := FALSE;
+        
+        -- [ИЗМЕНЕНИЕ] Динамические переменные
+        v_total_squares PLS_INTEGER;
+        v_board_size    PLS_INTEGER;
     BEGIN
+        -- [ИЗМЕНЕНИЕ] Определяем размер доски и инициализируем кэш
+        v_total_squares := LENGTH(p_board);
+        v_board_size    := SQRT(v_total_squares);
+        p_init_board_map(v_board_size);
+    
+        -- Логика очистки старой позиции (без изменений)
         v_new_board := SUBSTR(v_new_board, 1, v_start_pos - 1) || c_empty_field || SUBSTR(v_new_board, v_start_pos + 1);
 
+        -- Логика очистки срубленных шашек (без изменений)
         IF p_move.is_capture = 'Y' THEN
             FOR i IN 1..p_move.path.COUNT LOOP
                 v_new_board := SUBSTR(v_new_board, 1, p_move.path(i).captured_idx - 1) || c_empty_field || SUBSTR(v_new_board, p_move.path(i).captured_idx + 1);
             END LOOP;
         END IF;
 
+        -- Логика превращения в "дамку"
         IF v_moving_piece IN (c_white_man, c_black_man) THEN
             DECLARE
-                v_end_row PLS_INTEGER := g_board_map(idx_to_notation(v_end_pos)).row_num;
-                v_is_promotion BOOLEAN := (p_color = 'W' AND v_end_row = 8) OR (p_color = 'B' AND v_end_row = 1);
+                -- [ИЗМЕНЕНИЕ] Получаем v_end_row из нового кэша
+                v_end_row PLS_INTEGER := g_map_by_idx(v_end_pos).row_num;
+                -- [ИЗМЕНЕНИЕ] v_end_row = 8 заменено на v_end_row = v_board_size
+                v_is_promotion BOOLEAN := (p_color = 'W' AND v_end_row = v_board_size) OR (p_color = 'B' AND v_end_row = 1);
             BEGIN
                 IF v_is_promotion THEN
                     v_moving_piece := CASE p_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
@@ -888,8 +917,15 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             END;
         END IF;
 
+        -- Логика установки новой позиции (без изменений)
         v_new_board := SUBSTR(v_new_board, 1, v_end_pos - 1) || v_moving_piece || SUBSTR(v_new_board, v_end_pos + 1);
         RETURN v_new_board;
+        
+    EXCEPTION
+        -- [ИЗМЕНЕНИЕ] Добавлен обработчик ошибок на случай сбоя кэша
+        WHEN OTHERS THEN
+            p_audit_log(NULL, NULL, 'apply_move_to_board: Ошибка ' || SQLERRM);
+            RETURN p_board; -- Возвращаем исходную доску в случае сбоя
     END apply_move_to_board;
 
 
