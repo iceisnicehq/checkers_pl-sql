@@ -129,11 +129,10 @@ CREATE OR REPLACE PACKAGE game_logic AS
 
     PROCEDURE watch_game_replay( -- <-- ИЗМЕНЕНИЕ: Переименовано
         p_game_id       IN NUMBER,
-        p_username      IN VARCHAR2 DEFAULT NULL,
         p_moves_to_show IN NUMBER DEFAULT 1
     ); 
 
-    PROCEDURE stop_watching; 
+    PROCEDURE stop_spectating; 
 
     -- =========================================================================
     -- 6. БЫВШИЕ "ПРИВАТНЫЕ" (ТЕПЕРЬ ПУБЛИЧНЫЕ) ФУНКЦИИ
