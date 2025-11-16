@@ -304,12 +304,52 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         p_visited_path IN t_move_path DEFAULT t_move_path()
     ) RETURN t_move_list IS
         v_results         t_move_list := t_move_list();
-        v_leaf_paths      t_move_list := t_move_list(); -- << NEW: Temporary storage for paths that end here
-        v_jump_directions SYS.ODCINUMBERLIST;
+        v_leaf_paths      t_move_list := t_move_list();
         v_opponent_man    CHAR(1);
         v_opponent_king   CHAR(1);
         v_decoded_board   VARCHAR2(100) := decode_board(p_board);
+        
+        -- [ИЗМЕНЕНИЕ] Динамические переменные
+        v_rule            game_rules%ROWTYPE;
+        v_board_size      PLS_INTEGER;
+        v_total_squares   PLS_INTEGER;
+        v_promotion_row   PLS_INTEGER;
+        v_max_king_range  PLS_INTEGER;
+        v_jump_directions SYS.ODCINUMBERLIST;
+        v_start_field     rec_board_field;
+        
     BEGIN
+        -- [ИЗМЕНЕНИЕ] Блок настройки на основе p_rule_id
+        BEGIN
+            SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
+            v_board_size      := v_rule.board_size;
+            v_total_squares   := v_board_size * v_board_size;
+            v_promotion_row   := v_board_size; -- 8 для 8x8, 10 для 10x10
+            v_max_king_range  := v_board_size - 1; -- 7 для 8x8, 9 для 10x10
+            
+            -- Инициализируем кэш карт (g_map_by_idx, g_map_by_notation)
+            p_init_board_map(v_board_size);
+            
+            -- Получаем стартовое поле из нового кэша
+            v_start_field := g_map_by_idx(p_start_idx);
+
+            -- Устанавливаем смещения для прыжков
+            IF v_board_size = 8 THEN
+                v_jump_directions := SYS.ODCINUMBERLIST(-18, -14, 14, 18);
+            ELSE -- 10 (или любое другое, но мы пока поддерживаем 10)
+                v_jump_directions := SYS.ODCINUMBERLIST(-22, -18, 18, 22);
+            END IF;
+            
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                p_audit_log(NULL, NULL, 'find_capture_paths: Rule_id ' || p_rule_id || ' не найден.');
+                RETURN v_results; -- Возвращаем пустой список
+            WHEN OTHERS THEN
+                p_audit_log(NULL, NULL, 'find_capture_paths: Ошибка инициализации карты для idx ' || p_start_idx);
+                RETURN v_results; -- Возвращаем пустой список
+        END;
+        
+        -- Определение оппонента (без изменений)
         IF p_player_color = 'W' THEN
             v_opponent_man  := c_black_man;
             v_opponent_king := c_black_king;
@@ -318,21 +358,23 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             v_opponent_king := c_white_king;
         END IF;
 
-        v_jump_directions := SYS.ODCINUMBERLIST(-18, -14, 14, 18);
-
+        -- Основной цикл (без изменений)
         FOR i IN 1 .. v_jump_directions.COUNT LOOP
             DECLARE
                 v_jump        PLS_INTEGER := v_jump_directions(i);
                 v_land_idx    PLS_INTEGER;
                 v_capture_idx PLS_INTEGER;
-                v_start_field rec_board_field := g_board_map(idx_to_notation(p_start_idx));
                 v_is_visited  BOOLEAN := FALSE;
+                -- v_start_field уже получена выше
             BEGIN
                 IF p_is_king = 'N' THEN
                     v_land_idx    := p_start_idx + v_jump;
-                    v_capture_idx := p_start_idx + v_jump / 2;
+                    v_capture_idx := p_start_idx + (v_jump / 2);
 
-                    IF v_land_idx BETWEEN 1 AND 64 AND ABS(v_start_field.col_num - g_board_map(idx_to_notation(v_land_idx)).col_num) = 2 THEN
+                    -- [ИЗМЕНЕНИЕ] Используем v_total_squares и новый кэш g_map_by_idx
+                    IF v_land_idx BETWEEN 1 AND v_total_squares AND g_map_by_idx.EXISTS(v_land_idx)
+                       AND ABS(v_start_field.col_num - g_map_by_idx(v_land_idx).col_num) = 2 
+                    THEN
                         IF SUBSTR(v_decoded_board, v_land_idx, 1) = c_empty_field AND SUBSTR(v_decoded_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king) THEN
                             FOR k IN 1 .. p_visited_path.COUNT LOOP
                                 IF p_visited_path(k).captured_idx = v_capture_idx THEN
@@ -343,13 +385,15 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
 
                             IF NOT v_is_visited THEN
                                 DECLARE
-                                    v_becomes_king          CHAR(1) := 'N';
-                                    v_land_row              PLS_INTEGER := g_board_map(idx_to_notation(v_land_idx)).row_num;
-                                    v_is_promotion_square   BOOLEAN := (p_player_color = 'W' AND v_land_row = 8) OR (p_player_color = 'B' AND v_land_row = 1);
-                                    v_step                  r_move_step;
-                                    v_new_path              t_move_path := p_visited_path;
-                                    v_sub_paths             t_move_list;
-                                    v_move                  r_move;
+                                    v_becomes_king      CHAR(1) := 'N';
+                                    -- [ИЗМЕНЕНИЕ] Используем новый кэш g_map_by_idx
+                                    v_land_row          PLS_INTEGER := g_map_by_idx(v_land_idx).row_num; 
+                                    -- [ИЗМЕНЕНИЕ] Используем v_promotion_row
+                                    v_is_promotion_square BOOLEAN := (p_player_color = 'W' AND v_land_row = v_promotion_row) OR (p_player_color = 'B' AND v_land_row = 1);
+                                    v_step              r_move_step;
+                                    v_new_path          t_move_path := p_visited_path;
+                                    v_sub_paths         t_move_list;
+                                    v_move              r_move;
                                 BEGIN
                                     v_step.start_idx    := p_start_idx;
                                     v_step.end_idx      := v_land_idx;
@@ -361,18 +405,16 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                                         v_becomes_king := 'Y';
                                     END IF;
 
+                                    -- Рекурсивный вызов (без изменений)
                                     v_sub_paths := find_capture_paths(v_land_idx, v_decoded_board, p_player_color, v_becomes_king, p_rule_id, v_new_path);
 
-                                    -- << MODIFIED LOGIC >>
                                     IF v_sub_paths.COUNT = 0 THEN
-                                        -- This is a potential leaf path. Don't add to final results yet.
                                         v_move.path           := v_new_path;
-                                        v_move.is_capture    := 'Y';
-                                        v_move.capture_count := v_new_path.COUNT;
+                                        v_move.is_capture     := 'Y';
+                                        v_move.capture_count  := v_new_path.COUNT;
                                         v_leaf_paths.EXTEND;
                                         v_leaf_paths(v_leaf_paths.LAST) := v_move;
                                     ELSE
-                                        -- A longer path was found. These are guaranteed to be valid. Add them.
                                         FOR j IN 1 .. v_sub_paths.COUNT LOOP
                                             v_results.EXTEND;
                                             v_results(v_results.LAST) := v_sub_paths(j);
@@ -383,10 +425,14 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                         END IF;
                     END IF;
                 ELSE -- King logic
-                    FOR k IN 1 .. 7 LOOP
+                    -- [ИЗМЕНЕНИЕ] Используем v_max_king_range
+                    FOR k IN 1 .. v_max_king_range LOOP 
                         v_capture_idx := p_start_idx + (v_jump / 2 * k);
 
-                        IF v_capture_idx NOT BETWEEN 1 AND 64 OR ABS(v_start_field.col_num - g_board_map(idx_to_notation(v_capture_idx)).col_num) != k THEN
+                        -- [ИЗМЕНЕНИЕ] Используем v_total_squares и новый кэш g_map_by_idx
+                        IF v_capture_idx NOT BETWEEN 1 AND v_total_squares OR NOT g_map_by_idx.EXISTS(v_capture_idx)
+                           OR ABS(v_start_field.col_num - g_map_by_idx(v_capture_idx).col_num) != k 
+                        THEN
                             EXIT;
                         END IF;
 
@@ -399,13 +445,20 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                             END LOOP;
                             IF v_is_visited THEN EXIT; END IF;
 
-                            FOR l IN (k + 1) .. 8 LOOP
+                            -- [ИЗМЕНЕНИЕ] Используем v_board_size
+                            FOR l IN (k + 1) .. v_board_size LOOP 
                                 v_land_idx := p_start_idx + (v_jump / 2 * l);
-                                IF v_land_idx NOT BETWEEN 1 AND 64 OR ABS(v_start_field.col_num - g_board_map(idx_to_notation(v_land_idx)).col_num) != l THEN
+                                
+                                -- [ИЗМЕНЕНИЕ] Используем v_total_squares и новый кэш g_map_by_idx
+                                IF v_land_idx NOT BETWEEN 1 AND v_total_squares OR NOT g_map_by_idx.EXISTS(v_land_idx)
+                                   OR ABS(v_start_field.col_num - g_map_by_idx(v_land_idx).col_num) != l 
+                                THEN
                                     EXIT;
                                 END IF;
+                                
                                 DECLARE
-                                    v_land_field rec_board_field := g_board_map(idx_to_notation(v_land_idx));
+                                    -- [ИЗМЕНЕНИЕ] Используем новый кэш g_map_by_idx
+                                    v_land_field rec_board_field := g_map_by_idx(v_land_idx);
                                 BEGIN
                                     IF SUBSTR(v_decoded_board, v_land_idx, 1) = c_empty_field AND MOD(v_land_field.row_num + v_land_field.col_num, 2) = 0 THEN
                                         DECLARE
@@ -422,16 +475,13 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                                             
                                             v_sub_paths := find_capture_paths(v_land_idx, v_decoded_board, p_player_color, 'Y', p_rule_id, v_new_path);
 
-                                            -- << MODIFIED LOGIC >>
                                             IF v_sub_paths.COUNT = 0 THEN
-                                                -- This is a potential leaf path. Don't add to final results yet.
                                                 v_move.path           := v_new_path;
-                                                v_move.is_capture    := 'Y';
-                                                v_move.capture_count := v_new_path.COUNT;
+                                                v_move.is_capture     := 'Y';
+                                                v_move.capture_count  := v_new_path.COUNT;
                                                 v_leaf_paths.EXTEND;
                                                 v_leaf_paths(v_leaf_paths.LAST) := v_move;
                                             ELSE
-                                                -- A longer path was found. These are guaranteed to be valid. Add them.
                                                 FOR j IN 1 .. v_sub_paths.COUNT LOOP
                                                     v_results.EXTEND;
                                                     v_results(v_results.LAST) := v_sub_paths(j);
@@ -450,9 +500,7 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             END;
         END LOOP;
         
-        -- << FINAL DECISION LOGIC >>
-        -- If we found any multi-step paths, they take precedence and we discard all single-step paths.
-        -- If not, then the single-step (leaf) paths are the only valid maximal paths.
+        -- Логика выбора максимального пути (без изменений)
         IF v_results.COUNT > 0 THEN
             RETURN v_results;
         ELSE
@@ -474,8 +522,46 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
         v_player_man    CHAR(1);
         v_player_king   CHAR(1);
         v_max_captures  PLS_INTEGER := 0;
-        v_decoded_board VARCHAR2(100) := decode_board(p_board); -- ДЕКОДИРОВАНИЕ
+        v_decoded_board VARCHAR2(200) := decode_board(p_board); -- Увеличено для 10x10
+        
+        -- [ИЗМЕНЕНИЕ] Динамические переменные
+        v_rule            game_rules%ROWTYPE;
+        v_board_size      PLS_INTEGER;
+        v_total_squares   PLS_INTEGER;
+        v_simple_move_w   SYS.ODCINUMBERLIST;
+        v_simple_move_b   SYS.ODCINUMBERLIST;
+        v_simple_move_all SYS.ODCINUMBERLIST;
+        v_max_king_range  PLS_INTEGER;
+
     BEGIN
+        -- [ИЗМЕНЕНИЕ] Блок настройки на основе p_rule_id
+        BEGIN
+            SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
+            v_board_size      := v_rule.board_size;
+            v_total_squares   := v_board_size * v_board_size;
+            v_max_king_range  := v_board_size - 1; -- 7 для 8x8, 9 для 10x10
+            
+            -- Инициализируем кэш карт (g_map_by_idx, g_map_by_notation)
+            p_init_board_map(v_board_size);
+            
+            -- Устанавливаем смещения для ходов
+            IF v_board_size = 8 THEN
+                v_simple_move_w   := SYS.ODCINUMBERLIST(-9, -7);
+                v_simple_move_b   := SYS.ODCINUMBERLIST(7, 9);
+                v_simple_move_all := SYS.ODCINUMBERLIST(-9, -7, 7, 9);
+            ELSE -- 10
+                v_simple_move_w   := SYS.ODCINUMBERLIST(-11, -9);
+                v_simple_move_b   := SYS.ODCINUMBERLIST(9, 11);
+                v_simple_move_all := SYS.ODCINUMBERLIST(-11, -9, 9, 11);
+            END IF;
+            
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                p_audit_log(NULL, NULL, 'find_all_player_moves: Rule_id ' || p_rule_id || ' не найден.');
+                RETURN v_all_moves; -- Возвращаем пустой список
+        END;
+
+        -- Определение фигур (без изменений)
         IF p_player_color = 'W' THEN
             v_player_man  := c_white_man;
             v_player_king := c_white_king;
@@ -484,7 +570,9 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             v_player_king := c_black_king;
         END IF;
         
-        FOR i IN 1 .. 64 LOOP
+        -- === 1. ПОИСК ВЗЯТИЙ ===
+        -- [ИЗМЕНЕНИЕ] Цикл по v_total_squares
+        FOR i IN 1 .. v_total_squares LOOP
             DECLARE
                 v_piece   CHAR(1) := SUBSTR(v_decoded_board, i, 1);
                 v_paths   t_move_list;
@@ -492,7 +580,9 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             BEGIN
                 IF v_piece IN (v_player_man, v_player_king) THEN
                     v_is_king := CASE WHEN v_piece IN (c_white_king, c_black_king) THEN 'Y' ELSE 'N' END;
+                    -- Вызов find_capture_paths (без изменений)
                     v_paths   := find_capture_paths(i, v_decoded_board, p_player_color, v_is_king, p_rule_id);
+                    
                     IF v_paths.COUNT > 0 THEN
                         FOR j IN 1 .. v_paths.COUNT LOOP
                             v_capture_moves.EXTEND;
@@ -506,10 +596,14 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             END;
         END LOOP;
 
+        -- === 2. ФИЛЬТРАЦИЯ ВЗЯТИЙ (Правило "Максимального взятия") ===
         IF v_capture_moves.COUNT > 0 THEN
-            IF p_rule_id = 1 THEN
+            -- [ИЗМЕНЕНИЕ] Логика стала более явной
+            -- Для Русских шашек (id=1) ОБЯЗАТЕЛЬНО взятие, но ЛЮБОЕ
+            IF p_rule_id = 1 THEN 
                 RETURN v_capture_moves;
             ELSE 
+            -- Для Международных (id=2) ОБЯЗАТЕЛЬНО МАКСИМАЛЬНОЕ взятие
                 FOR i IN 1 .. v_capture_moves.COUNT LOOP
                     IF v_capture_moves(i).capture_count = v_max_captures THEN
                         v_all_moves.EXTEND;
@@ -520,27 +614,35 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
             END IF;
         END IF;
 
-        FOR i IN 1 .. 64 LOOP
+        -- === 3. ПОИСК "ТИХИХ" ХОДОВ (Если взятий не найдено) ===
+        -- [ИЗМЕНЕНИЕ] Цикл по v_total_squares
+        FOR i IN 1 .. v_total_squares LOOP
             DECLARE
-                v_piece     CHAR(1) := SUBSTR(v_decoded_board, i, 1);
-                v_start_not VARCHAR2(2) := idx_to_notation(i);
+                v_piece       CHAR(1) := SUBSTR(v_decoded_board, i, 1);
+                v_start_field rec_board_field := g_map_by_idx(i); -- Используем кэш
             BEGIN
                 IF v_piece = v_player_man THEN
                     DECLARE
                         v_directions SYS.ODCINUMBERLIST;
                     BEGIN
+                        -- [ИЗМЕНЕНИЕ] Используем динамические смещения
                         IF p_player_color = 'W' THEN
-                            v_directions := SYS.ODCINUMBERLIST(-9, -7);
+                            v_directions := v_simple_move_w;
                         ELSE
-                            v_directions := SYS.ODCINUMBERLIST(7, 9);
+                            v_directions := v_simple_move_b;
                         END IF;
+                        
                         FOR d IN 1 .. v_directions.COUNT LOOP
                             DECLARE
-                                v_end_idx PLS_INTEGER := i + v_directions(d);
-                                v_end_not VARCHAR2(2) := idx_to_notation(v_end_idx);
+                                v_end_idx   PLS_INTEGER := i + v_directions(d);
+                                v_end_field rec_board_field;
                             BEGIN
-                                IF v_end_not IS NOT NULL AND SUBSTR(v_decoded_board, v_end_idx, 1) = c_empty_field THEN
-                                    IF ABS(g_board_map(v_start_not).col_num - g_board_map(v_end_not).col_num) = 1 THEN
+                                -- [ИЗМЕНЕНИЕ] Проверка через кэш
+                                IF g_map_by_idx.EXISTS(v_end_idx) AND SUBSTR(v_decoded_board, v_end_idx, 1) = c_empty_field THEN
+                                    v_end_field := g_map_by_idx(v_end_idx);
+                                    
+                                    -- Проверка геометрии (чтобы не перепрыгнуть край)
+                                    IF ABS(v_start_field.col_num - v_end_field.col_num) = 1 THEN
                                         DECLARE
                                             v_move r_move;
                                             v_step r_move_step;
@@ -561,18 +663,25 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
                     END;
                 ELSIF v_piece = v_player_king THEN
                     DECLARE
-                        v_directions SYS.ODCINUMBERLIST := SYS.ODCINUMBERLIST(-9, -7, 7, 9);
+                        -- [ИЗМЕНЕНИЕ] Используем v_simple_move_all
+                        v_directions SYS.ODCINUMBERLIST := v_simple_move_all;
                     BEGIN
                         FOR d IN 1 .. v_directions.COUNT LOOP
-                            FOR k IN 1 .. 7 LOOP
+                            -- [ИЗМЕНЕНИЕ] Используем v_max_king_range
+                            FOR k IN 1 .. v_max_king_range LOOP 
                                 DECLARE
-                                    v_end_idx PLS_INTEGER := i + (v_directions(d) * k);
-                                    v_end_not VARCHAR2(2) := idx_to_notation(v_end_idx);
+                                    v_end_idx   PLS_INTEGER := i + (v_directions(d) * k);
+                                    v_end_field rec_board_field;
                                 BEGIN
-                                    IF v_end_not IS NULL THEN
+                                    -- [ИЗМЕНЕНИЕ] Проверка выхода за доску через кэш
+                                    IF NOT g_map_by_idx.EXISTS(v_end_idx) THEN
                                         EXIT;
                                     END IF;
-                                    IF k > 1 AND ABS(g_board_map(idx_to_notation(i + (v_directions(d) * (k - 1)))).col_num - g_board_map(v_end_not).col_num) != 1 THEN
+                                    
+                                    v_end_field := g_map_by_idx(v_end_idx);
+                                    
+                                    -- [ИЗМЕНЕНИЕ] Проверка геометрии через кэш
+                                    IF k > 1 AND ABS(g_map_by_idx(i + (v_directions(d) * (k - 1))).col_num - v_end_field.col_num) != 1 THEN
                                         EXIT;
                                     END IF;
 
