@@ -102,7 +102,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
     -- 4. РЕЖИМ ЗАДАЧ (Puzzles)
     -- =========================================================================
     PROCEDURE create_puzzle(
-        p_board_position   IN VARCHAR2,
+        p_board_position   IN CLOB,
         p_turn_to_move     IN CHAR,
         p_moves_to_solve   IN NUMBER DEFAULT NULL,
         p_difficulty_level IN NUMBER DEFAULT 1
