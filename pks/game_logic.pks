@@ -116,8 +116,6 @@ CREATE OR REPLACE PACKAGE game_logic AS
     
     PROCEDURE show_daily_puzzle; 
     
-    PROCEDURE start_daily_puzzle;
-    
     -- =========================================================================
     -- 5. ПРОСМОТР И СТАТУС (Режим Зрителя и Реплеи)
     -- =========================================================================
@@ -137,6 +135,10 @@ CREATE OR REPLACE PACKAGE game_logic AS
     -- =========================================================================
     -- 6. БЫВШИЕ "ПРИВАТНЫЕ" (ТЕПЕРЬ ПУБЛИЧНЫЕ) ФУНКЦИИ
     -- =========================================================================
+    PROCEDURE p_init_board_map(
+        p_board_size IN NUMBER
+    );
+
     PROCEDURE p_audit_log(
         p_player_id  IN players.player_id%TYPE,
         p_game_id    IN games.game_id%TYPE,

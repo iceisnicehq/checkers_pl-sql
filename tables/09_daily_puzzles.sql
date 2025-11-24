@@ -7,3 +7,54 @@ CREATE TABLE daily_puzzles (
     CONSTRAINT fk_daily_pzzles_puzzle FOREIGN KEY (puzzle_id) REFERENCES puzzles(puzzle_id)
 );
 COMMENT ON TABLE daily_puzzles IS 'Связывает задачу из таблицы puzzles с конкретной датой.';
+
+
+
+-- Запускаем этот блок один раз, чтобы гарантированно создать задачу на СЕГОДНЯ
+DECLARE
+    v_puzzle_id puzzles.puzzle_id%TYPE;
+    v_today     DATE := TRUNC(SYSDATE);
+    v_count     PLS_INTEGER;
+BEGIN
+    -- 1. Проверяем, есть ли задача на сегодня
+    SELECT COUNT(*) INTO v_count FROM daily_puzzles WHERE puzzle_date = v_today;
+
+    IF v_count = 0 THEN
+        BEGIN
+            -- ПОПЫТКА 1: Строгий отбор (не повторять 30 дней)
+            SELECT puzzle_id INTO v_puzzle_id
+            FROM (
+                SELECT p.puzzle_id
+                FROM puzzles p
+                LEFT JOIN daily_puzzles dp ON p.puzzle_id = dp.puzzle_id AND dp.puzzle_date >= (v_today - 30)
+                WHERE p.created_by_player_id IS NULL -- Только серверные
+                AND dp.puzzle_id IS NULL             -- Не использовался недавно
+                ORDER BY DBMS_RANDOM.VALUE
+            ) WHERE ROWNUM = 1;
+            
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                -- ПОПЫТКА 2 (Fallback): Если свежих нет, берем ЛЮБОЙ случайный серверный пазл
+                BEGIN
+                    SELECT puzzle_id INTO v_puzzle_id
+                    FROM (
+                        SELECT puzzle_id FROM puzzles 
+                        WHERE created_by_player_id IS NULL
+                        ORDER BY DBMS_RANDOM.VALUE
+                    ) WHERE ROWNUM = 1;
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        -- Если пазлов вообще нет в базе, ничего не поделаешь
+                        DBMS_OUTPUT.PUT_LINE('ВНИМАНИЕ: В таблице PUZZLES нет серверных задач!');
+                        RETURN;
+                END;
+        END;
+
+        -- Вставляем найденный ID
+        INSERT INTO daily_puzzles (puzzle_date, puzzle_id) VALUES (v_today, v_puzzle_id);
+        COMMIT;
+        DBMS_OUTPUT.PUT_LINE('Daily Puzzle на сегодня успешно создан (ID: ' || v_puzzle_id || ').');
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('Daily Puzzle на сегодня уже существует.');
+    END IF;
+END;

@@ -14,7 +14,22 @@ PROCEDURE cancel_game IS
     v_error_msg VARCHAR2(255);
 BEGIN
     v_player_id := get_or_create_player_id(user);
-    UPDATE players SET last_activity_at = SYSTIMESTAMP WHERE player_id = v_player_id;
+    
+    -- Проверка на зрителя
+    DECLARE
+        v_spectating_game_id NUMBER;
+    BEGIN
+        v_spectating_game_id := get_active_spectator_session(v_player_id);
+        IF v_spectating_game_id IS NOT NULL THEN
+            v_error_msg := 'Вы находитесь в режиме просмотра (Игра ID: ' || v_spectating_game_id || '). Нельзя отменить игру.';
+            p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            DBMS_OUTPUT.PUT_LINE('--[ Вызовите game_logic.stop_watching; чтобы выйти из режима просмотра ]--');
+            RETURN;
+        END IF;
+    END;
+
+    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
     v_game_id := get_active_game(v_player_id);
     
     IF v_game_id IS NULL THEN
@@ -33,7 +48,14 @@ BEGIN
         ROLLBACK;
         RETURN;
     END IF;
-           
+    
+    -- Если это часть матча, отменяем и матч
+    IF v_game.match_id IS NOT NULL THEN
+        DELETE FROM matches WHERE match_id = v_game.match_id;
+        p_audit_log(v_player_id, v_game_id, 'MATCH_CANCEL');
+        DBMS_OUTPUT.PUT_LINE('Связанный вызов на матч (ID: ' || v_game.match_id || ') также отменен.');
+    END IF;
+            
     DELETE FROM games WHERE game_id = v_game_id;
     p_audit_log(v_player_id, v_game_id, 'CANCEL_GAME');
     DBMS_OUTPUT.PUT_LINE('Ваш вызов/открытая игра (ID: ' || v_game_id || ') был(а) отменен(а).');
@@ -41,7 +63,7 @@ BEGIN
 EXCEPTION
     WHEN OTHERS THEN
         v_error_msg := 'Неожиданная ошибка при отмене игры: ' || SQLERRM;
-        p_audit_log(v_player_id, v_game_id, SUBSTR(v_error_msg, 1, 100));
+        p_audit_log(v_player_id, v_game_id, SUBSTR(v_error_msg, 1, 255));
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         ROLLBACK;
 END cancel_game;

@@ -31,8 +31,8 @@ PROCEDURE create_game(
     v_white_player_id     players.player_id%TYPE;
     v_black_player_id     players.player_id%TYPE;
     v_creator_color       CHAR(1);
-    v_initial_position    games.board_position%TYPE;
-    v_encoded_position    games.board_position%TYPE;
+    v_initial_position    VARCHAR2(128); -- Было games.board_position%TYPE, явно задаем 128
+    v_encoded_position    VARCHAR2(128);
     v_status              games.status%TYPE;
     v_ai_move             VARCHAR2(50);
     v_ai_msg              VARCHAR2(1000);
@@ -62,6 +62,7 @@ BEGIN
         RETURN;
     END IF;
 
+    -- 1. Режим ЗАДАЧИ (Puzzle)
     IF p_puzzle_id IS NOT NULL THEN
         DECLARE
             v_puzzle puzzles%ROWTYPE;
@@ -71,6 +72,7 @@ BEGIN
             v_encoded_position := encode_board(v_initial_position);
             v_status := 'A';
             
+            -- В задаче игрок всегда играет за сторону, чей ход (turn_to_move)
             IF v_puzzle.turn_to_move = 'W' THEN
                 v_white_player_id := v_current_player_id;
                 v_black_player_id := NULL;
@@ -93,7 +95,7 @@ BEGIN
                 v_creator_color,
                 v_status, v_puzzle.turn_to_move,
                 v_encoded_position,
-                p_puzzle_id, p_daily, 'p'
+                p_puzzle_id, p_daily, 'p' -- 'p' = pending
             )
             RETURNING game_id INTO v_game_id;
             
@@ -108,6 +110,7 @@ BEGIN
                 RETURN;
         END;
         
+    -- 2. Режим ИГРЫ (PvP / PvE)
     ELSIF p_puzzle_id IS NULL THEN
     
         DECLARE
@@ -127,8 +130,10 @@ BEGIN
         END IF;
         v_encoded_position := encode_board(v_initial_position);
 
+        -- 2.1. PvE (Игра с ИИ)
         IF p_ai_difficulty IS NOT NULL THEN
             v_status := 'A';
+            -- Если игрок выбрал белых, слот черных NULL (для ИИ), и наоборот
             IF v_white_player_id IS NULL THEN v_white_player_id := NULL; ELSE v_black_player_id := NULL; END IF;
 
             INSERT INTO games (
@@ -146,6 +151,7 @@ BEGIN
             v_status_message := 'Игра против ИИ создана (ID: ' || v_game_id || '). Вы играете за ' || CASE WHEN v_white_player_id = v_current_player_id THEN 'белых (W)' ELSE 'черных (B)' END || '.';
             p_audit_log(v_current_player_id, v_game_id, 'CREATE_PVE_GAME');
 
+            -- Если ИИ играет за белых (игрок выбрал черных или так выпало), ИИ делает первый ход
             IF v_white_player_id IS NULL THEN
                 v_ai_move := get_ai_move(v_initial_position, 'W', p_rule_id, p_ai_difficulty);
                 IF v_ai_move IS NOT NULL THEN
@@ -154,6 +160,7 @@ BEGIN
                 END IF;
             END IF;
         
+        -- 2.2. PvP (Игра с человеком)
         ELSIF p_opponent_username IS NOT NULL THEN
             IF v_current_username = UPPER(p_opponent_username) THEN 
                 v_error_msg := 'Нельзя вызвать самого себя.';
@@ -175,7 +182,7 @@ BEGIN
             END;
 
             IF v_white_player_id IS NULL THEN v_white_player_id := v_opponent_player_id; ELSE v_black_player_id := v_opponent_player_id; END IF;
-            v_status := 'C';
+            v_status := 'C'; -- Challenged
 
             INSERT INTO games (
                 creator_player_color, rule_id, player_white_id, player_black_id, status, current_turn, 
@@ -192,6 +199,7 @@ BEGIN
             v_status_message := 'Вызов игроку ' || p_opponent_username || ' брошен. Game ID: ' || v_game_id || '. Ожидайте принятия.';
             p_audit_log(v_current_player_id, v_game_id, 'CREATE_CHALLENGE');
             
+        -- 2.3. Открытая игра (Open Game)
         ELSE
             v_status := 'O';
             INSERT INTO games (
@@ -215,6 +223,7 @@ BEGIN
     COMMIT;
     DBMS_OUTPUT.PUT_LINE(v_status_message);
     
+    -- Если игра активна сразу (PvE / Puzzle), показываем доску
     IF (p_ai_difficulty IS NOT NULL AND v_white_player_id IS NULL) OR (p_puzzle_id IS NOT NULL) THEN
          BEGIN
             print_active_board(

@@ -3,7 +3,6 @@ SELECT
     g.game_id,
     p_white.username AS white_player,
     p_black.username AS black_player,
-    g.last_move_at,
     gr.rule_name
 FROM games g
 JOIN players p_white ON g.player_white_id = p_white.player_id

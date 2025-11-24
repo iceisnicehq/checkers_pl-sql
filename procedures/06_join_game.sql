@@ -8,10 +8,10 @@
 --   - p_audit_log (procedure)
 
 PROCEDURE join_game(p_game_id IN NUMBER) IS
-    v_game           games%ROWTYPE;
-    v_player_id      players.player_id%TYPE;
-    v_active_game_id NUMBER;
-    v_error_msg      VARCHAR2(255);
+    v_game             games%ROWTYPE;
+    v_player_id        players.player_id%TYPE;
+    v_active_game_id   NUMBER;
+    v_error_msg        VARCHAR2(255);
 BEGIN
     v_player_id := get_or_create_player_id(USER);
     UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
@@ -35,6 +35,7 @@ BEGIN
             RETURN;
     END;
 
+    -- Логика для ПРЯМОГО ВЫЗОВА (Challenged)
     IF v_game.status = 'C' THEN
         DECLARE
             v_creator_id players.player_id%TYPE;
@@ -45,6 +46,7 @@ BEGIN
                 v_creator_id := v_game.player_black_id;
             END IF;
             
+            -- Проверка: Игрок должен быть в слоте оппонента и не быть создателем
             IF NOT (v_player_id IN (v_game.player_white_id, v_game.player_black_id) AND v_player_id != v_creator_id) THEN
                 v_error_msg := 'Доступ запрещен. Этот вызов (ID: ' || p_game_id || ') предназначен не вам.';
                 p_audit_log(v_player_id, p_game_id, v_error_msg);
@@ -54,7 +56,9 @@ BEGIN
             END IF;
         END;
         
+    -- Логика для ОТКРЫТОЙ ИГРЫ (Open)
     ELSIF v_game.status = 'O' THEN
+        -- Нельзя присоединиться к своей же игре
         IF v_player_id = v_game.player_white_id OR v_player_id = v_game.player_black_id THEN
             v_error_msg := 'Нельзя присоединиться к собственной открытой игре (ID: ' || p_game_id || ').';
             p_audit_log(v_player_id, p_game_id, v_error_msg);
@@ -70,6 +74,7 @@ BEGIN
         RETURN;
     END IF;
     
+    -- Обновление статуса игры
     IF v_game.status = 'O' THEN
         UPDATE games
         SET player_white_id = NVL(v_game.player_white_id, v_player_id),
@@ -87,10 +92,11 @@ BEGIN
     p_audit_log(v_player_id, p_game_id, 'JOIN_GAME');
     DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || '.');
     COMMIT;
+
 EXCEPTION
-WHEN OTHERS THEN
-    v_error_msg := 'Неожиданная ошибка при присоединении к игре: ' || SQLERRM;
-    p_audit_log(v_player_id, p_game_id, SUBSTR(v_error_msg, 1, 255));
-    DBMS_OUTPUT.PUT_LINE(v_error_msg);
-    ROLLBACK;
+    WHEN OTHERS THEN
+        v_error_msg := 'Неожиданная ошибка при присоединении к игре: ' || SQLERRM;
+        p_audit_log(v_player_id, p_game_id, SUBSTR(v_error_msg, 1, 255));
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        ROLLBACK;
 END join_game;

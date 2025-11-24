@@ -59,8 +59,10 @@ BEGIN
         RETURN;
     END IF;
     
+    -- Вызов join_game (она внутри сделает COMMIT при успехе)
     join_game(v_game.game_id);
     
+    -- Проверяем, прошла ли операция успешно
     DECLARE
         v_game_status CHAR(1);
     BEGIN
@@ -77,6 +79,7 @@ BEGIN
             p_audit_log(v_player_id, v_game.game_id, 'MATCH_JOINED');
             COMMIT;
         ELSE
+            -- Если join_game не перевел игру в Active (ошибка), откатываем блокировку матча
             ROLLBACK;
         END IF;
     END;

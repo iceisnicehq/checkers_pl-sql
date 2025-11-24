@@ -1,8 +1,6 @@
 -- @procedure p_init_board_map
--- @brief Initializes or rebuilds the global board maps (g_map_by_notation, g_map_by_idx).
--- @dependencies:
---   - g_map_by_notation, g_map_by_idx, g_current_map_size (global variables)
---   - rec_board_field (type)
+-- @brief Initializes global cache maps for board coordinates (Index <-> Notation).
+-- @dependencies: global variables g_map_by_notation, g_map_by_idx, g_current_map_size
 
 PROCEDURE p_init_board_map(p_board_size IN NUMBER) IS
     v_idx       PLS_INTEGER;
@@ -21,20 +19,19 @@ BEGIN
     -- 3. Генерируем новые карты
     FOR r IN 1 .. p_board_size LOOP
         FOR c IN 1 .. p_board_size LOOP
+            -- Формула индекса: Сверху-вниз (строка 1 в строке = 8/10 ряд на доске)
+            -- Нотация 'a1' находится в конце строки (для 8x8 это индекс 57..64)
             v_idx := ((p_board_size - r) * p_board_size) + c;
             
             -- Нотация (например, 'a1', 'h8', 'j10')
-            v_notation := CHR(ASCII('a') + c - 1);
-            IF c > 8 THEN -- Для 10x10 (i, j)
-               v_notation := CHR(ASCII('a') + c - 1);
-            END IF;
-            v_notation := v_notation || r;
+            -- ASCII('a') = 97. Для c=1 -> 'a', c=8 -> 'h', c=10 -> 'j'.
+            v_notation := CHR(ASCII('a') + c - 1) || r;
 
             -- Собираем запись
-            v_field_rec.idx        := v_idx;
-            v_field_rec.notation   := v_notation;
-            v_field_rec.row_num    := r;
-            v_field_rec.col_num    := c;
+            v_field_rec.idx      := v_idx;
+            v_field_rec.notation := v_notation;
+            v_field_rec.row_num  := r;
+            v_field_rec.col_num  := c;
 
             -- Заполняем ОБЕ карты
             g_map_by_notation(v_notation) := v_field_rec;

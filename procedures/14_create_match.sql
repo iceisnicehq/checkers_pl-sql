@@ -20,7 +20,6 @@ PROCEDURE create_match(
     p_enable_pos_rep_draw IN CHAR     DEFAULT 'N'
 ) IS
     v_current_player_id  players.player_id%TYPE;
-    v_opponent_player_id players.player_id%TYPE;
     v_error_msg          VARCHAR2(255);
     v_status_message     VARCHAR2(255);
     
@@ -44,9 +43,10 @@ BEGIN
         RETURN;
     END IF;
     
+    -- Create the first game of the match
     create_game(
         p_opponent_username   => p_opponent_username,
-        p_ai_difficulty       => NULL,
+        p_ai_difficulty       => NULL, -- Matches are PvP only
         p_player_color        => p_player_color,
         p_rule_id             => p_rule_id,
         p_time_limit_move_sec => p_time_limit_move_sec,
@@ -59,23 +59,36 @@ BEGIN
     
     v_game_id := get_active_game(v_current_player_id);
     
+    -- If game creation failed (e.g., validation error in create_game), exit
     IF v_game_id IS NULL THEN
         RETURN;
     END IF;
 
-    INSERT INTO matches (
-        rule_id, 
-        games_to_win, 
-        status
-    )
-    SELECT 
-        g.rule_id,
-        p_games_to_win,
-        g.status
-    FROM games g
-    WHERE g.game_id = v_game_id
-    RETURNING match_id INTO v_match_id;
+    -- Create Match Record
+    -- We split this into SELECT then INSERT to allow RETURNING clause
+    DECLARE
+        v_fetched_rule_id games.rule_id%TYPE;
+        v_fetched_status  games.status%TYPE;
+    BEGIN
+        SELECT rule_id, status 
+        INTO v_fetched_rule_id, v_fetched_status
+        FROM games 
+        WHERE game_id = v_game_id;
 
+        INSERT INTO matches (
+            rule_id, 
+            games_to_win, 
+            status
+        )
+        VALUES (
+            v_fetched_rule_id,
+            p_games_to_win,
+            v_fetched_status
+        )
+        RETURNING match_id INTO v_match_id;
+    END;
+
+    -- Link Game to Match
     UPDATE games
     SET match_id = v_match_id
     WHERE game_id = v_game_id;

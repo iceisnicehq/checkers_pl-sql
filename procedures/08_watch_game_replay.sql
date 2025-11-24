@@ -15,18 +15,18 @@ PROCEDURE watch_game_replay(
     p_username      IN VARCHAR2 DEFAULT NULL,
     p_moves_to_show IN NUMBER DEFAULT 1
 ) IS
-    v_player_id     players.player_id%TYPE;
-    v_seq_name      VARCHAR2(64);
-    v_job_name      VARCHAR2(64);
-    v_move_num      NUMBER;
-    v_color_str     VARCHAR2(30);
+    v_player_id      players.player_id%TYPE;
+    v_seq_name       VARCHAR2(64);
+    v_job_name       VARCHAR2(64);
+    v_move_num       NUMBER;
+    v_color_str      VARCHAR2(30);
     v_session_exists PLS_INTEGER;
-    v_game_rec      games%ROWTYPE;
-    v_max_moves     NUMBER;
-    v_winner_name   players.username%TYPE;
-    v_loser_name    players.username%TYPE;
-    v_final_message VARCHAR2(250);
-    v_error_msg     VARCHAR2(255);
+    v_game_rec       games%ROWTYPE;
+    v_max_moves      NUMBER;
+    v_winner_name    players.username%TYPE;
+    v_loser_name     players.username%TYPE;
+    v_final_message  VARCHAR2(250);
+    v_error_msg      VARCHAR2(255);
     v_replay_finished BOOLEAN := FALSE;
     v_replay_error    BOOLEAN := FALSE;
     
@@ -46,6 +46,7 @@ BEGIN
     v_seq_name  := 'REPLAY_SEQ_' || p_game_id || '_' || v_player_id;
     v_job_name  := 'DROP_REPLAY_SEQ_' || p_game_id || '_' || v_player_id;
 
+    -- 1. Проверка или инициализация сессии
     SELECT COUNT(*) INTO v_session_exists 
     FROM user_sequences 
     WHERE sequence_name = v_seq_name;
@@ -78,12 +79,15 @@ BEGIN
             RETURN;
         END IF;
         
+        -- Удаляем старый джоб очистки, если он завис
         BEGIN DBMS_SCHEDULER.DROP_JOB(v_job_name, force => TRUE); EXCEPTION WHEN OTHERS THEN NULL; END;
 
+        -- Создаем последовательность для навигации
         EXECUTE IMMEDIATE 'CREATE SEQUENCE ' || v_seq_name || 
                           ' START WITH 1 INCREMENT BY 1 MINVALUE 1 MAXVALUE ' || 
                           v_max_moves || ' NOCYCLE NOCACHE';
         
+        -- Создаем джоб для удаления последовательности через 30 мин (Garbage Collection)
         DBMS_SCHEDULER.create_job(
             job_name   => v_job_name,
             job_type   => 'PLSQL_BLOCK',
@@ -97,17 +101,19 @@ BEGIN
         
     END IF;
     
+    -- Если сессия уже была, загружаем данные игры для финализации
     IF v_game_rec.game_id IS NULL THEN
          SELECT * INTO v_game_rec FROM games WHERE game_id = p_game_id;
     END IF;
 
+    -- 2. Вывод ходов
     FOR i IN 1 .. p_moves_to_show LOOP
         BEGIN
             BEGIN
                 EXECUTE IMMEDIATE 'SELECT ' || v_seq_name || '.NEXTVAL FROM DUAL' INTO v_move_num;
             EXCEPTION
                 WHEN OTHERS THEN
-                    IF SQLCODE = -8004 THEN
+                    IF SQLCODE = -8004 THEN -- MAXVALUE exceeded
                         v_replay_finished := TRUE;
                     ELSE
                         v_replay_error := TRUE;
@@ -122,6 +128,7 @@ BEGIN
             END IF;
 
             IF v_replay_finished THEN
+                -- Формирование финального сообщения
                 BEGIN
                     IF v_game_rec.status = 'D' THEN
                         v_final_message := 'Ничья.';
@@ -160,6 +167,7 @@ BEGIN
                 EXIT;
             END IF;
 
+            -- Печать хода
             FOR move_rec IN c_game_moves(p_game_id, v_move_num) LOOP
                 v_color_str := CASE move_rec.player_color WHEN 'W' THEN '(Белые)' ELSE '(Черные)' END;
                 DBMS_OUTPUT.PUT_LINE('---');

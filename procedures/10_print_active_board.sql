@@ -34,6 +34,9 @@ PROCEDURE print_active_board(
     v_loop_start_time  DATE;
     v_timeout_sec      NUMBER;
     v_wait_message     VARCHAR2(200);
+    
+    -- Для логики отрисовки
+    v_board_size       PLS_INTEGER;
 
 BEGIN
     v_viewer_player_id := get_or_create_player_id(USER);
@@ -74,6 +77,7 @@ BEGIN
         END IF;
     END IF;
     
+    -- Завершаем другие просмотры
     UPDATE spectators
     SET left_at = SYSDATE
     WHERE player_id = v_viewer_player_id
@@ -90,6 +94,7 @@ BEGIN
             RETURN;
     END;
     
+    -- Вход зрителя
     IF v_viewer_player_id NOT IN (v_game.player_white_id, v_game.player_black_id)
        AND v_game.status IN ('A', 'O', 'C')
     THEN
@@ -106,11 +111,12 @@ BEGIN
     
     COMMIT;
 
+    -- Определение цвета игрока (если это участник)
     DECLARE
         v_active_player_id  players.player_id%TYPE;
         v_highlight_indices t_map_indices;
         v_legal_moves       t_move_list;
-        v_decoded_board     VARCHAR2(200);
+        v_decoded_board     VARCHAR2(128); -- Было 200
     BEGIN
         IF v_game.player_white_id = v_viewer_player_id THEN
             v_my_color := 'W';
@@ -120,6 +126,7 @@ BEGIN
             v_my_color := NULL; 
         END IF;
 
+        -- Логика ожидания хода
         IF UPPER(p_wait_for_turn) = 'Y' 
         AND v_my_color IS NOT NULL
         AND v_game.current_turn != v_my_color
@@ -148,6 +155,7 @@ BEGIN
             END IF;
         END IF;
         
+        -- Если игра закончилась пока ждали
         IF v_game.status NOT IN ('A', 'O', 'C') THEN
             v_error_msg := 'Игра с id = ' || v_target_game_id || ' закончена. (Статус: ' || v_game.status || ')';
             p_audit_log(v_viewer_player_id, v_target_game_id, p_event_msg => v_error_msg);
@@ -162,8 +170,14 @@ BEGIN
         END IF;
 
         v_decoded_board := decode_board(v_game.board_position);
+        
+        -- [ВАЖНО] Инициализируем карту для корректной работы подсветки ходов
+        v_board_size := SQRT(LENGTH(v_decoded_board));
+        p_init_board_map(v_board_size);
+
         v_active_player_id := CASE v_game.current_turn WHEN 'W' THEN v_game.player_white_id ELSE v_game.player_black_id END;
         
+        -- Подсветка возможных ходов (только для активного игрока)
         BEGIN
             IF v_game.status = 'A' AND v_viewer_player_id = v_active_player_id THEN
                 v_legal_moves := find_all_player_moves(v_decoded_board, v_game.current_turn, v_game.rule_id);
@@ -176,7 +190,7 @@ BEGIN
                 END IF;
             END IF;
         EXCEPTION
-            WHEN OTHERS THEN NULL; 
+            WHEN OTHERS THEN NULL; -- Игнорируем ошибки подсветки
         END;
         
         IF v_wait_message IS NOT NULL THEN

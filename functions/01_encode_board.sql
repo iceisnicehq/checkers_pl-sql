@@ -1,10 +1,8 @@
 -- @function encode_board
 -- @brief Compresses (encodes) a board string using RLE.
--- @dependencies:
---   - c_empty_field (constant)
-
+-- [ИЗМЕНЕНИЕ] Увеличен буфер v_encoded_board для поддержки 10x10 без риска переполнения
 FUNCTION encode_board(p_decoded_board IN VARCHAR2) RETURN VARCHAR2 IS
-    v_encoded_board VARCHAR2(100) := '';
+    v_encoded_board VARCHAR2(128) := '';
     v_plus_count    PLS_INTEGER := 0;
     v_char          CHAR(1);
 BEGIN

@@ -6,35 +6,61 @@
 --   - get_or_create_player_id (function)
 --   - p_audit_log (procedure)
 --   - rec_daily_puzzle_info (type)
+--   - f_get_board_as_clob (function)
 
 PROCEDURE show_daily_puzzle IS
-    v_today DATE := TRUNC(SYSDATE);
-    v_puzzle_info rec_daily_puzzle_info;
-    v_player_id players.player_id%TYPE;
+    v_today       DATE := TRUNC(SYSDATE);
+    v_player_id   players.player_id%TYPE;
+    
+    -- Локальные переменные
+    v_puzzle_id      puzzles.puzzle_id%TYPE;
+    v_difficulty     puzzles.difficulty_level%TYPE;
+    v_moves_solve    puzzles.moves_to_solve%TYPE;
+    v_turn           puzzles.turn_to_move%TYPE;
+    v_board_pos      puzzles.board_position%TYPE;
+    v_end_cond       puzzles.end_condition%TYPE;
+    v_author         players.username%TYPE;
+    
+    v_visual_board   CLOB;
+    v_goal_str       VARCHAR2(100);
 BEGIN
     v_player_id := get_or_create_player_id(USER);
     
     BEGIN
         SELECT 
-            dp.puzzle_date,
             p.puzzle_id,
             p.difficulty_level,
             p.moves_to_solve,
             p.turn_to_move,
-            p.board_position
-        INTO v_puzzle_info
+            p.board_position,
+            p.end_condition,
+            NVL(pl.username, 'System')
+        INTO 
+            v_puzzle_id, v_difficulty, v_moves_solve, v_turn, v_board_pos, v_end_cond, v_author
         FROM daily_puzzles dp
         JOIN puzzles p ON dp.puzzle_id = p.puzzle_id
+        LEFT JOIN players pl ON p.created_by_player_id = pl.player_id
         WHERE dp.puzzle_date = v_today;
         
-        DBMS_OUTPUT.PUT_LINE('--- Задача Дня (' || TO_CHAR(v_today, 'DD.MM.YYYY') || ') ---');
-        DBMS_OUTPUT.PUT_LINE('ID Задачи:   ' || v_puzzle_info.puzzle_id);
-        DBMS_OUTPUT.PUT_LINE('Сложность:   ' || v_puzzle_info.difficulty_level);
-        DBMS_OUTPUT.PUT_LINE('Ходов:       ' || NVL(TO_CHAR(v_puzzle_info.moves_to_solve), 'N/A'));
-        DBMS_OUTPUT.PUT_LINE('Ход:         ' || v_puzzle_info.turn_to_move);
-        DBMS_OUTPUT.PUT_LINE('Позиция:     ' || v_puzzle_info.board_position);
-        DBMS_OUTPUT.PUT_LINE('---');
-        DBMS_OUTPUT.PUT_LINE('Для решения, вызовите: EXEC game_logic.start_daily_puzzle;');
+        v_goal_str := CASE v_end_cond WHEN 'D' THEN 'Ничья' ELSE 'Победа' END;
+
+        DBMS_OUTPUT.PUT_LINE('==================================================');
+        DBMS_OUTPUT.PUT_LINE('          ЗАДАЧА ДНЯ (' || TO_CHAR(v_today, 'DD.MM.YYYY') || ')');
+        DBMS_OUTPUT.PUT_LINE('==================================================');
+        DBMS_OUTPUT.PUT_LINE('ID:        ' || v_puzzle_id);
+        DBMS_OUTPUT.PUT_LINE('Автор:     ' || v_author);
+        DBMS_OUTPUT.PUT_LINE('Сложность: ' || v_difficulty);
+        DBMS_OUTPUT.PUT_LINE('Задача:    ' || v_goal_str || ' за ' || NVL(TO_CHAR(v_moves_solve), 'N/A') || ' ход(ов)');
+        DBMS_OUTPUT.PUT_LINE('Ваш ход:   ' || CASE v_turn WHEN 'W' THEN 'Белые (W)' ELSE 'Черные (B)' END);
+        DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
+        
+        -- Рисуем доску
+        v_visual_board := f_get_board_as_clob(v_board_pos);
+        DBMS_OUTPUT.PUT_LINE(v_visual_board);
+        
+        DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
+        -- [ИСПРАВЛЕНО] Подсказка для SQL Developer
+        DBMS_OUTPUT.PUT_LINE('Для решения: BEGIN game_logic.start_daily_puzzle; END;');
 
     EXCEPTION
         WHEN NO_DATA_FOUND THEN

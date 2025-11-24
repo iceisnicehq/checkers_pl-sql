@@ -7,19 +7,19 @@
 --   - t_map_indices (type)
 
 FUNCTION f_get_board_as_clob(
-    p_board_position  IN VARCHAR2,
+    p_board_position    IN VARCHAR2,
     p_highlight_indices IN t_map_indices DEFAULT t_map_indices()
 ) RETURN CLOB IS
     v_clob          CLOB;
     v_char          CHAR(1);
     v_linear_idx    PLS_INTEGER;
-    v_decoded_board VARCHAR2(200) := decode_board(p_board_position);
+    v_decoded_board VARCHAR2(128) := decode_board(p_board_position); -- Было 200
     c_nl CONSTANT   VARCHAR2(1)   := CHR(10);
     
     v_board_size    PLS_INTEGER;
     v_total_squares PLS_INTEGER;
-    v_header        VARCHAR2(200) := '  |';
-    v_separator     VARCHAR2(200) := '--+';
+    v_header        VARCHAR2(128) := '  |'; -- Было 200
+    v_separator     VARCHAR2(128) := '--+'; -- Было 200
     
 BEGIN
     DBMS_LOB.createtemporary(v_clob, TRUE);
@@ -74,7 +74,9 @@ BEGIN
     
 EXCEPTION
     WHEN OTHERS THEN
-        DBMS_LOB.freetemporary(v_clob);
+        IF DBMS_LOB.istemporary(v_clob) = 1 THEN
+            DBMS_LOB.freetemporary(v_clob);
+        END IF;
         DBMS_LOB.createtemporary(v_clob, TRUE);
         DBMS_LOB.append(v_clob, 'КРИТИЧЕСКАЯ ОШИБКА в f_get_board_as_clob: ' || SQLERRM);
         RETURN v_clob;

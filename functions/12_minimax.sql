@@ -16,7 +16,7 @@ FUNCTION minimax(
     p_difficulty    IN NUMBER,
     p_rule_id       IN NUMBER
 ) RETURN r_minimax_result IS
-    v_result r_minimax_result;
+    v_result         r_minimax_result;
     v_possible_moves t_move_list; 
     v_current_color  CHAR(1);
     v_local_alpha    NUMBER := p_alpha;
@@ -40,7 +40,7 @@ BEGIN
         v_result.score := -99999; 
         FOR i IN 1..v_possible_moves.COUNT LOOP
             DECLARE
-                v_new_board   VARCHAR2(200) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color);
+                v_new_board   VARCHAR2(128) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color); -- Было 200
                 v_eval_result r_minimax_result;
             BEGIN
                 v_eval_result := minimax(
@@ -71,7 +71,7 @@ BEGIN
         v_result.score := 99999;
         FOR i IN 1..v_possible_moves.COUNT LOOP
             DECLARE
-                v_new_board   VARCHAR2(200) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color);
+                v_new_board   VARCHAR2(128) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color); -- Было 200
                 v_eval_result r_minimax_result;
             BEGIN
                 v_eval_result := minimax(

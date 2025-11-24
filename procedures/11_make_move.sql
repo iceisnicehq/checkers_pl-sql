@@ -26,11 +26,7 @@ BEGIN
     
     IF v_game_id IS NULL THEN
         v_error_msg := 'Нет активных игр, чтобы сделать ход.';
-        p_audit_log(
-            p_player_id => v_player_id, 
-            p_game_id   => NULL, 
-            p_event_msg => v_error_msg 
-        );
+        p_audit_log(v_player_id, NULL, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
@@ -39,7 +35,7 @@ BEGIN
 
     IF v_game.status <> 'A' THEN
         v_error_msg := 'Игра (ID: ' || v_game_id || ') еще не активна. Противник не подключился.';
-        p_audit_log(v_player_id, v_game_id, p_event_msg => v_error_msg);
+        p_audit_log(v_player_id, v_game_id, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
@@ -48,29 +44,34 @@ BEGIN
        (v_game.current_turn = 'B' AND v_game.player_black_id != v_player_id) 
     THEN
         v_error_msg := 'Сейчас не ваш ход. (ID Игры: ' || v_game_id || ', Очередь: ' || v_game.current_turn || ').';
-        p_audit_log(v_player_id, v_game_id, p_event_msg => v_error_msg);
+        p_audit_log(v_player_id, v_game_id, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
     
+    -- Ход человека
     p_process_move(v_game_id, p_move_notation, v_player_id, v_human_msg);
     
+    -- Если ошибка, выходим (сообщение уже напечатано в p_process_move)
     IF INSTR(LOWER(v_human_msg), 'неверный ход') > 0 OR INSTR(LOWER(v_human_msg), 'нелегальный ход') > 0 THEN
         RETURN;
     END IF;
     
+    -- Показываем доску после хода человека
     BEGIN
         print_active_board(p_game_id => v_game_id); 
     EXCEPTION
         WHEN OTHERS THEN NULL;
     END;
     
+    -- Ход ИИ (если нужно)
     DECLARE
         v_next_game_state games%ROWTYPE;
         v_ai_move         VARCHAR2(100);
     BEGIN
         SELECT * INTO v_next_game_state FROM games WHERE game_id = v_game_id;
 
+        -- ИИ ходит, если игра активна и сейчас его очередь (слот игрока NULL)
         IF v_next_game_state.status = 'A' AND v_next_game_state.ai_difficulty IS NOT NULL AND
            ((v_next_game_state.current_turn = 'W' AND v_next_game_state.player_white_id IS NULL) OR
             (v_next_game_state.current_turn = 'B' AND v_next_game_state.player_black_id IS NULL))

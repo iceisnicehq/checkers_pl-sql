@@ -19,6 +19,7 @@ PROCEDURE resign_game(p_resign_match IN CHAR DEFAULT 'N') IS
 BEGIN
     v_player_id := get_or_create_player_id(user);
     
+    -- Проверка: Нельзя сдаться, если ты зритель
     DECLARE
         v_spectating_game_id NUMBER;
     BEGIN
@@ -52,11 +53,12 @@ BEGIN
         RETURN;
     END IF;
 
+    -- 1. Сдача в режиме ПАЗЛА
     IF v_game.puzzle_id IS NOT NULL THEN
         UPDATE games
         SET status = 'V',
             end_time = SYSDATE,
-            puzzle_status = 'f'
+            puzzle_status = 'f' -- Failed
         WHERE game_id = v_game_id;
         
         UPDATE spectators SET left_at = SYSDATE 
@@ -65,6 +67,7 @@ BEGIN
         p_audit_log(v_player_id, v_game_id, p_event_msg => 'QUIT_PUZZLE');
         DBMS_OUTPUT.PUT_LINE('[OK] Вы вышли из попытки решения задачи (ID сессии: ' || v_game_id || ').');
         
+    -- 2. Сдача в режиме ИГРЫ
     ELSE
         DECLARE
             v_winner_id       players.player_id%TYPE;
@@ -80,7 +83,7 @@ BEGIN
             END IF;
 
             UPDATE games
-            SET status              = 'R',
+            SET status              = 'R', -- Resigned
                 winner_player_color = v_winner_color,
                 end_time            = SYSDATE
             WHERE game_id = v_game_id;
@@ -88,6 +91,7 @@ BEGIN
             UPDATE spectators SET left_at = SYSDATE 
             WHERE game_id = v_game_id AND left_at IS NULL;
 
+            -- Сдача во всем МАТЧЕ
             IF UPPER(p_resign_match) = 'Y' AND v_game.match_id IS NOT NULL THEN
                 UPDATE matches
                 SET status = 'C',

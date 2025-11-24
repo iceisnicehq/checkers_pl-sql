@@ -20,6 +20,7 @@ PROCEDURE draw(p_action IN CHAR) IS
 BEGIN
     v_player_id := get_or_create_player_id(USER);
     
+    -- Проверка на зрителя
     DECLARE
         v_spectating_game_id NUMBER;
     BEGIN
@@ -73,6 +74,7 @@ BEGIN
         v_my_color := 'B';
     END IF;
 
+    -- OFFER
     IF v_action = 'O' THEN
         IF v_game.draw_offer_status = 'O' THEN
             IF v_game.draw_offered_by_color = v_my_color THEN
@@ -95,6 +97,7 @@ BEGIN
         p_audit_log(v_player_id, v_game_id, p_event_msg => 'DRAW_OFFER');
         DBMS_OUTPUT.PUT_LINE('Вы предложили ничью. Ожидайте ответа оппонента.');
 
+    -- ACCEPT
     ELSIF v_action = 'A' THEN
         IF v_game.draw_offer_status IS NULL OR v_game.draw_offer_status != 'O' THEN
             v_error_msg := 'Нет активного предложения о ничьей, чтобы его принять.';
@@ -125,6 +128,7 @@ BEGIN
         p_update_ratings(v_game_id); 
         DBMS_OUTPUT.PUT_LINE('Ничья по соглашению сторон.');
 
+    -- CANCEL / DECLINE
     ELSIF v_action = 'C' THEN
         IF v_game.draw_offer_status IS NULL OR v_game.draw_offer_status != 'O' THEN
             v_error_msg := 'Нет активного предложения о ничьей, чтобы его отменить/отклонить.';
