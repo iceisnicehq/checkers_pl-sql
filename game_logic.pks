@@ -226,7 +226,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
     ) RETURN r_minimax_result;
 
     FUNCTION get_ai_move(
-        p_board_position IN games.board_position%TYPE,
+        p_board_position IN game_moves.board_position%TYPE,
         p_ai_color       IN games.current_turn%TYPE,
         p_rule_id        IN games.rule_id%TYPE,
         p_difficulty     IN games.ai_difficulty%TYPE
