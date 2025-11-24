@@ -1854,15 +1854,6 @@ BEGIN
     v_player_id := get_or_create_player_id(USER);
     UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
 
-    v_active_game_id := get_active_game(v_player_id);
-
-    IF v_active_game_id IS NOT NULL THEN
-        v_error_msg := 'Вы уже участвуете в активной игре. ID вашей игры: ' || v_active_game_id;
-        p_audit_log(v_player_id, v_active_game_id, v_error_msg);
-        DBMS_OUTPUT.PUT_LINE(v_error_msg);
-        RETURN;
-    END IF;
-
     BEGIN
         SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE;
     EXCEPTION
@@ -1892,6 +1883,9 @@ BEGIN
                 ROLLBACK; 
                 RETURN;
             END IF;
+            
+            -- Для вызова разрешаем присоединение даже если get_active_game находит эту игру
+            -- (потому что игрок уже в игре, но статус 'C' - он должен "принять" вызов)
         END;
         
     -- Логика для ОТКРЫТОЙ ИГРЫ (Open)
@@ -1900,6 +1894,16 @@ BEGIN
         IF v_player_id = v_game.player_white_id OR v_player_id = v_game.player_black_id THEN
             v_error_msg := 'Нельзя присоединиться к собственной открытой игре (ID: ' || p_game_id || ').';
             p_audit_log(v_player_id, p_game_id, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            ROLLBACK;
+            RETURN;
+        END IF;
+        
+        -- Для открытой игры проверяем, не занят ли игрок в другой игре
+        v_active_game_id := get_active_game(v_player_id);
+        IF v_active_game_id IS NOT NULL AND v_active_game_id != p_game_id THEN
+            v_error_msg := 'Вы уже участвуете в активной игре. ID вашей игры: ' || v_active_game_id;
+            p_audit_log(v_player_id, v_active_game_id, v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             ROLLBACK;
             RETURN;
