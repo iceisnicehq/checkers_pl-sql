@@ -4,7 +4,7 @@ CREATE TABLE audit_log (
     log_timestamp   DATE DEFAULT SYSDATE NOT NULL,
     player_id       INT,
     game_id         INT, 
-    event_msg       VARCHAR2(255) NOT NULL,
+    event_msg       VARCHAR2(2000) NOT NULL,
     CONSTRAINT pk_audit_log PRIMARY KEY (log_id),
     CONSTRAINT fk_audit_log_player FOREIGN KEY (player_id) REFERENCES players(player_id) ON DELETE SET NULL,
     CONSTRAINT fk_audit_log_game FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE SET NULL 

@@ -1,18 +1,40 @@
 CREATE OR REPLACE VIEW v_leaderboard AS
 WITH game_participations AS (
-    SELECT player_white_id AS player_id, status, winner_player_id FROM games WHERE status IN ('V', 'D', 'T')
+    -- Выборка для БЕЛЫХ
+    SELECT 
+        player_white_id AS player_id, 
+        'W' AS my_color, 
+        status, 
+        winner_player_color 
+    FROM games 
+    WHERE status IN ('V', 'D', 'T')
+    
     UNION ALL
-    SELECT player_black_id AS player_id, status, winner_player_id FROM games WHERE status IN ('V', 'D', 'T')
+    
+    -- Выборка для ЧЕРНЫХ
+    SELECT 
+        player_black_id AS player_id, 
+        'B' AS my_color, 
+        status, 
+        winner_player_color 
+    FROM games 
+    WHERE status IN ('V', 'D', 'T')
 ),
 player_stats AS (
     SELECT
         player_id,
         COUNT(*) AS games_played,
-        SUM(CASE WHEN winner_player_id = player_id THEN 1 ELSE 0 END) AS wins,
+        
+        -- Победа: если цвет победителя совпадает с моим цветом
+        SUM(CASE WHEN winner_player_color = my_color THEN 1 ELSE 0 END) AS wins,
+        
+        -- Ничья
         SUM(CASE WHEN status = 'D' THEN 1 ELSE 0 END) AS draws,
-        SUM(CASE WHEN status != 'D' AND (winner_player_id IS NULL OR winner_player_id != player_id) THEN 1 ELSE 0 END) AS losses
+        
+        -- Поражение: не ничья, есть победитель, и цвет победителя НЕ мой
+        SUM(CASE WHEN status != 'D' AND (winner_player_color IS NOT NULL AND winner_player_color != my_color) THEN 1 ELSE 0 END) AS losses
     FROM game_participations
-    WHERE player_id IS NOT NULL
+    WHERE player_id IS NOT NULL -- Исключаем ИИ
     GROUP BY player_id
 )
 SELECT

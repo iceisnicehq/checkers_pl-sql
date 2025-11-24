@@ -3,7 +3,11 @@ SELECT
     p_user.username AS player_name,
     g.game_id,
     CASE
-        WHEN g.status = 'V' AND g.winner_player_id = p_user.player_id THEN 'WIN'
+        -- Победа: (Я белый и победили белые) ИЛИ (Я черный и победили черные)
+        WHEN g.status IN ('V', 'T', 'R') AND (
+             (g.player_white_id = p_user.player_id AND g.winner_player_color = 'W') OR
+             (g.player_black_id = p_user.player_id AND g.winner_player_color = 'B')
+        ) THEN 'WIN'
         WHEN g.status = 'D' THEN 'DRAW'
         ELSE 'LOSS'
     END AS result,
@@ -19,5 +23,5 @@ LEFT JOIN players p_opponent ON (
     (g.player_black_id = p_user.player_id AND g.player_white_id = p_opponent.player_id)
 )
 WHERE
-    g.status IN ('V', 'D', 'T')
+    g.status IN ('V', 'D', 'T', 'R') -- Добавил 'R' (Resign), так как это тоже конец игры
     AND p_user.username = USER;

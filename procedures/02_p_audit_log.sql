@@ -17,7 +17,7 @@ BEGIN
     VALUES (
         p_player_id, 
         p_game_id, 
-        SUBSTR(p_event_msg, 1, 255)
+        SUBSTR(p_event_msg, 1, 2000)
     );
     COMMIT;
 EXCEPTION

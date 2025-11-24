@@ -16,7 +16,7 @@ CREATE TABLE puzzles (
 );
 COMMENT ON TABLE puzzles IS 'Хранилище для режима "задачник" (Puzzles).';
 
--- Run this block once to set up the puzzles
+-- Run this block once to set up the puzzles AFTER GAMES AND DAILY_PUZZLES tables are created
 BEGIN
     -- Clear existing puzzle data to avoid duplicates
     DELETE FROM C##CHECKERS_APP.games WHERE puzzle_id IS NOT NULL;

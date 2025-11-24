@@ -30,9 +30,9 @@ PROCEDURE p_process_move(
     v_error_msg         VARCHAR2(2000);
     
     v_board_size        PLS_INTEGER;
-    v_decoded_board     VARCHAR2(128); -- Было 200
-    v_new_board_decoded VARCHAR2(128); -- Было 200
-    v_new_board_encoded games.board_position%TYPE;
+    v_decoded_board     VARCHAR2(128); -- Явный тип вместо %TYPE для надежности
+    v_new_board_decoded VARCHAR2(128);
+    v_new_board_encoded VARCHAR2(128); -- Явный тип
     
 BEGIN
     -- Блокируем игру для обновления
@@ -108,7 +108,7 @@ BEGIN
     IF NOT v_is_move_valid THEN
         IF v_all_legal_moves.COUNT > 0 AND v_all_legal_moves(1).is_capture = 'Y' THEN
             DECLARE
-                v_notation_str VARCHAR2(4000); -- Увеличил буфер для списка ходов
+                v_notation_str VARCHAR2(4000);
             BEGIN
                 v_error_msg := 'Неверный ход. Взятие обязательно! Доступные варианты: ';
                 FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
@@ -131,14 +131,21 @@ BEGIN
             v_error_msg := 'Нелегальный ход: "' || p_move_notation || '".';
         END IF;
 
-        p_audit_log(p_player_id, p_game_id, SUBSTR(v_error_msg, 1, 255));
+        -- [ИСПРАВЛЕНИЕ ВЫЗОВА P_AUDIT_LOG]
+        -- Передаем параметры явно и обрезаем сообщение до 255
+        p_audit_log(
+            p_player_id => p_player_id, 
+            p_game_id   => p_game_id, 
+            p_event_msg => SUBSTR(v_error_msg, 1, 255)
+        );
+        
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         p_status_message := v_error_msg;
         ROLLBACK;
         RETURN;
     END IF;
 
-    -- Применение хода (обновление доски)
+    -- Применение хода
     v_new_board_decoded := v_decoded_board;
     DECLARE
         v_moving_piece CHAR(1) := SUBSTR(v_new_board_decoded, v_chosen_move.path(1).start_idx, 1);
@@ -153,7 +160,6 @@ BEGIN
             END LOOP;
         END IF;
         
-        -- Превращение
         IF v_moving_piece IN (c_white_man, c_black_man) THEN
             DECLARE
                 v_end_row PLS_INTEGER := g_map_by_idx(v_end_pos).row_num;
@@ -167,7 +173,6 @@ BEGIN
         v_new_board_decoded := SUBSTR(v_new_board_decoded, 1, v_end_pos - 1) || v_moving_piece || SUBSTR(v_new_board_decoded, v_end_pos + 1);
     END;
 
-    -- Сохранение состояния в БД
     v_new_board_encoded := encode_board(v_new_board_decoded);
     SELECT COUNT(*) + 1 INTO v_move_count FROM game_moves WHERE game_id = p_game_id;
 
@@ -188,14 +193,13 @@ BEGIN
         p_status_message := 'Ход(#' || v_move_count || '): ' || p_move_notation || ' принят.';
     END IF;
 
-    -- Проверка условий окончания игры
+    -- Проверка окончания
     DECLARE
         v_next_turn_color       CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
         v_next_player_moves     t_move_list;
         v_opponent_pieces_exist BOOLEAN := FALSE;
         v_repetition_count      NUMBER;
     BEGIN
-        -- 1. Проверка наличия фигур у противника
         IF v_next_turn_color = 'W' THEN
             IF INSTR(v_new_board_decoded, c_white_man) > 0 OR INSTR(v_new_board_decoded, c_white_king) > 0 THEN
                 v_opponent_pieces_exist := TRUE;
@@ -211,7 +215,6 @@ BEGIN
             SET status = 'V', 
                 end_time = SYSDATE, 
                 winner_player_color = v_player_color,
-                -- [ВАЖНО] Обновляем статус пазла
                 puzzle_status = CASE WHEN puzzle_id IS NOT NULL THEN 's' ELSE puzzle_status END
             WHERE game_id = p_game_id;
             
@@ -225,14 +228,12 @@ BEGIN
             RETURN;
         END IF;
 
-        -- 2. Проверка пата (у противника нет ходов)
         v_next_player_moves := find_all_player_moves(v_new_board_decoded, v_next_turn_color, v_game.rule_id);
         IF v_next_player_moves.COUNT = 0 THEN
             UPDATE games 
             SET status = 'V', 
                 end_time = SYSDATE, 
                 winner_player_color = v_player_color,
-                -- [ВАЖНО] Обновляем статус пазла
                 puzzle_status = CASE WHEN puzzle_id IS NOT NULL THEN 's' ELSE puzzle_status END
             WHERE game_id = p_game_id;
             
@@ -246,15 +247,12 @@ BEGIN
             RETURN;
         END IF;
 
-        -- 3. Проверка троекратного повторения
         IF v_game.enable_pos_repetition_draw = 'Y' THEN
             SELECT COUNT(*) INTO v_repetition_count FROM game_moves WHERE game_id = p_game_id AND board_position = v_new_board_encoded;
             IF v_repetition_count >= 2 THEN
                 UPDATE games SET status = 'D', end_time = SYSDATE WHERE game_id = p_game_id;
                 p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.';
-
                 UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
-
                 p_audit_log(NULL, p_game_id, 'DRAW_REPETITION');
                 p_update_ratings(p_game_id);
                 COMMIT;

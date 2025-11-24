@@ -142,7 +142,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
     PROCEDURE p_audit_log(
         p_player_id  IN players.player_id%TYPE,
         p_game_id    IN games.game_id%TYPE,
-        p_event_type IN audit_log.event_msg%TYPE 
+        p_event_msg  IN audit_log.event_msg%TYPE 
     );
 
     PROCEDURE p_update_ratings(
@@ -177,7 +177,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
     ) RETURN VARCHAR2;
 
     FUNCTION idx_to_notation(
-        p_idx IN PLS_INTEGER
+        p_idx IN PLS_INTEGER,
+        p_board_size IN NUMBER
     ) RETURN VARCHAR2;
     
     FUNCTION f_get_board_as_clob(
@@ -201,8 +202,9 @@ CREATE OR REPLACE PACKAGE game_logic AS
     ) RETURN t_move_list;
 
     FUNCTION get_sorted_possible_moves(
-        p_board IN VARCHAR2,
-        p_color IN CHAR
+        p_board   IN VARCHAR2,
+        p_color   IN CHAR,
+        p_rule_id IN NUMBER
     ) RETURN t_move_list;
     
     FUNCTION evaluate_board(
@@ -224,7 +226,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_beta          IN NUMBER,
         p_is_maximizing IN BOOLEAN,
         p_ai_color      IN CHAR,
-        p_difficulty    IN NUMBER
+        p_difficulty    IN NUMBER,
+        p_rule_id       IN NUMBER
     ) RETURN r_minimax_result;
 
     FUNCTION get_ai_move(
