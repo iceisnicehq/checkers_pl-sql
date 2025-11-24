@@ -147,6 +147,7 @@ END get_active_game;
 
 FUNCTION get_or_create_player_id(p_username IN VARCHAR2) RETURN NUMBER IS
     v_player_id players.player_id%TYPE;
+    v_current_season_id seasons.season_id%TYPE;
 BEGIN
     BEGIN
         SELECT player_id
@@ -158,6 +159,52 @@ BEGIN
             INSERT INTO players (username)
             VALUES (p_username)
             RETURNING player_id INTO v_player_id;
+            
+            -- Создаем начальные рейтинги для нового игрока (500 по умолчанию)
+            -- Для всех правил и текущего сезона
+            BEGIN
+                -- Получаем текущий сезон
+                SELECT season_id INTO v_current_season_id
+                FROM seasons
+                WHERE SYSDATE BETWEEN start_date AND end_date
+                AND ROWNUM = 1;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    -- Если сезона нет, берем последний созданный или создаем новый
+                    BEGIN
+                        SELECT MAX(season_id) INTO v_current_season_id FROM seasons;
+                        IF v_current_season_id IS NULL THEN
+                            -- Создаем сезон если его нет
+                            DECLARE
+                                v_month_names SYS.ODCIVARCHAR2LIST := SYS.ODCIVARCHAR2LIST(
+                                    'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+                                    'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+                                );
+                                v_month_num PLS_INTEGER := EXTRACT(MONTH FROM SYSDATE);
+                                v_year_num PLS_INTEGER := EXTRACT(YEAR FROM SYSDATE);
+                                v_season_name VARCHAR2(100) := v_month_names(v_month_num) || '-' || v_year_num;
+                                v_start_date DATE := TRUNC(SYSDATE, 'MM');
+                                v_end_date DATE := ADD_MONTHS(v_start_date, 1) - 1;
+                            BEGIN
+                                INSERT INTO seasons (season_name, start_date, end_date)
+                                VALUES (v_season_name, v_start_date, v_end_date)
+                                RETURNING season_id INTO v_current_season_id;
+                            END;
+                        END IF;
+                    END;
+            END;
+            
+            -- Создаем рейтинги для всех правил
+            IF v_current_season_id IS NOT NULL THEN
+                FOR r IN (SELECT rule_id FROM game_rules) LOOP
+                    BEGIN
+                        INSERT INTO player_ratings (player_id, rule_id, season_id, rating)
+                        VALUES (v_player_id, r.rule_id, v_current_season_id, 500);
+                    EXCEPTION
+                        WHEN OTHERS THEN NULL; -- Игнорируем ошибки
+                    END;
+                END LOOP;
+            END IF;
     END;
     RETURN v_player_id;
 END get_or_create_player_id;
@@ -1089,8 +1136,19 @@ BEGIN
     p_init_board_map(v_board_size);
     
     FOR c IN 1 .. v_board_size LOOP
-        v_header    := v_header    || ' ' || CHR(ASCII('A') + c - 1) || ' ';
-        v_separator := v_separator || '---';
+        -- Для доски 10x10 нужна буква 'j' (a-i, затем j)
+        DECLARE
+            v_col_letter CHAR(1);
+        BEGIN
+            IF c <= 9 THEN
+                v_col_letter := CHR(ASCII('A') + c - 1);
+            ELSE
+                -- Для 10-й колонки используем 'J' (или можно 'j', но обычно заглавные)
+                v_col_letter := 'J';
+            END IF;
+            v_header    := v_header    || ' ' || v_col_letter || ' ';
+            v_separator := v_separator || '---';
+        END;
     END LOOP;
     v_header    := v_header    || ' |';
     v_separator := v_separator || '+--';
@@ -1402,6 +1460,8 @@ BEGIN
 
     -- Если ходов нет -> Поражение
     IF v_all_legal_moves.COUNT = 0 THEN
+        p_drop_move_timeout_job(p_game_id);
+        
         UPDATE games
         SET status              = 'V',
             end_time            = SYSDATE,
@@ -1518,6 +1578,13 @@ BEGIN
     INSERT INTO game_moves (game_id, move_number, move_notation, is_capture, board_position)
     VALUES (p_game_id, v_move_count, p_move_notation, v_chosen_move.is_capture, v_new_board_encoded);
     
+    -- Переносим таймаут хода на следующий ход
+    BEGIN
+        p_reschedule_move_timeout_job(p_game_id);
+    EXCEPTION
+        WHEN OTHERS THEN NULL;
+    END;
+    
     IF p_player_id IS NULL THEN
         p_status_message := 'Ход(#' || v_move_count || ') ИИ: ' || p_move_notation;
     ELSE
@@ -1542,6 +1609,8 @@ BEGIN
         END IF;
         
         IF NOT v_opponent_pieces_exist THEN
+            p_drop_move_timeout_job(p_game_id);
+            
             UPDATE games 
             SET status = 'V', 
                 end_time = SYSDATE, 
@@ -1561,6 +1630,8 @@ BEGIN
 
         v_next_player_moves := find_all_player_moves(v_new_board_decoded, v_next_turn_color, v_game.rule_id);
         IF v_next_player_moves.COUNT = 0 THEN
+            p_drop_move_timeout_job(p_game_id);
+            
             UPDATE games 
             SET status = 'V', 
                 end_time = SYSDATE, 
@@ -1578,9 +1649,54 @@ BEGIN
             RETURN;
         END IF;
 
+        -- Проверка "Ничья по N ходов без взятия"
+        IF v_game.draw_moves_limit IS NOT NULL THEN
+            DECLARE
+                v_moves_without_capture PLS_INTEGER := 0;
+                v_last_capture_move PLS_INTEGER;
+            BEGIN
+                -- Находим номер последнего хода с взятием
+                BEGIN
+                    SELECT MAX(move_number) INTO v_last_capture_move
+                    FROM game_moves
+                    WHERE game_id = p_game_id AND is_capture = 'Y';
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        v_last_capture_move := 0;
+                END;
+                
+                -- Считаем ходы без взятия после последнего взятия (включая текущий ход)
+                SELECT COUNT(*) INTO v_moves_without_capture
+                FROM game_moves
+                WHERE game_id = p_game_id
+                  AND move_number > v_last_capture_move
+                  AND is_capture = 'N';
+                
+                -- Добавляем текущий ход если он без взятия
+                IF v_chosen_move.is_capture = 'N' THEN
+                    v_moves_without_capture := v_moves_without_capture + 1;
+                END IF;
+                
+                -- Проверяем лимит (draw_moves_limit - это количество полуходов без взятия)
+                IF v_moves_without_capture >= v_game.draw_moves_limit THEN
+                    p_drop_move_timeout_job(p_game_id);
+                    
+                    UPDATE games SET status = 'D', end_time = SYSDATE WHERE game_id = p_game_id;
+                    p_status_message := p_status_message || ' Ничья! Превышен лимит ходов без взятия (' || v_game.draw_moves_limit || ').';
+                    UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
+                    p_audit_log(NULL, p_game_id, 'DRAW_MOVES_LIMIT');
+                    p_update_ratings(p_game_id);
+                    COMMIT;
+                    RETURN;
+                END IF;
+            END;
+        END IF;
+
         IF v_game.enable_pos_repetition_draw = 'Y' THEN
             SELECT COUNT(*) INTO v_repetition_count FROM game_moves WHERE game_id = p_game_id AND board_position = v_new_board_encoded;
             IF v_repetition_count >= 2 THEN
+                p_drop_move_timeout_job(p_game_id);
+                
                 UPDATE games SET status = 'D', end_time = SYSDATE WHERE game_id = p_game_id;
                 p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.';
                 UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
@@ -1594,6 +1710,113 @@ BEGIN
     
     COMMIT;
 END p_process_move;
+-- @procedure p_create_move_timeout_job
+-- @brief Creates a scheduler job to timeout a move if time limit is exceeded
+PROCEDURE p_create_move_timeout_job(p_game_id IN NUMBER) IS
+    v_job_name VARCHAR2(128);
+    v_time_limit NUMBER;
+BEGIN
+    -- Получаем лимит времени на ход
+    SELECT time_limit_move_sec INTO v_time_limit
+    FROM games
+    WHERE game_id = p_game_id;
+    
+    -- Если лимита нет, джоб не нужен
+    IF v_time_limit IS NULL THEN
+        RETURN;
+    END IF;
+    
+    v_job_name := 'MOVE_TIMEOUT_JOB_' || p_game_id;
+    
+    -- Удаляем старый джоб если есть
+    BEGIN
+        DBMS_SCHEDULER.DROP_JOB(v_job_name, force => TRUE);
+    EXCEPTION
+        WHEN OTHERS THEN NULL;
+    END;
+    
+    -- Создаем новый джоб
+    DBMS_SCHEDULER.CREATE_JOB(
+        job_name   => v_job_name,
+        job_type   => 'PLSQL_BLOCK',
+        job_action => 'DECLARE
+                v_game games%ROWTYPE;
+                v_loser_color CHAR(1);
+            BEGIN
+                SELECT * INTO v_game FROM games WHERE game_id = ' || p_game_id || ' FOR UPDATE;
+                
+                -- Проверяем что игра еще активна
+                IF v_game.status = ''A'' THEN
+                    -- Проигравший - тот, чей сейчас ход
+                    v_loser_color := v_game.current_turn;
+                    
+                    UPDATE games
+                    SET status = ''T'', -- Timeout
+                        end_time = SYSDATE,
+                        winner_player_color = CASE v_loser_color WHEN ''W'' THEN ''B'' ELSE ''W'' END
+                    WHERE game_id = ' || p_game_id || ';
+                    
+                    UPDATE spectators SET left_at = SYSDATE 
+                    WHERE game_id = ' || p_game_id || ' AND left_at IS NULL;
+                    
+                    C##CHECKERS_APP.game_logic.p_update_ratings(' || p_game_id || ');
+                    C##CHECKERS_APP.game_logic.p_audit_log(NULL, ' || p_game_id || ', ''MOVE_TIMEOUT'');
+                    COMMIT;
+                END IF;
+            EXCEPTION
+                WHEN OTHERS THEN NULL;
+            END;',
+        start_date => SYSTIMESTAMP + (v_time_limit / 86400), -- Через time_limit_move_sec секунд
+        enabled    => TRUE,
+        auto_drop  => TRUE,
+        comments   => 'Move timeout job for game ' || p_game_id
+    );
+EXCEPTION
+    WHEN OTHERS THEN NULL; -- Игнорируем ошибки создания джоба
+END p_create_move_timeout_job;
+-- @procedure p_reschedule_move_timeout_job
+-- @brief Reschedules the move timeout job when a move is made
+PROCEDURE p_reschedule_move_timeout_job(p_game_id IN NUMBER) IS
+    v_job_name VARCHAR2(128);
+    v_time_limit NUMBER;
+BEGIN
+    -- Получаем лимит времени на ход
+    SELECT time_limit_move_sec INTO v_time_limit
+    FROM games
+    WHERE game_id = p_game_id;
+    
+    -- Если лимита нет, джоб не нужен
+    IF v_time_limit IS NULL THEN
+        RETURN;
+    END IF;
+    
+    v_job_name := 'MOVE_TIMEOUT_JOB_' || p_game_id;
+    
+    -- Переносим время выполнения джоба
+    BEGIN
+        DBMS_SCHEDULER.SET_ATTRIBUTE(
+            name      => v_job_name,
+            attribute => 'start_date',
+            value     => SYSTIMESTAMP + (v_time_limit / 86400)
+        );
+    EXCEPTION
+        WHEN OTHERS THEN NULL; -- Если джоба нет, создаем его
+            p_create_move_timeout_job(p_game_id);
+    END;
+EXCEPTION
+    WHEN OTHERS THEN NULL;
+END p_reschedule_move_timeout_job;
+-- @procedure p_drop_move_timeout_job
+-- @brief Drops the move timeout job when game ends
+PROCEDURE p_drop_move_timeout_job(p_game_id IN NUMBER) IS
+    v_job_name VARCHAR2(128) := 'MOVE_TIMEOUT_JOB_' || p_game_id;
+BEGIN
+    BEGIN
+        DBMS_SCHEDULER.DROP_JOB(v_job_name, force => TRUE);
+    EXCEPTION
+        WHEN OTHERS THEN NULL;
+    END;
+END p_drop_move_timeout_job;
 -- @procedure create_game
 -- @brief Creates a new game (PvP, PvE, or puzzle).
 -- @dependencies:
@@ -1931,6 +2154,13 @@ BEGIN
         WHERE game_id = p_game_id;
     END IF;
     
+    -- Создаем джоб таймаута хода если есть лимит времени
+    BEGIN
+        p_create_move_timeout_job(p_game_id);
+    EXCEPTION
+        WHEN OTHERS THEN NULL; -- Игнорируем ошибки создания джоба
+    END;
+    
     p_audit_log(v_player_id, p_game_id, 'JOIN_GAME');
     DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || '.');
     COMMIT;
@@ -2008,6 +2238,8 @@ BEGIN
 
     -- 1. Сдача в режиме ПАЗЛА
     IF v_game.puzzle_id IS NOT NULL THEN
+        p_drop_move_timeout_job(v_game_id);
+        
         UPDATE games
         SET status = 'V',
             end_time = SYSDATE,
@@ -2035,6 +2267,8 @@ BEGIN
                 v_winner_color := 'W';
             END IF;
 
+            p_drop_move_timeout_job(v_game_id);
+            
             UPDATE games
             SET status              = 'R', -- Resigned
                 winner_player_color = v_winner_color,
@@ -2849,6 +3083,8 @@ BEGIN
             RETURN;
         END IF;
 
+        p_drop_move_timeout_job(v_game_id);
+        
         UPDATE games
         SET status = 'D',
             end_time = SYSDATE,
@@ -3527,7 +3763,10 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('          ЗАДАЧА ДНЯ (' || TO_CHAR(v_today, 'DD.MM.YYYY') || ')');
         DBMS_OUTPUT.PUT_LINE('==================================================');
         DBMS_OUTPUT.PUT_LINE('ID:        ' || v_puzzle_id);
-        DBMS_OUTPUT.PUT_LINE('Автор:     ' || v_author);
+        -- Не показываем автора если это System
+        IF v_author IS NOT NULL AND UPPER(v_author) != 'SYSTEM' THEN
+            DBMS_OUTPUT.PUT_LINE('Автор:     ' || v_author);
+        END IF;
         DBMS_OUTPUT.PUT_LINE('Сложность: ' || v_difficulty);
         DBMS_OUTPUT.PUT_LINE('Задача:    ' || v_goal_str || ' за ' || NVL(TO_CHAR(v_moves_solve), 'N/A') || ' ход(ов)');
         DBMS_OUTPUT.PUT_LINE('Ваш ход:   ' || CASE v_turn WHEN 'W' THEN 'Белые (W)' ELSE 'Черные (B)' END);

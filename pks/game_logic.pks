@@ -156,6 +156,18 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_status_message OUT VARCHAR2
     );
 
+    PROCEDURE p_create_move_timeout_job(
+        p_game_id IN NUMBER
+    );
+
+    PROCEDURE p_reschedule_move_timeout_job(
+        p_game_id IN NUMBER
+    );
+
+    PROCEDURE p_drop_move_timeout_job(
+        p_game_id IN NUMBER
+    );
+
     FUNCTION encode_board(
         p_decoded_board IN VARCHAR2
     ) RETURN VARCHAR2;
