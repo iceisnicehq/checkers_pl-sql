@@ -25,14 +25,10 @@ SELECT
     SUM(CASE WHEN gp.status = 'T' THEN 1 ELSE 0 END) AS timeouts,
     ROUND(AVG(gp.total_moves), 2) AS avg_game_length,
     ROUND(AVG(CASE WHEN gp.end_time IS NOT NULL AND gp.start_time IS NOT NULL 
-        THEN (EXTRACT(DAY FROM (gp.end_time - gp.start_time)) * 24 * 60 + 
-              EXTRACT(HOUR FROM (gp.end_time - gp.start_time)) * 60 +
-              EXTRACT(MINUTE FROM (gp.end_time - gp.start_time))) 
+        THEN (gp.end_time - gp.start_time) * 24 * 60
         ELSE NULL END), 2) AS avg_game_duration_minutes,
     MIN(gp.start_time) AS first_game_date,
     MAX(gp.end_time) AS last_game_date
 FROM game_participations gp
 GROUP BY gp.player_id;
-
-COMMENT ON VIEW v_player_stats IS 'Статистика игрока: свод побед/поражений/ничьих, средняя длина партии, завершения по времени.';
 

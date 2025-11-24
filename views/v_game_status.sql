@@ -36,5 +36,3 @@ LEFT JOIN players pb ON g.player_black_id = pb.player_id
 LEFT JOIN game_rules gr ON g.rule_id = gr.rule_id
 WHERE g.status IN ('A', 'O', 'C', 'V', 'D', 'T', 'R');
 
-COMMENT ON VIEW v_game_status IS 'Статус партии: идентификаторы участников, вариант правил, очередь, таймеры, текст позиции, последний результат валидации.';
-

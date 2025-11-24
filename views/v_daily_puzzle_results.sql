@@ -16,9 +16,7 @@ SELECT
     -- Среднее время решения (для успешных)
     ROUND(AVG(CASE 
         WHEN g.puzzle_status = 's' AND g.end_time IS NOT NULL AND g.start_time IS NOT NULL
-        THEN (EXTRACT(DAY FROM (g.end_time - g.start_time)) * 24 * 60 + 
-              EXTRACT(HOUR FROM (g.end_time - g.start_time)) * 60 +
-              EXTRACT(MINUTE FROM (g.end_time - g.start_time)))
+        THEN (g.end_time - g.start_time) * 24 * 60
         ELSE NULL
     END), 2) AS avg_solve_time_minutes,
     -- Среднее количество ходов для решения
@@ -39,6 +37,3 @@ GROUP BY
     p.turn_to_move,
     p.end_condition
 ORDER BY dp.puzzle_date DESC;
-
-COMMENT ON VIEW v_daily_puzzle_results IS 'Результаты daily puzzles: статистика попыток, успешных решений, среднее время и количество ходов.';
-

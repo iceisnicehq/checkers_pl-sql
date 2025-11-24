@@ -22,9 +22,7 @@ SELECT
         WHEN g.status = 'D' THEN 'DRAW'
         ELSE 'NORMAL'
     END AS end_reason,
-    EXTRACT(DAY FROM (g.end_time - g.start_time)) * 24 * 60 + 
-    EXTRACT(HOUR FROM (g.end_time - g.start_time)) * 60 +
-    EXTRACT(MINUTE FROM (g.end_time - g.start_time)) AS duration_minutes
+    (g.end_time - g.start_time) * 24 * 60 AS duration_minutes
 FROM games g
 JOIN players p_user ON (g.player_white_id = p_user.player_id OR g.player_black_id = p_user.player_id)
 JOIN game_rules gr ON g.rule_id = gr.rule_id
@@ -36,6 +34,4 @@ WHERE
     g.status IN ('V', 'D', 'T', 'R')
     AND p_user.username = USER
 ORDER BY g.end_time DESC;
-
-COMMENT ON VIEW v_player_history_by_period IS 'История игрока за период с детальной информацией о партиях.';
 
