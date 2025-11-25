@@ -171,6 +171,11 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_game_id IN NUMBER
     );
 
+    PROCEDURE p_process_match_continuation(
+        p_match_id IN NUMBER,
+        p_completed_game_id IN NUMBER
+    );
+
     FUNCTION encode_board(
         p_decoded_board IN VARCHAR2
     ) RETURN VARCHAR2;

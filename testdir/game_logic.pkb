@@ -1367,12 +1367,169 @@ BEGIN
         
     END IF;
     -- При ничьей (status = 'D') очки не меняются (согласно твоему описанию).
+    
+    -- Обработка матчей: создание следующей игры или завершение матча
+    IF v_game.match_id IS NOT NULL THEN
+        p_process_match_continuation(v_game.match_id, p_game_id);
+    END IF;
 
 EXCEPTION
     WHEN OTHERS THEN
         -- Рейтинг не должен валить игру, просто логируем ошибку
         p_audit_log(NULL, p_game_id, 'RATING_ERROR: ' || SQLERRM);
 END p_update_ratings;
+-- @procedure p_process_match_continuation
+-- @brief Processes match continuation: creates next game or completes match
+PROCEDURE p_process_match_continuation(p_match_id IN NUMBER, p_completed_game_id IN NUMBER) IS
+    v_match matches%ROWTYPE;
+    v_completed_game games%ROWTYPE;
+    v_player1_id players.player_id%TYPE;
+    v_player2_id players.player_id%TYPE;
+    v_player1_wins NUMBER := 0;
+    v_player2_wins NUMBER := 0;
+    v_games_to_win NUMBER;
+    v_next_game_id NUMBER;
+    v_next_player_color CHAR(1);
+    v_error_msg VARCHAR2(255);
+BEGIN
+    -- Получаем данные матча
+    BEGIN
+        SELECT * INTO v_match FROM matches WHERE match_id = p_match_id;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN; -- Матч не найден, выходим
+    END;
+    
+    -- Если матч уже завершен, ничего не делаем
+    IF v_match.status = 'C' THEN
+        RETURN;
+    END IF;
+    
+    -- Получаем данные завершенной игры
+    BEGIN
+        SELECT * INTO v_completed_game FROM games WHERE game_id = p_completed_game_id;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN;
+    END;
+    
+    -- Определяем игроков матча из первой игры
+    DECLARE
+        v_first_game games%ROWTYPE;
+    BEGIN
+        SELECT * INTO v_first_game 
+        FROM games 
+        WHERE match_id = p_match_id 
+        ORDER BY game_id ASC 
+        FETCH FIRST 1 ROW ONLY;
+        
+        v_player1_id := v_first_game.player_white_id;
+        v_player2_id := v_first_game.player_black_id;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN;
+    END;
+    
+    -- Подсчитываем победы каждого игрока в матче
+    FOR r IN (
+        SELECT winner_player_color, status
+        FROM games
+        WHERE match_id = p_match_id
+          AND status IN ('V', 'D', 'T', 'R')
+    ) LOOP
+        IF r.status = 'V' THEN
+            IF r.winner_player_color = 'W' AND v_player1_id IS NOT NULL THEN
+                v_player1_wins := v_player1_wins + 1;
+            ELSIF r.winner_player_color = 'B' AND v_player2_id IS NOT NULL THEN
+                v_player2_wins := v_player2_wins + 1;
+            END IF;
+        END IF;
+    END LOOP;
+    
+    v_games_to_win := v_match.games_to_win;
+    
+    -- Проверяем, достиг ли кто-то нужного количества побед
+    IF v_player1_wins >= v_games_to_win THEN
+        -- Игрок 1 выиграл матч
+        UPDATE matches
+        SET status = 'C',
+            winner_player_id = v_player1_id
+        WHERE match_id = p_match_id;
+        p_audit_log(v_player1_id, p_completed_game_id, 'MATCH_WON');
+        RETURN;
+    ELSIF v_player2_wins >= v_games_to_win THEN
+        -- Игрок 2 выиграл матч
+        UPDATE matches
+        SET status = 'C',
+            winner_player_id = v_player2_id
+        WHERE match_id = p_match_id;
+        p_audit_log(v_player2_id, p_completed_game_id, 'MATCH_WON');
+        RETURN;
+    END IF;
+    
+    -- Если никто не выиграл, создаем следующую игру с чередованием цвета
+    -- Определяем цвет для следующей игры (чередуем)
+    DECLARE
+        v_game_count NUMBER;
+        v_creator_id players.player_id%TYPE;
+        v_opponent_id players.player_id%TYPE;
+    BEGIN
+        SELECT COUNT(*) INTO v_game_count
+        FROM games
+        WHERE match_id = p_match_id;
+        
+        -- Четная игра (2, 4, 6...) - первый игрок играет черными, второй белыми
+        -- Нечетная игра (1, 3, 5...) - первый игрок играет белыми, второй черными
+        IF MOD(v_game_count, 2) = 0 THEN
+            -- Следующая игра: первый игрок черными, второй белыми
+            v_creator_id := v_player1_id;
+            v_opponent_id := v_player2_id;
+            v_next_player_color := 'B';
+        ELSE
+            -- Следующая игра: первый игрок белыми, второй черными
+            v_creator_id := v_player1_id;
+            v_opponent_id := v_player2_id;
+            v_next_player_color := 'W';
+        END IF;
+        
+        -- Получаем параметры из первой игры матча
+        DECLARE
+            v_first_game games%ROWTYPE;
+        BEGIN
+            SELECT * INTO v_first_game
+            FROM games
+            WHERE match_id = p_match_id
+            ORDER BY game_id ASC
+            FETCH FIRST 1 ROW ONLY;
+            
+            -- Создаем следующую игру напрямую через INSERT
+            INSERT INTO games (
+                match_id, rule_id, player_white_id, player_black_id,
+                creator_player_color, status, current_turn,
+                time_limit_move_sec, time_limit_game_sec,
+                draw_moves_limit, enable_pos_repetition_draw
+            )
+            VALUES (
+                p_match_id, v_first_game.rule_id,
+                CASE v_next_player_color WHEN 'W' THEN v_creator_id ELSE v_opponent_id END,
+                CASE v_next_player_color WHEN 'W' THEN v_opponent_id ELSE v_creator_id END,
+                v_next_player_color, 'C', 'W', -- Статус 'C' (Challenged), так как нужно присоединение
+                v_first_game.time_limit_move_sec,
+                v_first_game.time_limit_game_sec,
+                v_first_game.draw_moves_limit,
+                v_first_game.enable_pos_repetition_draw
+            )
+            RETURNING game_id INTO v_next_game_id;
+            
+            p_audit_log(v_creator_id, v_next_game_id, 'MATCH_NEXT_GAME_CREATED');
+        END;
+    END;
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Ошибки при обработке матча не должны влиять на основную логику
+        p_audit_log(NULL, p_completed_game_id, 'MATCH_CONTINUATION_ERROR: ' || SQLERRM);
+END p_process_match_continuation;
 -- @procedure p_process_move
 -- @brief Processes a player's move, validates it, and updates the game state.
 -- @dependencies:
@@ -1445,6 +1602,31 @@ BEGIN
                 RETURN;
             END IF;
     END;
+
+    -- Проверка лимита времени на партию
+    IF v_game.time_limit_game_sec IS NOT NULL THEN
+        DECLARE
+            v_elapsed_sec NUMBER := (SYSDATE - v_game.start_time) * 86400;
+        BEGIN
+            IF v_elapsed_sec >= v_game.time_limit_game_sec THEN
+                p_drop_move_timeout_job(p_game_id);
+                UPDATE games 
+                SET status = 'T', 
+                    end_time = SYSDATE,
+                    winner_player_color = CASE 
+                        WHEN v_game.current_turn = 'W' THEN 'B' 
+                        ELSE 'W' 
+                    END
+                WHERE game_id = p_game_id;
+                p_status_message := 'Игра завершена по таймауту (превышен лимит времени на партию: ' || v_game.time_limit_game_sec || ' сек).';
+                UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
+                p_audit_log(NULL, p_game_id, 'GAME_TIMEOUT');
+                p_update_ratings(p_game_id);
+                COMMIT;
+                RETURN;
+            END IF;
+        END;
+    END IF;
 
     -- Определение цвета текущего игрока
     IF v_game.ai_difficulty IS NOT NULL THEN
@@ -1570,15 +1752,21 @@ BEGIN
     v_new_board_encoded := encode_board(v_new_board_decoded);
     SELECT COUNT(*) + 1 INTO v_move_count FROM game_moves WHERE game_id = p_game_id;
 
-    UPDATE games
-    SET current_turn          = CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
-        draw_offer_status     = NULL, 
-        draw_offered_by_color = NULL, 
-        draw_offered_at       = NULL
-    WHERE game_id = p_game_id;
+    -- Определяем очередь хода ПОСЛЕ этого хода
+    DECLARE
+        v_next_turn CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
+    BEGIN
+        UPDATE games
+        SET current_turn          = v_next_turn,
+            draw_offer_status     = NULL, 
+            draw_offered_by_color = NULL, 
+            draw_offered_at       = NULL
+        WHERE game_id = p_game_id;
 
-    INSERT INTO game_moves (game_id, move_number, move_notation, is_capture, board_position)
-    VALUES (p_game_id, v_move_count, p_move_notation, v_chosen_move.is_capture, v_new_board_encoded);
+        -- Сохраняем ход с позицией (очередь хода вычисляется по move_number: нечетные = белые, четные = черные)
+        INSERT INTO game_moves (game_id, move_number, move_notation, is_capture, board_position)
+        VALUES (p_game_id, v_move_count, p_move_notation, v_chosen_move.is_capture, v_new_board_encoded);
+    END;
     
     -- Переносим таймаут хода на следующий ход
     BEGIN
@@ -1695,18 +1883,31 @@ BEGIN
         END IF;
 
         IF v_game.enable_pos_repetition_draw = 'Y' THEN
-            SELECT COUNT(*) INTO v_repetition_count FROM game_moves WHERE game_id = p_game_id AND board_position = v_new_board_encoded;
-            IF v_repetition_count >= 2 THEN
-                p_drop_move_timeout_job(p_game_id);
-                
-                UPDATE games SET status = 'D', end_time = SYSDATE WHERE game_id = p_game_id;
-                p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.';
-                UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
-                p_audit_log(NULL, p_game_id, 'DRAW_REPETITION');
-                p_update_ratings(p_game_id);
-                COMMIT;
-                RETURN;
-            END IF;
+            -- Проверяем повтор позиции с учетом очереди хода
+            -- Очередь хода ПОСЛЕ хода вычисляется по move_number:
+            -- нечетные ходы (1,3,5...) -> после хода очередь черных (B)
+            -- четные ходы (2,4,6...) -> после хода очередь белых (W)
+            DECLARE
+                v_next_turn_after_move CHAR(1) := CASE WHEN MOD(v_move_count, 2) = 1 THEN 'B' ELSE 'W' END;
+            BEGIN
+                SELECT COUNT(*) INTO v_repetition_count 
+                FROM game_moves 
+                WHERE game_id = p_game_id 
+                  AND board_position = v_new_board_encoded
+                  AND CASE WHEN MOD(move_number, 2) = 1 THEN 'B' ELSE 'W' END = v_next_turn_after_move;
+                  
+                IF v_repetition_count >= 2 THEN
+                    p_drop_move_timeout_job(p_game_id);
+                    
+                    UPDATE games SET status = 'D', end_time = SYSDATE WHERE game_id = p_game_id;
+                    p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.';
+                    UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
+                    p_audit_log(NULL, p_game_id, 'DRAW_REPETITION');
+                    p_update_ratings(p_game_id);
+                    COMMIT;
+                    RETURN;
+                END IF;
+            END;
         END IF;
     END;
     
@@ -1869,6 +2070,42 @@ BEGIN
     IF v_my_active_game_id IS NOT NULL THEN
         v_error_msg := 'Вы уже участвуете в активной игре. ID вашей игры: ' || v_my_active_game_id;
         p_audit_log(v_current_player_id, v_my_active_game_id, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    -- Валидация параметров
+    IF p_time_limit_move_sec IS NOT NULL AND p_time_limit_move_sec <= 0 THEN
+        v_error_msg := 'Лимит времени на ход должен быть положительным числом.';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    IF p_time_limit_game_sec IS NOT NULL AND p_time_limit_game_sec <= 0 THEN
+        v_error_msg := 'Лимит времени на партию должен быть положительным числом.';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    IF p_draw_moves_limit IS NOT NULL AND p_draw_moves_limit <= 0 THEN
+        v_error_msg := 'Лимит ходов без взятий должен быть положительным числом.';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    IF p_enable_pos_rep_draw IS NOT NULL AND p_enable_pos_rep_draw NOT IN ('Y', 'N') THEN
+        v_error_msg := 'Параметр enable_pos_rep_draw должен быть Y или N.';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    IF p_player_color IS NOT NULL AND p_player_color NOT IN ('W', 'B') THEN
+        v_error_msg := 'Цвет игрока должен быть W (белые) или B (черные).';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
@@ -2790,7 +3027,8 @@ BEGIN
         RETURN;
     END IF;
 
-    SELECT * INTO v_game FROM games WHERE game_id = v_game_id;
+    -- Блокируем строку для обновления (улучшение конкурентности)
+    SELECT * INTO v_game FROM games WHERE game_id = v_game_id FOR UPDATE;
 
     IF v_game.status <> 'A' THEN
         v_error_msg := 'Игра (ID: ' || v_game_id || ') еще не активна. Противник не подключился.';
@@ -3448,6 +3686,52 @@ BEGIN
             RAISE_APPLICATION_ERROR(-20004, v_error_msg);
         END IF;
 
+        -- Валидация позиции: проверка, что все фигуры находятся на темных клетках
+        BEGIN
+            p_init_board_map(v_board_size);
+            
+            FOR i IN 1 .. LENGTH(v_single_line_board) LOOP
+                DECLARE
+                    v_piece CHAR(1) := SUBSTR(v_single_line_board, i, 1);
+                    v_field rec_board_field;
+                    v_row PLS_INTEGER;
+                    v_col PLS_INTEGER;
+                    v_is_dark_square BOOLEAN;
+                BEGIN
+                    -- Проверяем только фигуры (не пустые клетки)
+                    IF v_piece IN ('w', 'W', 'b', 'B') THEN
+                        IF NOT g_map_by_idx.EXISTS(i) THEN
+                            v_error_msg := 'Ошибка: Недопустимый индекс позиции: ' || i;
+                            RAISE_APPLICATION_ERROR(-20007, v_error_msg);
+                        END IF;
+                        
+                        v_field := g_map_by_idx(i);
+                        v_row := v_field.row_num;
+                        v_col := v_field.col_num;
+                        
+                        -- Темная клетка: (row + col) % 2 == 1
+                        v_is_dark_square := (MOD(v_row + v_col, 2) = 1);
+                        
+                        IF NOT v_is_dark_square THEN
+                            v_error_msg := 'Ошибка: Фигура на позиции ' || v_field.notation || 
+                                         ' (индекс ' || i || ', строка ' || v_row || ', столбец ' || v_col || 
+                                         ') находится на светлой клетке. В шашках фигуры могут быть только на темных клетках.';
+                            RAISE_APPLICATION_ERROR(-20008, v_error_msg);
+                        END IF;
+                    END IF;
+                END;
+            END LOOP;
+        EXCEPTION
+            WHEN OTHERS THEN
+                -- Если ошибка валидации - пробрасываем дальше
+                IF SQLCODE BETWEEN -20007 AND -20008 THEN
+                    RAISE;
+                ELSE
+                    v_error_msg := 'Ошибка при валидации позиции: ' || SQLERRM;
+                    RAISE_APPLICATION_ERROR(-20009, v_error_msg);
+                END IF;
+        END;
+
         BEGIN
             SELECT rule_id INTO v_rule_id
             FROM game_rules
@@ -4057,6 +4341,14 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE('---------------------------------------');
             DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
             DBMS_OUTPUT.PUT_LINE('  p_match_id - ID матча для присоединения.');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('АВТОМАТИЧЕСКОЕ ПРОДОЛЖЕНИЕ МАТЧА:');
+            DBMS_OUTPUT.PUT_LINE('  После завершения каждой игры в матче (победа, ничья, таймаут, сдача)');
+            DBMS_OUTPUT.PUT_LINE('  система автоматически:');
+            DBMS_OUTPUT.PUT_LINE('  - Подсчитывает победы каждого игрока');
+            DBMS_OUTPUT.PUT_LINE('  - Если кто-то достиг p_games_to_win побед - завершает матч');
+            DBMS_OUTPUT.PUT_LINE('  - Если нет - создает следующую игру с чередованием цвета');
+            DBMS_OUTPUT.PUT_LINE('  - Игроки автоматически присоединяются к следующей игре');
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПРИМЕР:');
             DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.join_match(p_match_id => 555); END;');
