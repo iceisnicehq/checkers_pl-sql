@@ -1324,8 +1324,41 @@ BEGIN
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
             -- Если сезона нет, берем последний созданный (fallback)
-            SELECT MAX(season_id) INTO v_season_id FROM seasons;
-            IF v_season_id IS NULL THEN RETURN; END IF; -- Если вообще нет сезонов, выходим
+            BEGIN
+                SELECT MAX(season_id) INTO v_season_id FROM seasons;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    v_season_id := NULL;
+            END;
+            
+            -- Если вообще нет сезонов, создаем начальный сезон автоматически
+            IF v_season_id IS NULL THEN
+                DECLARE
+                    v_current_month DATE := TRUNC(SYSDATE, 'MM');
+                    v_next_month DATE := ADD_MONTHS(v_current_month, 1);
+                    v_season_name VARCHAR2(100);
+                    v_month_names SYS.ODCIVARCHAR2LIST := SYS.ODCIVARCHAR2LIST(
+                        'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+                        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+                    );
+                    v_month_num PLS_INTEGER;
+                    v_year_num PLS_INTEGER;
+                BEGIN
+                    v_month_num := EXTRACT(MONTH FROM v_current_month);
+                    v_year_num := EXTRACT(YEAR FROM v_current_month);
+                    v_season_name := v_month_names(v_month_num) || '-' || v_year_num;
+                    
+                    INSERT INTO seasons (season_name, start_date, end_date)
+                    VALUES (v_season_name, v_current_month, v_next_month - 1)
+                    RETURNING season_id INTO v_season_id;
+                    
+                    COMMIT;
+                EXCEPTION
+                    WHEN OTHERS THEN
+                        -- Если не удалось создать сезон, выходим
+                        RETURN;
+                END;
+            END IF;
     END;
 
     -- Логика начисления
@@ -1336,33 +1369,52 @@ BEGIN
             DECLARE
                 v_solver_id   NUMBER;
                 v_prev_solves NUMBER;
+                v_puzzle_created_by NUMBER;
             BEGIN
                 -- Кто решал? (В пазлах играет создатель сессии)
                 v_solver_id := CASE WHEN v_game.creator_player_color = 'W' THEN v_game.player_white_id ELSE v_game.player_black_id END;
                 
-                -- Проверяем, решал ли он эту задачу РАНЬШЕ (успешно)
-                SELECT COUNT(*) INTO v_prev_solves
-                FROM games
-                WHERE puzzle_id = v_game.puzzle_id
-                  AND (player_white_id = v_solver_id OR player_black_id = v_solver_id)
-                  AND status = 'V'
-                  AND game_id != p_game_id; -- Исключаем текущую сессию
+                -- Проверяем, является ли пазл общим (не созданным пользователем)
+                BEGIN
+                    SELECT created_by_player_id INTO v_puzzle_created_by
+                    FROM puzzles
+                    WHERE puzzle_id = v_game.puzzle_id;
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        v_puzzle_created_by := NULL;
+                END;
+                
+                -- Рейтинг обновляется только для общих пазлов (created_by_player_id IS NULL)
+                IF v_puzzle_created_by IS NULL THEN
+                    -- Проверяем, решал ли он эту задачу РАНЬШЕ (успешно)
+                    SELECT COUNT(*) INTO v_prev_solves
+                    FROM games
+                    WHERE puzzle_id = v_game.puzzle_id
+                      AND (player_white_id = v_solver_id OR player_black_id = v_solver_id)
+                      AND status = 'V'
+                      AND game_id != p_game_id; -- Исключаем текущую сессию
 
-                -- Если решил впервые -> +5 очков
-                IF v_prev_solves = 0 THEN
-                    update_one_player(v_solver_id, 5);
+                    -- Если решил впервые -> +5 очков
+                    IF v_prev_solves = 0 THEN
+                        update_one_player(v_solver_id, 5);
+                    END IF;
                 END IF;
             END;
 
         -- СЛУЧАЙ Б: ОБЫЧНАЯ ИГРА (PvP / PvE)
         ELSE
-            IF v_game.winner_player_color = 'W' THEN
-                update_one_player(v_game.player_white_id, 16); -- Победитель
-                update_one_player(v_game.player_black_id, -16); -- Проигравший
-            ELSIF v_game.winner_player_color = 'B' THEN
-                update_one_player(v_game.player_black_id, 16); -- Победитель
-                update_one_player(v_game.player_white_id, -16); -- Проигравший
+            -- Рейтинг обновляется только для PvP игр (не для PvE против AI)
+            IF v_game.ai_difficulty IS NULL THEN
+                -- Это PvP игра - обновляем рейтинг
+                IF v_game.winner_player_color = 'W' THEN
+                    update_one_player(v_game.player_white_id, 16); -- Победитель
+                    update_one_player(v_game.player_black_id, -16); -- Проигравший
+                ELSIF v_game.winner_player_color = 'B' THEN
+                    update_one_player(v_game.player_black_id, 16); -- Победитель
+                    update_one_player(v_game.player_white_id, -16); -- Проигравший
+                END IF;
             END IF;
+            -- Если ai_difficulty IS NOT NULL - это PvE против AI, рейтинг НЕ обновляется
         END IF;
         
     END IF;
