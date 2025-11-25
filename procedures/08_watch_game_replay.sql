@@ -12,7 +12,6 @@
 
 PROCEDURE watch_game_replay(
     p_game_id       IN NUMBER,
-    p_username      IN VARCHAR2 DEFAULT NULL,
     p_moves_to_show IN NUMBER DEFAULT 1
 ) IS
     v_player_id      players.player_id%TYPE;

@@ -156,6 +156,9 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_status_message OUT VARCHAR2
     );
 
+    -- =========================================================================
+    -- 7. УПРАВЛЕНИЕ ТАЙМАУТАМИ ХОДОВ
+    -- =========================================================================
     PROCEDURE p_create_move_timeout_job(
         p_game_id IN NUMBER
     );

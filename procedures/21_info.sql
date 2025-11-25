@@ -101,7 +101,7 @@ BEGIN
     DBMS_OUTPUT.PUT_LINE('   * Можно использовать p_wait_for_turn => ''Y'' для ожидания хода.');
     DBMS_OUTPUT.PUT_LINE('');
     DBMS_OUTPUT.PUT_LINE('>> Выйти из режима зрителя:');
-    DBMS_OUTPUT.PUT_LINE('   BEGIN game_logic.stop_watching; END;');
+    DBMS_OUTPUT.PUT_LINE('   BEGIN game_logic.stop_spectating; END;');
     DBMS_OUTPUT.PUT_LINE('');
     DBMS_OUTPUT.PUT_LINE('>> Смотреть повтор завершенной игры:');
     DBMS_OUTPUT.PUT_LINE('   BEGIN game_logic.watch_game_replay(p_game_id => 77, p_moves_to_show => 5); END;');

@@ -87,14 +87,12 @@ BEGIN
                 rule_id, player_white_id, player_black_id, 
                 creator_player_color,
                 status, current_turn,
-                board_position, 
                 puzzle_id, is_daily_puzzle, puzzle_status
             )
             VALUES (
                 v_puzzle.rule_id, v_white_player_id, v_black_player_id, 
                 v_creator_color,
                 v_status, v_puzzle.turn_to_move,
-                v_encoded_position,
                 p_puzzle_id, p_daily, 'p' -- 'p' = pending
             )
             RETURNING game_id INTO v_game_id;
@@ -138,12 +136,12 @@ BEGIN
 
             INSERT INTO games (
                 creator_player_color, rule_id, player_white_id, player_black_id, status, current_turn, 
-                board_position, ai_difficulty, time_limit_move_sec, time_limit_game_sec,
+                ai_difficulty, time_limit_move_sec, time_limit_game_sec,
                 draw_moves_limit, enable_pos_repetition_draw
             )
             VALUES (
                 v_creator_color, p_rule_id, v_white_player_id, v_black_player_id, v_status, 'W',
-                v_encoded_position, p_ai_difficulty, p_time_limit_move_sec, p_time_limit_game_sec,
+                p_ai_difficulty, p_time_limit_move_sec, p_time_limit_game_sec,
                 p_draw_moves_limit, p_enable_pos_rep_draw
             )
             RETURNING game_id INTO v_game_id;
@@ -153,7 +151,7 @@ BEGIN
 
             -- Если ИИ играет за белых (игрок выбрал черных или так выпало), ИИ делает первый ход
             IF v_white_player_id IS NULL THEN
-                v_ai_move := get_ai_move(v_initial_position, 'W', p_rule_id, p_ai_difficulty);
+                v_ai_move := get_ai_move(v_encoded_position, 'W', p_rule_id, p_ai_difficulty);
                 IF v_ai_move IS NOT NULL THEN
                     p_process_move(v_game_id, v_ai_move, NULL, v_ai_msg);
                     v_status_message := v_status_message || ' ИИ начинает с хода: ' || v_ai_move;
@@ -186,12 +184,12 @@ BEGIN
 
             INSERT INTO games (
                 creator_player_color, rule_id, player_white_id, player_black_id, status, current_turn, 
-                board_position, ai_difficulty, time_limit_move_sec, time_limit_game_sec,
+                ai_difficulty, time_limit_move_sec, time_limit_game_sec,
                 draw_moves_limit, enable_pos_repetition_draw
             )
             VALUES (
                 v_creator_color, p_rule_id, v_white_player_id, v_black_player_id, v_status, 'W',
-                v_encoded_position, NULL, p_time_limit_move_sec, p_time_limit_game_sec,
+                NULL, p_time_limit_move_sec, p_time_limit_game_sec,
                 p_draw_moves_limit, p_enable_pos_rep_draw
             )
             RETURNING game_id INTO v_game_id;
@@ -204,12 +202,12 @@ BEGIN
             v_status := 'O';
             INSERT INTO games (
                 creator_player_color, rule_id, player_white_id, player_black_id, status, current_turn, 
-                board_position, ai_difficulty, time_limit_move_sec, time_limit_game_sec,
+                ai_difficulty, time_limit_move_sec, time_limit_game_sec,
                 draw_moves_limit, enable_pos_repetition_draw
             )
             VALUES (
                 v_creator_color, p_rule_id, v_white_player_id, v_black_player_id, v_status, 'W',
-                v_encoded_position, NULL, p_time_limit_move_sec, p_time_limit_game_sec,
+                NULL, p_time_limit_move_sec, p_time_limit_game_sec,
                 p_draw_moves_limit, p_enable_pos_rep_draw
             )
             RETURNING game_id INTO v_game_id;

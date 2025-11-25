@@ -76,12 +76,36 @@ BEGIN
            ((v_next_game_state.current_turn = 'W' AND v_next_game_state.player_white_id IS NULL) OR
             (v_next_game_state.current_turn = 'B' AND v_next_game_state.player_black_id IS NULL))
         THEN
-            v_ai_move := get_ai_move(
-                p_board_position => v_next_game_state.board_position, 
-                p_ai_color       => v_next_game_state.current_turn, 
-                p_rule_id        => v_next_game_state.rule_id, 
-                p_difficulty     => v_next_game_state.ai_difficulty
-            );
+            -- Получаем текущую позицию доски: из последнего хода или начальная позиция
+            DECLARE
+                v_ai_board_pos VARCHAR2(128);
+            BEGIN
+                BEGIN
+                    SELECT board_position INTO v_ai_board_pos
+                    FROM game_moves
+                    WHERE game_id = v_game_id
+                    ORDER BY move_number DESC
+                    FETCH FIRST 1 ROW ONLY;
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        -- Если ходов нет, используем начальную позицию
+                        v_ai_board_pos := get_initial_position(v_next_game_state.rule_id);
+                        IF v_ai_board_pos IS NULL THEN
+                            v_error_msg := 'Критическая ошибка: Не удалось получить начальную позицию для ИИ.';
+                            p_audit_log(v_player_id, v_game_id, v_error_msg);
+                            RETURN;
+                        END IF;
+                        -- Кодируем начальную позицию для передачи в get_ai_move
+                        v_ai_board_pos := encode_board(v_ai_board_pos);
+                END;
+                
+                v_ai_move := get_ai_move(
+                    p_board_position => v_ai_board_pos, 
+                    p_ai_color       => v_next_game_state.current_turn, 
+                    p_rule_id        => v_next_game_state.rule_id, 
+                    p_difficulty     => v_next_game_state.ai_difficulty
+                );
+            END;
 
             IF v_ai_move IS NOT NULL THEN
                 p_process_move(v_game_id, v_ai_move, NULL, v_ai_msg);

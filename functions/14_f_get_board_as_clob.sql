@@ -35,8 +35,19 @@ BEGIN
     p_init_board_map(v_board_size);
     
     FOR c IN 1 .. v_board_size LOOP
-        v_header    := v_header    || ' ' || CHR(ASCII('A') + c - 1) || ' ';
-        v_separator := v_separator || '---';
+        -- Для доски 10x10 нужна буква 'j' (a-i, затем j)
+        DECLARE
+            v_col_letter CHAR(1);
+        BEGIN
+            IF c <= 9 THEN
+                v_col_letter := CHR(ASCII('A') + c - 1);
+            ELSE
+                -- Для 10-й колонки используем 'J' (или можно 'j', но обычно заглавные)
+                v_col_letter := 'J';
+            END IF;
+            v_header    := v_header    || ' ' || v_col_letter || ' ';
+            v_separator := v_separator || '---';
+        END;
     END LOOP;
     v_header    := v_header    || ' |';
     v_separator := v_separator || '+--';

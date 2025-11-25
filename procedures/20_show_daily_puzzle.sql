@@ -48,7 +48,10 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('          ЗАДАЧА ДНЯ (' || TO_CHAR(v_today, 'DD.MM.YYYY') || ')');
         DBMS_OUTPUT.PUT_LINE('==================================================');
         DBMS_OUTPUT.PUT_LINE('ID:        ' || v_puzzle_id);
-        DBMS_OUTPUT.PUT_LINE('Автор:     ' || v_author);
+        -- Не показываем автора если это System
+        IF v_author IS NOT NULL AND UPPER(v_author) != 'SYSTEM' THEN
+            DBMS_OUTPUT.PUT_LINE('Автор:     ' || v_author);
+        END IF;
         DBMS_OUTPUT.PUT_LINE('Сложность: ' || v_difficulty);
         DBMS_OUTPUT.PUT_LINE('Задача:    ' || v_goal_str || ' за ' || NVL(TO_CHAR(v_moves_solve), 'N/A') || ' ход(ов)');
         DBMS_OUTPUT.PUT_LINE('Ваш ход:   ' || CASE v_turn WHEN 'W' THEN 'Белые (W)' ELSE 'Черные (B)' END);

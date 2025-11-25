@@ -11,7 +11,7 @@ BEGIN
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
             v_error_msg := 'Правила игры с ID=' || p_rule_id || ' не найдены.';
-            p_audit_log(p_player_id => NULL, p_game_id => NULL, p_event_type => v_error_msg);
+            p_audit_log(p_player_id => NULL, p_game_id => NULL, p_event_msg => v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             RETURN NULL;
     END;
@@ -30,20 +30,22 @@ BEGIN
 
     ELSIF v_rule.board_size = 10 THEN
         -- 10x10 (Международные шашки: 100 символов)
-        RETURN 'b+b+b+b+b' || -- Row 10
-               '+b+b+b+b+b' || -- Row 9
-               'b+b+b+b+b' || -- Row 8
-               '+b+b+b+b+b' || -- Row 7
-               '++++++++++' || -- Row 6
-               '++++++++++' || -- Row 5
-               'w+w+w+w+w' || -- Row 4
-               '+w+w+w+w+w' || -- Row 3
-               'w+w+w+w+w' || -- Row 2
-               '+w+w+w+w+w';   -- Row 1
+        -- Каждая строка должна содержать 10 символов
+        -- Порядок: Row 10 (первые 10 символов) -> Row 1 (последние 10 символов)
+        RETURN '+b+b+b+b+b' || -- Row 10 (10 символов: начинается с пустого, заканчивается фигурой)
+               'b+b+b+b+b+' || -- Row 9 (10 символов: начинается с фигуры, заканчивается пустым)
+               '+b+b+b+b+b' || -- Row 8 (10 символов: начинается с пустого, заканчивается фигурой)
+               'b+b+b+b+b+' || -- Row 7 (10 символов: начинается с фигуры, заканчивается пустым)
+               '++++++++++' || -- Row 6 (10 символов: все пустые)
+               '++++++++++' || -- Row 5 (10 символов: все пустые)
+               '+w+w+w+w+w' || -- Row 4 (10 символов: начинается с пустого, заканчивается фигурой)
+               'w+w+w+w+w+' || -- Row 3 (10 символов: начинается с фигуры, заканчивается пустым)
+               '+w+w+w+w+w' || -- Row 2 (10 символов: начинается с пустого, заканчивается фигурой)
+               'w+w+w+w+w+';   -- Row 1 (10 символов: начинается с фигуры, заканчивается пустым)
     ELSE
         -- Неподдерживаемый размер
         v_error_msg := 'Правила с ID=' || p_rule_id || ' (Размер: ' || v_rule.board_size || ') не поддерживаются.';
-        p_audit_log(p_player_id => NULL, p_game_id => NULL, p_event_type => v_error_msg);
+        p_audit_log(p_player_id => NULL, p_game_id => NULL, p_event_msg => v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN NULL;
     END IF;

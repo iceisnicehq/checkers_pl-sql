@@ -5,10 +5,10 @@
 --   - players (table)
 --   - spectators (table)
 --   - get_or_create_player_id (function)
---   - get_active_spectator_session (function)
 --   - get_active_game (function)
 --   - p_audit_log (procedure)
 --   - p_update_ratings (procedure)
+--   - p_drop_move_timeout_job (procedure)
 
 PROCEDURE draw(p_action IN CHAR) IS
     v_player_id players.player_id%TYPE;
@@ -24,12 +24,22 @@ BEGIN
     DECLARE
         v_spectating_game_id NUMBER;
     BEGIN
-        v_spectating_game_id := get_active_spectator_session(v_player_id);
+        BEGIN
+            SELECT game_id INTO v_spectating_game_id
+            FROM spectators
+            WHERE player_id = v_player_id
+              AND left_at IS NULL
+              AND ROWNUM = 1;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                v_spectating_game_id := NULL;
+        END;
+        
         IF v_spectating_game_id IS NOT NULL THEN
             v_error_msg := 'Вы находитесь в режиме просмотра (Игра ID: ' || v_spectating_game_id || '). Нельзя управлять ничьей.';
             p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
-            DBMS_OUTPUT.PUT_LINE('--[ Вызовите game_logic.stop_watching; чтобы выйти из режима просмотра ]--');
+            DBMS_OUTPUT.PUT_LINE('--[ Вызовите game_logic.stop_spectating; чтобы выйти из режима просмотра ]--');
             RETURN;
         END IF;
     END;
@@ -115,6 +125,8 @@ BEGIN
             RETURN;
         END IF;
 
+        p_drop_move_timeout_job(v_game_id);
+        
         UPDATE games
         SET status = 'D',
             end_time = SYSDATE,

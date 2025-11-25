@@ -4,7 +4,7 @@
 
 PROCEDURE p_init_board_map(p_board_size IN NUMBER) IS
     v_idx       PLS_INTEGER;
-    v_notation  VARCHAR2(10);
+    v_notation  VARCHAR2(10); -- Увеличено до 10 для поддержки нотаций типа 'j10' для досок 10x10
     v_field_rec rec_board_field;
 BEGIN
     -- 1. Проверяем кэш. Если карта нужного размера уже загружена, выходим.

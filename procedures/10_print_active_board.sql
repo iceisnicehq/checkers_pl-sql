@@ -169,7 +169,24 @@ BEGIN
             RETURN;
         END IF;
 
-        v_decoded_board := decode_board(v_game.board_position);
+        -- Получаем текущую позицию доски: из последнего хода или начальная позиция
+        BEGIN
+            SELECT decode_board(board_position) INTO v_decoded_board
+            FROM game_moves
+            WHERE game_id = v_target_game_id
+            ORDER BY move_number DESC
+            FETCH FIRST 1 ROW ONLY;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                -- Если ходов нет, используем начальную позицию
+                v_decoded_board := get_initial_position(v_game.rule_id);
+                IF v_decoded_board IS NULL THEN
+                    v_error_msg := 'Критическая ошибка: Не удалось получить начальную позицию.';
+                    p_audit_log(v_viewer_player_id, v_target_game_id, p_event_msg => v_error_msg);
+                    DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                    RETURN;
+                END IF;
+        END;
         
         -- [ВАЖНО] Инициализируем карту для корректной работы подсветки ходов
         v_board_size := SQRT(LENGTH(v_decoded_board));
