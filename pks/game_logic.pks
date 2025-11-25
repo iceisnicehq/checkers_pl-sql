@@ -51,7 +51,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
         move  r_move
     );
 
-    PROCEDURE info;
+    PROCEDURE info(p_proc_name IN VARCHAR2 DEFAULT NULL);
 
     -- =========================================================================
     -- 1. УПРАВЛЕНИЕ ИГРОЙ (PvP, PvE, Puzzles)
