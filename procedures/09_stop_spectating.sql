@@ -1,9 +1,3 @@
--- @procedure stop_spectating
--- @brief Allows a player to stop spectating a game.
--- @dependencies:
---   - spectators (table)
---   - get_or_create_player_id (function)
-
 PROCEDURE stop_spectating IS
     v_player_id players.player_id%TYPE;
     v_count     PLS_INTEGER;

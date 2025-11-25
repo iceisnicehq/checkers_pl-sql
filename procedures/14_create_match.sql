@@ -1,14 +1,3 @@
--- @procedure create_match
--- @brief Creates a new match (a series of games).
--- @dependencies:
---   - players (table)
---   - matches (table)
---   - games (table)
---   - get_or_create_player_id (function)
---   - get_active_game (function)
---   - p_audit_log (procedure)
---   - create_game (procedure)
-
 PROCEDURE create_match(
     p_opponent_username   IN VARCHAR2,
     p_games_to_win        IN NUMBER,
@@ -43,10 +32,9 @@ BEGIN
         RETURN;
     END IF;
     
-    -- Create the first game of the match
     create_game(
         p_opponent_username   => p_opponent_username,
-        p_ai_difficulty       => NULL, -- Matches are PvP only
+        p_ai_difficulty       => NULL,
         p_player_color        => p_player_color,
         p_rule_id             => p_rule_id,
         p_time_limit_move_sec => p_time_limit_move_sec,
@@ -59,13 +47,10 @@ BEGIN
     
     v_game_id := get_active_game(v_current_player_id);
     
-    -- If game creation failed (e.g., validation error in create_game), exit
     IF v_game_id IS NULL THEN
         RETURN;
     END IF;
 
-    -- Create Match Record
-    -- We split this into SELECT then INSERT to allow RETURNING clause
     DECLARE
         v_fetched_rule_id games.rule_id%TYPE;
         v_fetched_status  games.status%TYPE;
@@ -88,7 +73,6 @@ BEGIN
         RETURNING match_id INTO v_match_id;
     END;
 
-    -- Link Game to Match
     UPDATE games
     SET match_id = v_match_id
     WHERE game_id = v_game_id;

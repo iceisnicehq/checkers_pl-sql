@@ -1,10 +1,8 @@
------DAILY PUZZLE JOB SETUP-----
 BEGIN
-  -- Сначала удаляем старый джоб, чтобы не было ошибки "job already exists" при перезапуске скрипта
   BEGIN
     DBMS_SCHEDULER.DROP_JOB(job_name => 'DAILY_CHECKERS_PUZZLE_JOB');
   EXCEPTION
-    WHEN OTHERS THEN NULL; -- Игнорируем ошибку, если джоба не было
+    WHEN OTHERS THEN NULL;
   END;
 
   -- Создаем джоб заново

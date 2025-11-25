@@ -1,12 +1,8 @@
--- @function encode_board
--- @brief Compresses (encodes) a board string using RLE.
--- [ИЗМЕНЕНИЕ] Увеличен буфер v_encoded_board для поддержки 10x10 без риска переполнения
 FUNCTION encode_board(p_decoded_board IN VARCHAR2) RETURN VARCHAR2 IS
     v_encoded_board VARCHAR2(128) := '';
     v_plus_count    PLS_INTEGER := 0;
     v_char          CHAR(1);
 BEGIN
-    -- Если строка не содержит плюсов, возможно, она уже сжата.
     IF INSTR(p_decoded_board, c_empty_field) = 0 THEN
         RETURN p_decoded_board;
     END IF;

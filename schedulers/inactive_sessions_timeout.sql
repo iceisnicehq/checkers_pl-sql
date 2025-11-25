@@ -1,15 +1,10 @@
--- Scheduler job для автоматического завершения неактивных игровых сессий
--- Завершает игры, которые неактивны дольше указанного времени
-
 BEGIN
-  -- Удаляем старый джоб если существует
   BEGIN
     DBMS_SCHEDULER.DROP_JOB(job_name => 'INACTIVE_SESSIONS_TIMEOUT_JOB');
   EXCEPTION
     WHEN OTHERS THEN NULL;
   END;
 
-  -- Создаем джоб
   DBMS_SCHEDULER.CREATE_JOB (
     job_name        => 'INACTIVE_SESSIONS_TIMEOUT_JOB',
     job_type        => 'PLSQL_BLOCK',

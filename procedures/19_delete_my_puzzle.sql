@@ -1,15 +1,3 @@
--- @procedure delete_my_puzzle
--- @brief Deletes a puzzle created by the current user.
--- @dependencies:
---   - puzzles (table)
---   - get_or_create_player_id (function)
---   - get_active_game (function)
---   - p_audit_log (procedure)
-
--- @procedure delete_my_puzzle
--- @brief Deletes a puzzle created by the current user.
--- [БЕЗ ИЗМЕНЕНИЙ]
-
 PROCEDURE delete_my_puzzle(p_puzzle_id IN NUMBER) IS
     v_player_id players.player_id%TYPE;
     v_error_msg VARCHAR2(255);

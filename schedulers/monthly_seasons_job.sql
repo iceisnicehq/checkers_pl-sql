@@ -1,15 +1,10 @@
--- Scheduler job для автоматического создания новых сезонов каждый месяц
--- Создает сезон с названием "Месяц-Год" (например, "Ноябрь-2025")
-
 BEGIN
-  -- Удаляем старый джоб если существует
   BEGIN
     DBMS_SCHEDULER.DROP_JOB(job_name => 'MONTHLY_SEASONS_JOB');
   EXCEPTION
     WHEN OTHERS THEN NULL;
   END;
 
-  -- Создаем джоб
   DBMS_SCHEDULER.CREATE_JOB (
     job_name        => 'MONTHLY_SEASONS_JOB',
     job_type        => 'PLSQL_BLOCK',

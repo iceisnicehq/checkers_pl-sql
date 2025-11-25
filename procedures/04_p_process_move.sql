@@ -1,20 +1,3 @@
--- @procedure p_process_move
--- @brief Processes a player's move, validates it, and updates the game state.
--- @dependencies:
---   - games (table)
---   - game_rules (table)
---   - game_moves (table)
---   - spectators (table)
---   - p_init_board_map (procedure)
---   - decode_board (function)
---   - find_all_player_moves (function)
---   - p_update_ratings (procedure)
---   - idx_to_notation (function)
---   - p_audit_log (procedure)
---   - encode_board (function)
---   - c_white_man, c_black_man, c_white_king, c_black_king, c_empty_field (constants)
---   - t_move_list, r_move (types)
-
 PROCEDURE p_process_move(
     p_game_id        IN NUMBER,
     p_move_notation  IN VARCHAR2,
@@ -30,15 +13,13 @@ PROCEDURE p_process_move(
     v_error_msg         VARCHAR2(2000);
     
     v_board_size        PLS_INTEGER;
-    v_decoded_board     VARCHAR2(128); -- Явный тип вместо %TYPE для надежности
+    v_decoded_board     VARCHAR2(128);
     v_new_board_decoded VARCHAR2(128);
-    v_new_board_encoded VARCHAR2(128); -- Явный тип
+    v_new_board_encoded VARCHAR2(128);
     
 BEGIN
-    -- Блокируем игру для обновления
     SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE;
     
-    -- Инициализация карты
     BEGIN
         SELECT r.board_size INTO v_board_size 
         FROM game_rules r 
@@ -52,7 +33,6 @@ BEGIN
             RETURN;
     END;
 
-    -- Получаем текущую позицию доски: из последнего хода или начальная позиция
     BEGIN
         SELECT board_position INTO v_decoded_board
         FROM game_moves
@@ -62,7 +42,6 @@ BEGIN
         v_decoded_board := decode_board(v_decoded_board);
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-            -- Если ходов нет, используем начальную позицию
             v_decoded_board := get_initial_position(v_game.rule_id);
             IF v_decoded_board IS NULL THEN
                 p_status_message := 'Критическая ошибка: Не удалось получить начальную позицию.';
@@ -71,7 +50,30 @@ BEGIN
             END IF;
     END;
 
-    -- Определение цвета текущего игрока
+    IF v_game.time_limit_game_sec IS NOT NULL THEN
+        DECLARE
+            v_elapsed_sec NUMBER := (SYSDATE - v_game.start_time) * 86400;
+        BEGIN
+            IF v_elapsed_sec >= v_game.time_limit_game_sec THEN
+                p_drop_move_timeout_job(p_game_id);
+                UPDATE games 
+                SET status = 'T', 
+                    end_time = SYSDATE,
+                    winner_player_color = CASE 
+                        WHEN v_game.current_turn = 'W' THEN 'B' 
+                        ELSE 'W' 
+                    END
+                WHERE game_id = p_game_id;
+                p_status_message := 'Игра завершена по таймауту (превышен лимит времени на партию: ' || v_game.time_limit_game_sec || ' сек).';
+                UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
+                p_audit_log(NULL, p_game_id, 'GAME_TIMEOUT');
+                p_update_ratings(p_game_id);
+                COMMIT;
+                RETURN;
+            END IF;
+        END;
+    END IF;
+
     IF v_game.ai_difficulty IS NOT NULL THEN
         v_player_color := v_game.current_turn;
     ELSE
@@ -82,10 +84,8 @@ BEGIN
         END IF;
     END IF;
 
-    -- Поиск всех легальных ходов
     v_all_legal_moves := find_all_player_moves(v_decoded_board, v_player_color, v_game.rule_id);
 
-    -- Если ходов нет -> Поражение
     IF v_all_legal_moves.COUNT = 0 THEN
         p_drop_move_timeout_job(p_game_id);
         
@@ -93,7 +93,6 @@ BEGIN
         SET status              = 'V',
             end_time            = SYSDATE,
             winner_player_color = CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
-            -- [ВАЖНО] Если это пазл и мы проиграли (ходов нет), ставим 'f' (failed)
             puzzle_status       = CASE WHEN puzzle_id IS NOT NULL THEN 'f' ELSE puzzle_status END
         WHERE game_id = p_game_id;
         
@@ -103,7 +102,6 @@ BEGIN
         RETURN;
     END IF;
     
-    -- Валидация хода игрока (сравнение нотации)
     FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
         DECLARE
             v_legal_move r_move := v_all_legal_moves(i);
@@ -123,7 +121,6 @@ BEGIN
         END;
     END LOOP;
 
-    -- Если ход невалиден -> Вывод ошибки и подсказок
     IF NOT v_is_move_valid THEN
         IF v_all_legal_moves.COUNT > 0 AND v_all_legal_moves(1).is_capture = 'Y' THEN
             DECLARE
@@ -150,8 +147,6 @@ BEGIN
             v_error_msg := 'Нелегальный ход: "' || p_move_notation || '".';
         END IF;
 
-        -- [ИСПРАВЛЕНИЕ ВЫЗОВА P_AUDIT_LOG]
-        -- Передаем параметры явно и обрезаем сообщение до 255
         p_audit_log(
             p_player_id => p_player_id, 
             p_game_id   => p_game_id, 
@@ -164,7 +159,6 @@ BEGIN
         RETURN;
     END IF;
 
-    -- Применение хода
     v_new_board_decoded := v_decoded_board;
     DECLARE
         v_moving_piece CHAR(1) := SUBSTR(v_new_board_decoded, v_chosen_move.path(1).start_idx, 1);
@@ -195,17 +189,20 @@ BEGIN
     v_new_board_encoded := encode_board(v_new_board_decoded);
     SELECT COUNT(*) + 1 INTO v_move_count FROM game_moves WHERE game_id = p_game_id;
 
-    UPDATE games
-    SET current_turn          = CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
-        draw_offer_status     = NULL, 
-        draw_offered_by_color = NULL, 
-        draw_offered_at       = NULL
-    WHERE game_id = p_game_id;
+    DECLARE
+        v_next_turn CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
+    BEGIN
+        UPDATE games
+        SET current_turn          = v_next_turn,
+            draw_offer_status     = NULL, 
+            draw_offered_by_color = NULL, 
+            draw_offered_at       = NULL
+        WHERE game_id = p_game_id;
 
-    INSERT INTO game_moves (game_id, move_number, move_notation, is_capture, board_position)
-    VALUES (p_game_id, v_move_count, p_move_notation, v_chosen_move.is_capture, v_new_board_encoded);
+        INSERT INTO game_moves (game_id, move_number, move_notation, is_capture, board_position)
+        VALUES (p_game_id, v_move_count, p_move_notation, v_chosen_move.is_capture, v_new_board_encoded);
+    END;
     
-    -- Переносим таймаут хода на следующий ход
     BEGIN
         p_reschedule_move_timeout_job(p_game_id);
     EXCEPTION
@@ -218,7 +215,6 @@ BEGIN
         p_status_message := 'Ход(#' || v_move_count || '): ' || p_move_notation || ' принят.';
     END IF;
 
-    -- Проверка окончания
     DECLARE
         v_next_turn_color       CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
         v_next_player_moves     t_move_list;
@@ -276,13 +272,11 @@ BEGIN
             RETURN;
         END IF;
 
-        -- Проверка "Ничья по N ходов без взятия"
         IF v_game.draw_moves_limit IS NOT NULL THEN
             DECLARE
                 v_moves_without_capture PLS_INTEGER := 0;
                 v_last_capture_move PLS_INTEGER;
             BEGIN
-                -- Находим номер последнего хода с взятием
                 BEGIN
                     SELECT MAX(move_number) INTO v_last_capture_move
                     FROM game_moves
@@ -292,19 +286,16 @@ BEGIN
                         v_last_capture_move := 0;
                 END;
                 
-                -- Считаем ходы без взятия после последнего взятия (включая текущий ход)
                 SELECT COUNT(*) INTO v_moves_without_capture
                 FROM game_moves
                 WHERE game_id = p_game_id
                   AND move_number > v_last_capture_move
                   AND is_capture = 'N';
                 
-                -- Добавляем текущий ход если он без взятия
                 IF v_chosen_move.is_capture = 'N' THEN
                     v_moves_without_capture := v_moves_without_capture + 1;
                 END IF;
                 
-                -- Проверяем лимит (draw_moves_limit - это количество полуходов без взятия)
                 IF v_moves_without_capture >= v_game.draw_moves_limit THEN
                     p_drop_move_timeout_job(p_game_id);
                     
@@ -320,18 +311,27 @@ BEGIN
         END IF;
 
         IF v_game.enable_pos_repetition_draw = 'Y' THEN
-            SELECT COUNT(*) INTO v_repetition_count FROM game_moves WHERE game_id = p_game_id AND board_position = v_new_board_encoded;
-            IF v_repetition_count >= 2 THEN
-                p_drop_move_timeout_job(p_game_id);
-                
-                UPDATE games SET status = 'D', end_time = SYSDATE WHERE game_id = p_game_id;
-                p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.';
-                UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
-                p_audit_log(NULL, p_game_id, 'DRAW_REPETITION');
-                p_update_ratings(p_game_id);
-                COMMIT;
-                RETURN;
-            END IF;
+            DECLARE
+                v_next_turn_after_move CHAR(1) := CASE WHEN MOD(v_move_count, 2) = 1 THEN 'B' ELSE 'W' END;
+            BEGIN
+                SELECT COUNT(*) INTO v_repetition_count 
+                FROM game_moves 
+                WHERE game_id = p_game_id 
+                  AND board_position = v_new_board_encoded
+                  AND CASE WHEN MOD(move_number, 2) = 1 THEN 'B' ELSE 'W' END = v_next_turn_after_move;
+                  
+                IF v_repetition_count >= 2 THEN
+                    p_drop_move_timeout_job(p_game_id);
+                    
+                    UPDATE games SET status = 'D', end_time = SYSDATE WHERE game_id = p_game_id;
+                    p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.';
+                    UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
+                    p_audit_log(NULL, p_game_id, 'DRAW_REPETITION');
+                    p_update_ratings(p_game_id);
+                    COMMIT;
+                    RETURN;
+                END IF;
+            END;
         END IF;
     END;
     

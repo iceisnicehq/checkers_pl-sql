@@ -9,4 +9,3 @@ CREATE TABLE spectators (
     CONSTRAINT fk_spectators_player FOREIGN KEY (player_id) REFERENCES players(player_id) ON DELETE CASCADE,
     CONSTRAINT fk_spectators_game FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE
 );
-COMMENT ON TABLE spectators IS 'Игроки, наблюдающие за активными партиями.';

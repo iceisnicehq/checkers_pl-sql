@@ -1,18 +1,3 @@
--- @procedure create_game
--- @brief Creates a new game (PvP, PvE, or puzzle).
--- @dependencies:
---   - players (table)
---   - games (table)
---   - puzzles (table)
---   - get_or_create_player_id (function)
---   - get_active_game (function)
---   - p_audit_log (procedure)
---   - encode_board (function)
---   - get_initial_position (function)
---   - get_ai_move (function)
---   - p_process_move (procedure)
---   - print_active_board (procedure)
-
 PROCEDURE create_game(
     p_opponent_username   IN VARCHAR2 DEFAULT NULL,
     p_ai_difficulty       IN CHAR     DEFAULT NULL,
@@ -31,7 +16,7 @@ PROCEDURE create_game(
     v_white_player_id     players.player_id%TYPE;
     v_black_player_id     players.player_id%TYPE;
     v_creator_color       CHAR(1);
-    v_initial_position    VARCHAR2(128); -- Было games.board_position%TYPE, явно задаем 128
+    v_initial_position    VARCHAR2(128);
     v_encoded_position    VARCHAR2(128);
     v_status              games.status%TYPE;
     v_ai_move             VARCHAR2(50);
@@ -52,6 +37,41 @@ BEGIN
         RETURN;
     END IF;
     
+    IF p_time_limit_move_sec IS NOT NULL AND p_time_limit_move_sec <= 0 THEN
+        v_error_msg := 'Лимит времени на ход должен быть положительным числом.';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    IF p_time_limit_game_sec IS NOT NULL AND p_time_limit_game_sec <= 0 THEN
+        v_error_msg := 'Лимит времени на партию должен быть положительным числом.';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    IF p_draw_moves_limit IS NOT NULL AND p_draw_moves_limit <= 0 THEN
+        v_error_msg := 'Лимит ходов без взятий должен быть положительным числом.';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    IF p_enable_pos_rep_draw IS NOT NULL AND p_enable_pos_rep_draw NOT IN ('Y', 'N') THEN
+        v_error_msg := 'Параметр enable_pos_rep_draw должен быть Y или N.';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    IF p_player_color IS NOT NULL AND p_player_color NOT IN ('W', 'B') THEN
+        v_error_msg := 'Цвет игрока должен быть W (белые) или B (черные).';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
     IF (p_opponent_username IS NOT NULL AND p_ai_difficulty IS NOT NULL) OR
        (p_puzzle_id IS NOT NULL AND p_ai_difficulty IS NOT NULL) OR
        (p_puzzle_id IS NOT NULL AND p_opponent_username IS NOT NULL)
@@ -62,7 +82,6 @@ BEGIN
         RETURN;
     END IF;
 
-    -- 1. Режим ЗАДАЧИ (Puzzle)
     IF p_puzzle_id IS NOT NULL THEN
         DECLARE
             v_puzzle puzzles%ROWTYPE;
@@ -72,7 +91,6 @@ BEGIN
             v_encoded_position := encode_board(v_initial_position);
             v_status := 'A';
             
-            -- В задаче игрок всегда играет за сторону, чей ход (turn_to_move)
             IF v_puzzle.turn_to_move = 'W' THEN
                 v_white_player_id := v_current_player_id;
                 v_black_player_id := NULL;
@@ -93,7 +111,7 @@ BEGIN
                 v_puzzle.rule_id, v_white_player_id, v_black_player_id, 
                 v_creator_color,
                 v_status, v_puzzle.turn_to_move,
-                p_puzzle_id, p_daily, 'p' -- 'p' = pending
+                p_puzzle_id, p_daily, 'p'
             )
             RETURNING game_id INTO v_game_id;
             
@@ -108,7 +126,6 @@ BEGIN
                 RETURN;
         END;
         
-    -- 2. Режим ИГРЫ (PvP / PvE)
     ELSIF p_puzzle_id IS NULL THEN
     
         DECLARE
@@ -128,10 +145,8 @@ BEGIN
         END IF;
         v_encoded_position := encode_board(v_initial_position);
 
-        -- 2.1. PvE (Игра с ИИ)
         IF p_ai_difficulty IS NOT NULL THEN
             v_status := 'A';
-            -- Если игрок выбрал белых, слот черных NULL (для ИИ), и наоборот
             IF v_white_player_id IS NULL THEN v_white_player_id := NULL; ELSE v_black_player_id := NULL; END IF;
 
             INSERT INTO games (
@@ -149,7 +164,6 @@ BEGIN
             v_status_message := 'Игра против ИИ создана (ID: ' || v_game_id || '). Вы играете за ' || CASE WHEN v_white_player_id = v_current_player_id THEN 'белых (W)' ELSE 'черных (B)' END || '.';
             p_audit_log(v_current_player_id, v_game_id, 'CREATE_PVE_GAME');
 
-            -- Если ИИ играет за белых (игрок выбрал черных или так выпало), ИИ делает первый ход
             IF v_white_player_id IS NULL THEN
                 v_ai_move := get_ai_move(v_encoded_position, 'W', p_rule_id, p_ai_difficulty);
                 IF v_ai_move IS NOT NULL THEN
@@ -158,7 +172,6 @@ BEGIN
                 END IF;
             END IF;
         
-        -- 2.2. PvP (Игра с человеком)
         ELSIF p_opponent_username IS NOT NULL THEN
             IF v_current_username = UPPER(p_opponent_username) THEN 
                 v_error_msg := 'Нельзя вызвать самого себя.';
@@ -180,7 +193,7 @@ BEGIN
             END;
 
             IF v_white_player_id IS NULL THEN v_white_player_id := v_opponent_player_id; ELSE v_black_player_id := v_opponent_player_id; END IF;
-            v_status := 'C'; -- Challenged
+            v_status := 'C';
 
             INSERT INTO games (
                 creator_player_color, rule_id, player_white_id, player_black_id, status, current_turn, 
@@ -197,7 +210,6 @@ BEGIN
             v_status_message := 'Вызов игроку ' || p_opponent_username || ' брошен. Game ID: ' || v_game_id || '. Ожидайте принятия.';
             p_audit_log(v_current_player_id, v_game_id, 'CREATE_CHALLENGE');
             
-        -- 2.3. Открытая игра (Open Game)
         ELSE
             v_status := 'O';
             INSERT INTO games (
@@ -221,7 +233,6 @@ BEGIN
     COMMIT;
     DBMS_OUTPUT.PUT_LINE(v_status_message);
     
-    -- Если игра активна сразу (PvE / Puzzle), показываем доску
     IF (p_ai_difficulty IS NOT NULL AND v_white_player_id IS NULL) OR (p_puzzle_id IS NOT NULL) THEN
          BEGIN
             print_active_board(

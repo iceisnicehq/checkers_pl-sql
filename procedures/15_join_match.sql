@@ -1,14 +1,3 @@
--- @procedure join_match
--- @brief Allows a player to join an open or challenged match.
--- @dependencies:
---   - players (table)
---   - matches (table)
---   - games (table)
---   - get_or_create_player_id (function)
---   - get_active_game (function)
---   - p_audit_log (procedure)
---   - join_game (procedure)
-
 PROCEDURE join_match(p_match_id IN NUMBER) IS
     v_player_id players.player_id%TYPE;
     v_match     matches%ROWTYPE;
@@ -59,10 +48,8 @@ BEGIN
         RETURN;
     END IF;
     
-    -- Вызов join_game (она внутри сделает COMMIT при успехе)
     join_game(v_game.game_id);
     
-    -- Проверяем, прошла ли операция успешно
     DECLARE
         v_game_status CHAR(1);
     BEGIN
@@ -79,7 +66,6 @@ BEGIN
             p_audit_log(v_player_id, v_game.game_id, 'MATCH_JOINED');
             COMMIT;
         ELSE
-            -- Если join_game не перевел игру в Active (ошибка), откатываем блокировку матча
             ROLLBACK;
         END IF;
     END;

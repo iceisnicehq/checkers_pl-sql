@@ -1,12 +1,3 @@
--- @procedure cancel_game
--- @brief Cancels an open or challenged game.
--- @dependencies:
---   - games (table)
---   - players (table)
---   - get_or_create_player_id (function)
---   - get_active_game (function)
---   - p_audit_log (procedure)
-
 PROCEDURE cancel_game IS
     v_game_id   NUMBER;
     v_player_id players.player_id%TYPE;
@@ -15,7 +6,6 @@ PROCEDURE cancel_game IS
 BEGIN
     v_player_id := get_or_create_player_id(user);
     
-    -- Проверка на зрителя
     DECLARE
         v_spectating_game_id NUMBER;
     BEGIN
@@ -59,7 +49,6 @@ BEGIN
         RETURN;
     END IF;
     
-    -- Если это часть матча, отменяем и матч
     IF v_game.match_id IS NOT NULL THEN
         DELETE FROM matches WHERE match_id = v_game.match_id;
         p_audit_log(v_player_id, v_game_id, 'MATCH_CANCEL');

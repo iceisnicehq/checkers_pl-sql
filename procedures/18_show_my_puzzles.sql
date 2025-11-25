@@ -1,10 +1,3 @@
--- @procedure show_my_puzzles
--- @brief Shows a list of puzzles created by the current user.
--- @dependencies:
---   - puzzles (table)
---   - get_or_create_player_id (function)
---   - f_get_board_as_clob (function)
-
 PROCEDURE show_my_puzzles(p_difficulty IN NUMBER DEFAULT NULL) IS
     v_player_id players.player_id%TYPE;
     v_found     BOOLEAN := FALSE;
@@ -45,11 +38,10 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('ID: ' || r.puzzle_id || ' | Сложность: ' || r.difficulty_level || ' | Цель: ' || v_goal_str || ' за ' || NVL(TO_CHAR(r.moves_to_solve), '?') || ' ход(ов)');
         DBMS_OUTPUT.PUT_LINE('Первый ход: ' || CASE r.turn_to_move WHEN 'W' THEN 'Белые' ELSE 'Черные' END);
         
-        -- Визуализация
         v_visual_board := f_get_board_as_clob(r.board_position);
         DBMS_OUTPUT.PUT_LINE(v_visual_board);
-        DBMS_OUTPUT.PUT_LINE('__________________________________________________'); -- Разделитель
-        DBMS_OUTPUT.PUT_LINE(''); -- Пустая строка для отступа
+        DBMS_OUTPUT.PUT_LINE('__________________________________________________');
+        DBMS_OUTPUT.PUT_LINE('');
     END LOOP;
     
     IF NOT v_found THEN

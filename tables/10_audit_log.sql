@@ -9,4 +9,3 @@ CREATE TABLE audit_log (
     CONSTRAINT fk_audit_log_player FOREIGN KEY (player_id) REFERENCES players(player_id) ON DELETE SET NULL,
     CONSTRAINT fk_audit_log_game FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE SET NULL 
 );
-COMMENT ON TABLE audit_log IS 'Журнал аудита для значимых событий и ошибок.';

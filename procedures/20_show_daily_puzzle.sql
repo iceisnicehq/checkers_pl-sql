@@ -1,18 +1,7 @@
--- @procedure show_daily_puzzle
--- @brief Shows the daily puzzle.
--- @dependencies:
---   - daily_puzzles (table)
---   - puzzles (table)
---   - get_or_create_player_id (function)
---   - p_audit_log (procedure)
---   - rec_daily_puzzle_info (type)
---   - f_get_board_as_clob (function)
-
 PROCEDURE show_daily_puzzle IS
     v_today       DATE := TRUNC(SYSDATE);
     v_player_id   players.player_id%TYPE;
     
-    -- Локальные переменные
     v_puzzle_id      puzzles.puzzle_id%TYPE;
     v_difficulty     puzzles.difficulty_level%TYPE;
     v_moves_solve    puzzles.moves_to_solve%TYPE;
@@ -48,7 +37,6 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('          ЗАДАЧА ДНЯ (' || TO_CHAR(v_today, 'DD.MM.YYYY') || ')');
         DBMS_OUTPUT.PUT_LINE('==================================================');
         DBMS_OUTPUT.PUT_LINE('ID:        ' || v_puzzle_id);
-        -- Не показываем автора если это System
         IF v_author IS NOT NULL AND UPPER(v_author) != 'SYSTEM' THEN
             DBMS_OUTPUT.PUT_LINE('Автор:     ' || v_author);
         END IF;
@@ -57,12 +45,10 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('Ваш ход:   ' || CASE v_turn WHEN 'W' THEN 'Белые (W)' ELSE 'Черные (B)' END);
         DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
         
-        -- Рисуем доску
         v_visual_board := f_get_board_as_clob(v_board_pos);
         DBMS_OUTPUT.PUT_LINE(v_visual_board);
         
         DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
-        -- [ИСПРАВЛЕНО] Подсказка для SQL Developer
         DBMS_OUTPUT.PUT_LINE('Для решения: BEGIN game_logic.start_daily_puzzle; END;');
 
     EXCEPTION

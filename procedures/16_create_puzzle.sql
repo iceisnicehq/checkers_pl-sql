@@ -1,19 +1,8 @@
--- @procedure create_puzzle
--- @brief Creates a new puzzle.
--- @dependencies:
---   - players (table)
---   - puzzles (table)
---   - game_rules (table)
---   - get_or_create_player_id (function)
---   - get_active_game (function)
---   - p_audit_log (procedure)
---   - encode_board (function)
-
 PROCEDURE create_puzzle(
     p_board_position   IN CLOB,
     p_turn_to_move     IN CHAR,
     p_moves_to_solve   IN NUMBER DEFAULT NULL,
-    p_difficulty_level IN NUMBER DEFAULT 1 -- Исправил тип на NUMBER, как в PKS
+    p_difficulty_level IN NUMBER DEFAULT 1
 ) IS
     v_player_id players.player_id%TYPE;
     v_error_msg VARCHAR2(500);
@@ -26,7 +15,7 @@ PROCEDURE create_puzzle(
     c_nl                CHAR(1) := CHR(10);
     v_board_size        NUMBER;
     v_rule_id           game_rules.rule_id%TYPE;
-    v_encoded_board     VARCHAR2(128); -- Было puzzles.board_position%TYPE
+    v_encoded_board     VARCHAR2(128);
     v_new_puzzle_id     puzzles.puzzle_id%TYPE;
 
 BEGIN
@@ -54,25 +43,20 @@ BEGIN
     BEGIN
         v_clob_len := DBMS_LOB.getlength(p_board_position);
         
-        -- Парсинг CLOB построчно
         WHILE v_offset <= v_clob_len LOOP
             v_line_break := DBMS_LOB.instr(p_board_position, c_nl, v_offset);
             
             IF v_line_break = 0 THEN
-                -- Читаем до конца (amount = len - offset + 1)
                 v_line := DBMS_LOB.substr(p_board_position, v_clob_len - v_offset + 1, v_offset);
                 v_offset := v_clob_len + 1;
             ELSE
-                -- Читаем до переноса (amount = break - offset)
                 v_line := DBMS_LOB.substr(p_board_position, v_line_break - v_offset, v_offset);
                 v_offset := v_line_break + 1;
             END IF;
             
-            -- Очистка от пробелов/табуляций/переносов (включая возможный \r)
             v_line := REGEXP_REPLACE(v_line, '[[:space:]]', '');
             
             IF LENGTH(v_line) > 0 THEN
-                -- Защита от переполнения (если кто-то сунет гигантский CLOB)
                 IF LENGTH(v_single_line_board) + LENGTH(v_line) > 200 THEN
                      v_error_msg := 'Ошибка: Размер доски превышает допустимый предел.';
                      RAISE_APPLICATION_ERROR(-20006, v_error_msg);

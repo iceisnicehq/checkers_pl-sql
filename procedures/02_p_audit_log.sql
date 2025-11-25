@@ -1,8 +1,3 @@
--- @procedure p_audit_log
--- @brief Logs an audit event into the audit_log table.
--- @dependencies:
---   - audit_log (table)
-
 PROCEDURE p_audit_log(
     p_player_id  IN players.player_id%TYPE,
     p_game_id    IN games.game_id%TYPE,
@@ -21,5 +16,5 @@ BEGIN
     );
     COMMIT;
 EXCEPTION
-    WHEN OTHERS THEN NULL; -- Ошибки логирования игнорируем
+    WHEN OTHERS THEN NULL;
 END p_audit_log;

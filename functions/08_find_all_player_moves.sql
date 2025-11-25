@@ -1,15 +1,3 @@
--- @function find_all_player_moves
--- @brief Finds all legal moves for a given player.
--- @dependencies:
---   - decode_board (function)
---   - find_capture_paths (function)
---   - p_init_board_map (procedure)
---   - p_audit_log (procedure)
---   - game_rules (table)
---   - c_white_man, c_white_king, c_black_man, c_black_king, c_empty_field (constants)
---   - g_map_by_idx (global variable)
---   - t_move_list, r_move, r_move_step, rec_board_field (types)
-
 FUNCTION find_all_player_moves(
     p_board        IN VARCHAR2,
     p_player_color IN CHAR,
@@ -21,7 +9,7 @@ FUNCTION find_all_player_moves(
     v_player_man      CHAR(1);
     v_player_king     CHAR(1);
     v_max_captures    PLS_INTEGER := 0;
-    v_decoded_board   VARCHAR2(128) := decode_board(p_board); -- Max 128
+    v_decoded_board   VARCHAR2(128) := decode_board(p_board);
     
     v_rule            game_rules%ROWTYPE;
     v_board_size      PLS_INTEGER;
@@ -32,7 +20,6 @@ FUNCTION find_all_player_moves(
     v_max_king_range  PLS_INTEGER;
 
 BEGIN
-    -- 1. Настройка параметров
     BEGIN
         SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
         v_board_size      := v_rule.board_size;
@@ -45,7 +32,7 @@ BEGIN
             v_simple_move_w   := SYS.ODCINUMBERLIST(-9, -7);
             v_simple_move_b   := SYS.ODCINUMBERLIST(7, 9);
             v_simple_move_all := SYS.ODCINUMBERLIST(-9, -7, 7, 9);
-        ELSE -- 10x10
+        ELSE
             v_simple_move_w   := SYS.ODCINUMBERLIST(-11, -9);
             v_simple_move_b   := SYS.ODCINUMBERLIST(9, 11);
             v_simple_move_all := SYS.ODCINUMBERLIST(-11, -9, 9, 11);
@@ -65,7 +52,6 @@ BEGIN
         v_player_king := c_black_king;
     END IF;
     
-    -- === 1. ПОИСК ВЗЯТИЙ (Captures) ===
     FOR i IN 1 .. v_total_squares LOOP
         DECLARE
             v_piece   CHAR(1) := SUBSTR(v_decoded_board, i, 1);
@@ -90,13 +76,10 @@ BEGIN
         END;
     END LOOP;
 
-    -- === 2. ФИЛЬТРАЦИЯ ВЗЯТИЙ ===
     IF v_capture_moves.COUNT > 0 THEN
-        -- Правило 1 (Русские): Обязательно бить, но можно выбрать ЛЮБОЕ количество
         IF p_rule_id = 1 THEN 
             RETURN v_capture_moves;
         ELSE 
-        -- Правило 2 (Международные): Обязательно бить МАКСИМАЛЬНОЕ количество
             FOR i IN 1 .. v_capture_moves.COUNT LOOP
                 IF v_capture_moves(i).capture_count = v_max_captures THEN
                     v_all_moves.EXTEND;
@@ -107,7 +90,6 @@ BEGIN
         END IF;
     END IF;
 
-    -- === 3. ПОИСК "ТИХИХ" ХОДОВ (Simple moves) ===
     FOR i IN 1 .. v_total_squares LOOP
         DECLARE
             v_piece       CHAR(1) := SUBSTR(v_decoded_board, i, 1);
@@ -125,13 +107,11 @@ BEGIN
                             v_end_idx   PLS_INTEGER := i + v_directions(d);
                             v_end_field rec_board_field;
                         BEGIN
-                            -- Проверяем границы и пустоту клетки
                             IF v_end_idx BETWEEN 1 AND v_total_squares 
                                AND g_map_by_idx.EXISTS(v_end_idx) 
                                AND SUBSTR(v_decoded_board, v_end_idx, 1) = c_empty_field 
                             THEN
                                 v_end_field := g_map_by_idx(v_end_idx);
-                                -- Простая шашка ходит только на соседнюю клетку (разница колонок = 1)
                                 IF ABS(v_start_field.col_num - v_end_field.col_num) = 1 THEN
                                     DECLARE
                                         v_move r_move;
@@ -165,8 +145,6 @@ BEGIN
                                 IF NOT g_map_by_idx.EXISTS(v_end_idx) THEN EXIT; END IF;
                                 v_end_field := g_map_by_idx(v_end_idx);
                                 
-                                -- Проверка геометрии (чтобы не перепрыгнуть через край на другую строку)
-                                -- Если это не первый шаг, проверяем связность с предыдущей клеткой
                                 IF k > 1 AND ABS(g_map_by_idx(i + (v_directions(d) * (k - 1))).col_num - v_end_field.col_num) != 1 THEN
                                     EXIT;
                                 END IF;
@@ -186,7 +164,7 @@ BEGIN
                                         v_simple_moves(v_simple_moves.LAST) := v_move;
                                     END;
                                 ELSE
-                                    EXIT; -- Клетка занята, дальше идти нельзя
+                                    EXIT;
                                 END IF;
                             END;
                         END LOOP;

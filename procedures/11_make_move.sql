@@ -1,15 +1,3 @@
--- @procedure make_move
--- @brief Makes a move in the current game.
--- @dependencies:
---   - players (table)
---   - games (table)
---   - get_or_create_player_id (function)
---   - get_active_game (function)
---   - p_audit_log (procedure)
---   - p_process_move (procedure)
---   - print_active_board (procedure)
---   - get_ai_move (function)
-
 PROCEDURE make_move(p_move_notation IN VARCHAR2) IS
     v_game_id   NUMBER;
     v_game      games%ROWTYPE;
@@ -31,7 +19,7 @@ BEGIN
         RETURN;
     END IF;
 
-    SELECT * INTO v_game FROM games WHERE game_id = v_game_id;
+    SELECT * INTO v_game FROM games WHERE game_id = v_game_id FOR UPDATE;
 
     IF v_game.status <> 'A' THEN
         v_error_msg := 'Игра (ID: ' || v_game_id || ') еще не активна. Противник не подключился.';
@@ -49,34 +37,28 @@ BEGIN
         RETURN;
     END IF;
     
-    -- Ход человека
     p_process_move(v_game_id, p_move_notation, v_player_id, v_human_msg);
     
-    -- Если ошибка, выходим (сообщение уже напечатано в p_process_move)
     IF INSTR(LOWER(v_human_msg), 'неверный ход') > 0 OR INSTR(LOWER(v_human_msg), 'нелегальный ход') > 0 THEN
         RETURN;
     END IF;
     
-    -- Показываем доску после хода человека
     BEGIN
         print_active_board(p_game_id => v_game_id); 
     EXCEPTION
         WHEN OTHERS THEN NULL;
     END;
     
-    -- Ход ИИ (если нужно)
     DECLARE
         v_next_game_state games%ROWTYPE;
         v_ai_move         VARCHAR2(100);
     BEGIN
         SELECT * INTO v_next_game_state FROM games WHERE game_id = v_game_id;
 
-        -- ИИ ходит, если игра активна и сейчас его очередь (слот игрока NULL)
         IF v_next_game_state.status = 'A' AND v_next_game_state.ai_difficulty IS NOT NULL AND
            ((v_next_game_state.current_turn = 'W' AND v_next_game_state.player_white_id IS NULL) OR
             (v_next_game_state.current_turn = 'B' AND v_next_game_state.player_black_id IS NULL))
         THEN
-            -- Получаем текущую позицию доски: из последнего хода или начальная позиция
             DECLARE
                 v_ai_board_pos VARCHAR2(128);
             BEGIN
@@ -88,14 +70,12 @@ BEGIN
                     FETCH FIRST 1 ROW ONLY;
                 EXCEPTION
                     WHEN NO_DATA_FOUND THEN
-                        -- Если ходов нет, используем начальную позицию
                         v_ai_board_pos := get_initial_position(v_next_game_state.rule_id);
                         IF v_ai_board_pos IS NULL THEN
                             v_error_msg := 'Критическая ошибка: Не удалось получить начальную позицию для ИИ.';
                             p_audit_log(v_player_id, v_game_id, v_error_msg);
                             RETURN;
                         END IF;
-                        -- Кодируем начальную позицию для передачи в get_ai_move
                         v_ai_board_pos := encode_board(v_ai_board_pos);
                 END;
                 

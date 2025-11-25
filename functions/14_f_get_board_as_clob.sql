@@ -1,11 +1,3 @@
--- @function f_get_board_as_clob
--- @brief Returns a CLOB representing the board for display.
--- @dependencies:
---   - decode_board (function)
---   - p_init_board_map (procedure)
---   - c_empty_field (constant)
---   - t_map_indices (type)
-
 FUNCTION f_get_board_as_clob(
     p_board_position    IN VARCHAR2,
     p_highlight_indices IN t_map_indices DEFAULT t_map_indices()
@@ -13,13 +5,13 @@ FUNCTION f_get_board_as_clob(
     v_clob          CLOB;
     v_char          CHAR(1);
     v_linear_idx    PLS_INTEGER;
-    v_decoded_board VARCHAR2(128) := decode_board(p_board_position); -- Было 200
+    v_decoded_board VARCHAR2(128) := decode_board(p_board_position);
     c_nl CONSTANT   VARCHAR2(1)   := CHR(10);
     
     v_board_size    PLS_INTEGER;
     v_total_squares PLS_INTEGER;
-    v_header        VARCHAR2(128) := '  |'; -- Было 200
-    v_separator     VARCHAR2(128) := '--+'; -- Было 200
+    v_header        VARCHAR2(128) := '  |';
+    v_separator     VARCHAR2(128) := '--+';
     
 BEGIN
     DBMS_LOB.createtemporary(v_clob, TRUE);
@@ -35,14 +27,12 @@ BEGIN
     p_init_board_map(v_board_size);
     
     FOR c IN 1 .. v_board_size LOOP
-        -- Для доски 10x10 нужна буква 'j' (a-i, затем j)
         DECLARE
             v_col_letter CHAR(1);
         BEGIN
             IF c <= 9 THEN
                 v_col_letter := CHR(ASCII('A') + c - 1);
             ELSE
-                -- Для 10-й колонки используем 'J' (или можно 'j', но обычно заглавные)
                 v_col_letter := 'J';
             END IF;
             v_header    := v_header    || ' ' || v_col_letter || ' ';

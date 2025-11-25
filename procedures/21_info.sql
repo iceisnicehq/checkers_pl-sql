@@ -1,15 +1,9 @@
--- @procedure info
--- @brief Displays help information about the game_logic package.
--- @dependencies:
---   - (none)
-
 PROCEDURE info(p_proc_name IN VARCHAR2 DEFAULT NULL) IS
     c_nl CONSTANT VARCHAR2(1) := CHR(10);
     v_proc_name VARCHAR2(100) := UPPER(TRIM(p_proc_name));
     v_show_all BOOLEAN := (v_proc_name IS NULL OR v_proc_name = '');
     v_found BOOLEAN := FALSE;
 BEGIN
-    -- Если параметр не передан, показываем подсказку в начале
     IF v_show_all THEN
         DBMS_OUTPUT.PUT_LINE('================================================================');
         DBMS_OUTPUT.PUT_LINE('           Добро пожаловать в "Шашки на Oracle" (v1.2)');
@@ -26,7 +20,6 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(c_nl);
     END IF;
     
-    -- Секция 1: CREATE_GAME
     IF v_show_all OR v_proc_name = 'CREATE_GAME' THEN
         v_found := TRUE;
         DBMS_OUTPUT.PUT_LINE('================================================================');
@@ -75,7 +68,6 @@ BEGIN
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    -- Секция 2: JOIN_GAME
     IF v_show_all OR v_proc_name = 'JOIN_GAME' THEN
         v_found := TRUE;
         DBMS_OUTPUT.PUT_LINE('================================================================');
@@ -95,7 +87,6 @@ BEGIN
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    -- Секция 3: MAKE_MOVE
     IF v_show_all OR v_proc_name = 'MAKE_MOVE' THEN
         v_found := TRUE;
         DBMS_OUTPUT.PUT_LINE('================================================================');
@@ -133,7 +124,6 @@ BEGIN
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    -- Секция 4: PRINT_ACTIVE_BOARD
     IF v_show_all OR v_proc_name = 'PRINT_ACTIVE_BOARD' THEN
         v_found := TRUE;
         DBMS_OUTPUT.PUT_LINE('================================================================');
@@ -163,7 +153,6 @@ BEGIN
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    -- Секция 5: УПРАВЛЕНИЕ ИГРОЙ
     IF v_show_all OR v_proc_name = 'RESIGN_GAME' OR v_proc_name = 'CANCEL_GAME' OR v_proc_name = 'DRAW' THEN
         IF v_show_all OR v_proc_name = 'RESIGN_GAME' THEN
             v_found := TRUE;
@@ -224,7 +213,6 @@ BEGIN
         END IF;
     END IF;
     
-    -- Секция 6: МАТЧИ
     IF v_show_all OR v_proc_name = 'CREATE_MATCH' OR v_proc_name = 'JOIN_MATCH' THEN
         IF v_show_all OR v_proc_name = 'CREATE_MATCH' THEN
             v_found := TRUE;
@@ -276,7 +264,6 @@ BEGIN
         END IF;
     END IF;
     
-    -- Секция 7: ЗАДАЧИ И ГОЛОВОЛОМКИ
     IF v_show_all OR v_proc_name IN ('SHOW_DAILY_PUZZLE', 'SHOW_PUZZLES', 'SHOW_MY_PUZZLES', 'CREATE_PUZZLE', 'DELETE_MY_PUZZLE') THEN
         IF v_show_all OR v_proc_name = 'SHOW_DAILY_PUZZLE' THEN
             v_found := TRUE;
@@ -392,7 +379,6 @@ BEGIN
         END IF;
     END IF;
     
-    -- Секция 8: РЕЖИМ ЗРИТЕЛЯ И ПРОСМОТР РЕПЛЕЕВ
     IF v_show_all OR v_proc_name IN ('STOP_SPECTATING', 'WATCH_GAME_REPLAY') THEN
         IF v_show_all OR v_proc_name = 'STOP_SPECTATING' THEN
             v_found := TRUE;
@@ -444,7 +430,6 @@ BEGIN
         END IF;
     END IF;
     
-    -- Секция 9: ПРАВИЛА ИГРЫ (только при полном выводе)
     IF v_show_all THEN
         DBMS_OUTPUT.PUT_LINE('================================================================');
         DBMS_OUTPUT.PUT_LINE('## 9. ПРАВИЛА ИГРЫ');
@@ -477,7 +462,6 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(c_nl);
     END IF;
     
-    -- Секции 10-15: Общая информация (только при полном выводе)
     IF v_show_all THEN
         DBMS_OUTPUT.PUT_LINE('================================================================');
         DBMS_OUTPUT.PUT_LINE('## 10. ПАРАМЕТРЫ ИГРЫ');
@@ -601,7 +585,6 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('================================================================');
     END IF;
     
-    -- Если процедура не найдена, выводим сообщение
     IF NOT v_show_all AND NOT v_found THEN
         DBMS_OUTPUT.PUT_LINE('Ошибка: Процедура "' || v_proc_name || '" не найдена.');
         DBMS_OUTPUT.PUT_LINE('Доступные процедуры: CREATE_GAME, JOIN_GAME, MAKE_MOVE, PRINT_ACTIVE_BOARD,');

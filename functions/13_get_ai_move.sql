@@ -1,15 +1,5 @@
--- @function get_ai_move
--- @brief Main entry point for the AI to get its best move.
--- @dependencies:
---   - decode_board (function)
---   - p_init_board_map (procedure)
---   - minimax (function)
---   - find_all_player_moves (function)
---   - idx_to_notation (function)
---   - r_move, r_minimax_result, t_move_list (types)
-
 FUNCTION get_ai_move(
-    p_board_position IN game_moves.board_position%TYPE, -- ИСПРАВЛЕНО: game_moves вместо games
+    p_board_position IN game_moves.board_position%TYPE,
     p_ai_color       IN games.current_turn%TYPE,
     p_rule_id        IN games.rule_id%TYPE,
     p_difficulty     IN games.ai_difficulty%TYPE
@@ -47,7 +37,6 @@ BEGIN
     );
     v_chosen_move := v_minimax_result.move;
 
-    -- Fallback для Easy
     IF p_difficulty = 0 AND DBMS_RANDOM.VALUE < 0.25 THEN
          DECLARE
             v_random_moves t_move_list := find_all_player_moves(v_decoded_board, p_ai_color, p_rule_id);
@@ -58,7 +47,6 @@ BEGIN
          END;
      END IF;
 
-    -- Формирование строки хода
     IF v_chosen_move.path IS NOT NULL AND v_chosen_move.path.COUNT > 0 THEN
          v_best_move_str := idx_to_notation(v_chosen_move.path(1).start_idx, v_board_size);
          FOR j IN 1 .. v_chosen_move.path.COUNT LOOP
@@ -66,7 +54,6 @@ BEGIN
                               || idx_to_notation(v_chosen_move.path(j).end_idx, v_board_size);
          END LOOP;
     ELSE
-        -- Fallback, если Minimax вернул NULL
          DECLARE
             v_fallback_moves t_move_list := find_all_player_moves(v_decoded_board, p_ai_color, p_rule_id);
          BEGIN

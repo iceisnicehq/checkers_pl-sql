@@ -1,10 +1,3 @@
--- @procedure show_puzzles
--- @brief Shows a list of available puzzles.
--- @dependencies:
---   - puzzles (table)
---   - players (table)
---   - get_or_create_player_id (function)
-
 PROCEDURE show_puzzles(
     p_difficulty IN NUMBER DEFAULT NULL, 
     p_puzzle_id  IN NUMBER DEFAULT NULL
@@ -34,7 +27,6 @@ PROCEDURE show_puzzles(
 BEGIN
     v_player_id := get_or_create_player_id(USER);
 
-    -- ВАРИАНТ 1: Поиск конкретной задачи (Красивый вывод)
     IF p_puzzle_id IS NOT NULL THEN
         FOR r IN c_puzzles LOOP
             v_found := TRUE;
@@ -59,7 +51,6 @@ BEGIN
         RETURN;
     END IF;
 
-    -- ВАРИАНТ 2: Общий список (Табличный вывод)
     DBMS_OUTPUT.PUT_LINE('--- Список Доступных Задач ---');
     IF p_difficulty IS NOT NULL THEN
         DBMS_OUTPUT.PUT_LINE(' (Фильтр по Сложности: ' || p_difficulty || ')');

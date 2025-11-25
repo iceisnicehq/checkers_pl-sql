@@ -1,4 +1,3 @@
--- 2. GAME_RULES
 CREATE TABLE game_rules (
     rule_id             INT NOT NULL,
     rule_name           VARCHAR2(50) NOT NULL,

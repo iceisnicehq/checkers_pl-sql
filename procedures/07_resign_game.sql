@@ -1,16 +1,3 @@
--- @procedure resign_game
--- @brief Allows a player to resign from an active game.
--- @dependencies:
---   - games (table)
---   - players (table)
---   - spectators (table)
---   - matches (table)
---   - get_or_create_player_id (function)
---   - get_active_game (function)
---   - p_audit_log (procedure)
---   - p_update_ratings (procedure)
---   - p_drop_move_timeout_job (procedure)
-
 PROCEDURE resign_game(p_resign_match IN CHAR DEFAULT 'N') IS
     v_game        games%ROWTYPE;
     v_player_id   players.player_id%TYPE;
@@ -19,7 +6,6 @@ PROCEDURE resign_game(p_resign_match IN CHAR DEFAULT 'N') IS
 BEGIN
     v_player_id := get_or_create_player_id(user);
     
-    -- Проверка: Нельзя сдаться, если ты зритель
     DECLARE
         v_spectating_game_id NUMBER;
     BEGIN
@@ -63,14 +49,13 @@ BEGIN
         RETURN;
     END IF;
 
-    -- 1. Сдача в режиме ПАЗЛА
     IF v_game.puzzle_id IS NOT NULL THEN
         p_drop_move_timeout_job(v_game_id);
         
         UPDATE games
         SET status = 'V',
             end_time = SYSDATE,
-            puzzle_status = 'f' -- Failed
+            puzzle_status = 'f'
         WHERE game_id = v_game_id;
         
         UPDATE spectators SET left_at = SYSDATE 
@@ -79,7 +64,6 @@ BEGIN
         p_audit_log(v_player_id, v_game_id, p_event_msg => 'QUIT_PUZZLE');
         DBMS_OUTPUT.PUT_LINE('[OK] Вы вышли из попытки решения задачи (ID сессии: ' || v_game_id || ').');
         
-    -- 2. Сдача в режиме ИГРЫ
     ELSE
         DECLARE
             v_winner_id       players.player_id%TYPE;
@@ -97,7 +81,7 @@ BEGIN
             p_drop_move_timeout_job(v_game_id);
             
             UPDATE games
-            SET status              = 'R', -- Resigned
+            SET status              = 'R',
                 winner_player_color = v_winner_color,
                 end_time            = SYSDATE
             WHERE game_id = v_game_id;
@@ -105,7 +89,6 @@ BEGIN
             UPDATE spectators SET left_at = SYSDATE 
             WHERE game_id = v_game_id AND left_at IS NULL;
 
-            -- Сдача во всем МАТЧЕ
             IF UPPER(p_resign_match) = 'Y' AND v_game.match_id IS NOT NULL THEN
                 UPDATE matches
                 SET status = 'C',

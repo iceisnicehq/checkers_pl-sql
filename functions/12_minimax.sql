@@ -1,11 +1,3 @@
--- @function minimax
--- @brief The core recursive Minimax algorithm with Alpha-Beta Pruning.
--- @dependencies:
---   - get_sorted_possible_moves (function)
---   - evaluate_board (function)
---   - apply_move_to_board (function)
---   - r_minimax_result, t_move_list (types)
-
 FUNCTION minimax(
     p_board         IN VARCHAR2,
     p_depth         IN PLS_INTEGER,
@@ -40,7 +32,7 @@ BEGIN
         v_result.score := -99999; 
         FOR i IN 1..v_possible_moves.COUNT LOOP
             DECLARE
-                v_new_board   VARCHAR2(128) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color); -- Было 200
+                v_new_board   VARCHAR2(128) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color);
                 v_eval_result r_minimax_result;
             BEGIN
                 v_eval_result := minimax(
@@ -62,16 +54,16 @@ BEGIN
                 v_local_alpha := GREATEST(v_local_alpha, v_eval_result.score);
                 
                 IF v_local_beta <= v_local_alpha THEN
-                    EXIT; -- Pruning
+                    EXIT;
                 END IF;
             END;
         END LOOP;
         RETURN v_result;
-    ELSE -- Minimizing player
+    ELSE
         v_result.score := 99999;
         FOR i IN 1..v_possible_moves.COUNT LOOP
             DECLARE
-                v_new_board   VARCHAR2(128) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color); -- Было 200
+                v_new_board   VARCHAR2(128) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color);
                 v_eval_result r_minimax_result;
             BEGIN
                 v_eval_result := minimax(
@@ -93,7 +85,7 @@ BEGIN
                 v_local_beta := LEAST(v_local_beta, v_eval_result.score);
 
                 IF v_local_beta <= v_local_alpha THEN
-                    EXIT; -- Pruning
+                    EXIT;
                 END IF;
             END;
         END LOOP;
