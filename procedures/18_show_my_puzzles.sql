@@ -1,4 +1,4 @@
-PROCEDURE show_my_puzzles(p_difficulty IN NUMBER DEFAULT NULL) IS
+PROCEDURE show_my_puzzles(p_difficulty IN CHAR DEFAULT NULL) IS
     v_player_id players.player_id%TYPE;
     v_found     BOOLEAN := FALSE;
     v_visual_board CLOB;

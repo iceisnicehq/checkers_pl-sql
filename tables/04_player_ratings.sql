@@ -9,4 +9,3 @@ CREATE TABLE player_ratings (
     CONSTRAINT fk_ratings_rule FOREIGN KEY (rule_id) REFERENCES game_rules(rule_id),
     CONSTRAINT fk_ratings_season FOREIGN KEY (season_id) REFERENCES seasons(season_id)
 );
-COMMENT ON TABLE player_ratings IS 'Рейтинги и статистика игроков в разрезе правил и сезонов.';

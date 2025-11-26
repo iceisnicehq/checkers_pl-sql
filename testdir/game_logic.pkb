@@ -771,7 +771,7 @@ END get_sorted_possible_moves;
 FUNCTION evaluate_board(
     p_board      IN VARCHAR2,
     p_ai_color   IN CHAR,
-    p_difficulty IN NUMBER
+    p_difficulty IN CHAR
 ) RETURN NUMBER IS
     v_score          NUMBER := 0;
     v_piece          CHAR(1);
@@ -825,8 +825,7 @@ BEGIN
                 
                 v_score := v_score + (v_piece_value * v_multiplier);
 
-                -- Позиционные бонусы (только для Easy/Medium, на Hard чистый перебор)
-                IF p_difficulty < 2 THEN
+                IF p_difficulty != 'H' THEN
                     -- Бонус за борт
                     IF v_col = 1 OR v_col = v_board_size THEN
                         v_position_bonus := v_position_bonus + c_side_val;
@@ -927,7 +926,7 @@ FUNCTION minimax(
     p_beta          IN NUMBER, 
     p_is_maximizing IN BOOLEAN,
     p_ai_color      IN CHAR,
-    p_difficulty    IN NUMBER,
+    p_difficulty    IN CHAR,
     p_rule_id       IN NUMBER
 ) RETURN r_minimax_result IS
     v_result         r_minimax_result;
@@ -1063,8 +1062,7 @@ BEGIN
     );
     v_chosen_move := v_minimax_result.move;
 
-    -- Fallback для Easy
-    IF p_difficulty = 0 AND DBMS_RANDOM.VALUE < 0.25 THEN
+    IF p_difficulty = 'E' AND DBMS_RANDOM.VALUE < 0.25 THEN
          DECLARE
             v_random_moves t_move_list := find_all_player_moves(v_decoded_board, p_ai_color, p_rule_id);
          BEGIN
@@ -3647,7 +3645,7 @@ PROCEDURE create_puzzle(
     p_board_position   IN CLOB,
     p_turn_to_move     IN CHAR,
     p_moves_to_solve   IN NUMBER DEFAULT NULL,
-    p_difficulty_level IN NUMBER DEFAULT 1 -- Исправил тип на NUMBER, как в PKS
+    p_difficulty_level IN CHAR DEFAULT 'E'
 ) IS
     v_player_id players.player_id%TYPE;
     v_error_msg VARCHAR2(500);
@@ -3681,6 +3679,12 @@ BEGIN
     
     IF p_moves_to_solve IS NOT NULL AND p_moves_to_solve <= 0 THEN
          v_error_msg := 'Ошибка: p_moves_to_solve должен быть больше 0 или NULL.';
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    IF p_difficulty_level IS NOT NULL AND p_difficulty_level NOT IN ('E', 'M', 'H') THEN
+        v_error_msg := 'Ошибка: p_difficulty_level должен быть ''E'' (Easy), ''M'' (Medium) или ''H'' (Hard).';
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
@@ -3837,7 +3841,7 @@ END create_puzzle;
 --   - get_or_create_player_id (function)
 
 PROCEDURE show_puzzles(
-    p_difficulty IN NUMBER DEFAULT NULL, 
+    p_difficulty IN CHAR DEFAULT NULL, 
     p_puzzle_id  IN NUMBER DEFAULT NULL
 ) IS
     v_player_id players.player_id%TYPE;
@@ -3939,7 +3943,7 @@ END show_puzzles;
 --   - get_or_create_player_id (function)
 --   - f_get_board_as_clob (function)
 
-PROCEDURE show_my_puzzles(p_difficulty IN NUMBER DEFAULT NULL) IS
+PROCEDURE show_my_puzzles(p_difficulty IN CHAR DEFAULT NULL) IS
     v_player_id players.player_id%TYPE;
     v_found     BOOLEAN := FALSE;
     v_visual_board CLOB;
@@ -4437,12 +4441,12 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE('7.2. ПРОСМОТР ЗАДАЧ (SHOW_PUZZLES)');
             DBMS_OUTPUT.PUT_LINE('----------------------------------');
             DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
-            DBMS_OUTPUT.PUT_LINE('  p_difficulty - Фильтр по сложности (1, 2, 3...). NULL = все задачи.');
+            DBMS_OUTPUT.PUT_LINE('  p_difficulty - Фильтр по сложности: ''E'' (Easy), ''M'' (Medium), ''H'' (Hard). NULL = все задачи.');
             DBMS_OUTPUT.PUT_LINE('  p_puzzle_id  - ID конкретной задачи для детального просмотра. NULL = список всех.');
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
             DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_puzzles; END;  -- Список всех задач');
-            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_puzzles(p_difficulty => 1); END;  -- Только сложность 1');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_puzzles(p_difficulty => ''E''); END;  -- Только Easy');
             DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_puzzles(p_puzzle_id => 10); END;  -- Детальный просмотр с доской');
             DBMS_OUTPUT.PUT_LINE(c_nl);
             
@@ -4456,7 +4460,7 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE('Показывает задачи, созданные вами.');
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
-            DBMS_OUTPUT.PUT_LINE('  p_difficulty - Фильтр по сложности. NULL = все ваши задачи.');
+            DBMS_OUTPUT.PUT_LINE('  p_difficulty - Фильтр по сложности: ''E'' (Easy), ''M'' (Medium), ''H'' (Hard). NULL = все ваши задачи.');
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПРИМЕР:');
             DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_my_puzzles; END;');
@@ -4477,7 +4481,7 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE('                       Символы: ''w''/''W'' (белая простая/дамка), ''b''/''B'' (черная), ''+'' (пусто).');
             DBMS_OUTPUT.PUT_LINE('  p_turn_to_move     - Чей ход: ''W'' (Белые) или ''B'' (Черные).');
             DBMS_OUTPUT.PUT_LINE('  p_moves_to_solve   - Количество ходов для решения. NULL = без ограничения.');
-            DBMS_OUTPUT.PUT_LINE('  p_difficulty_level - Уровень сложности (1, 2, 3...). По умолчанию 1.');
+            DBMS_OUTPUT.PUT_LINE('  p_difficulty_level - Уровень сложности: ''E'' (Easy), ''M'' (Medium), ''H'' (Hard). По умолчанию ''E''.');
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПРИМЕР (8x8):');
             DBMS_OUTPUT.PUT_LINE('  BEGIN');
@@ -4492,7 +4496,7 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE('                        ''w+w+w+w+'',');
             DBMS_OUTPUT.PUT_LINE('      p_turn_to_move => ''W'',');
             DBMS_OUTPUT.PUT_LINE('      p_moves_to_solve => 3,');
-            DBMS_OUTPUT.PUT_LINE('      p_difficulty_level => 1');
+            DBMS_OUTPUT.PUT_LINE('      p_difficulty_level => ''E''');
             DBMS_OUTPUT.PUT_LINE('    );');
             DBMS_OUTPUT.PUT_LINE('  END;');
             DBMS_OUTPUT.PUT_LINE(c_nl);

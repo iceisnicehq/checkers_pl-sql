@@ -105,12 +105,12 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_board_position   IN CLOB,
         p_turn_to_move     IN CHAR,
         p_moves_to_solve   IN NUMBER DEFAULT NULL,
-        p_difficulty_level IN NUMBER DEFAULT 1
+        p_difficulty_level IN CHAR DEFAULT 'E'
     );
     
-    PROCEDURE show_puzzles(p_difficulty IN NUMBER DEFAULT NULL, p_puzzle_id IN NUMBER DEFAULT NULL); 
+    PROCEDURE show_puzzles(p_difficulty IN CHAR DEFAULT NULL, p_puzzle_id IN NUMBER DEFAULT NULL); 
     
-    PROCEDURE show_my_puzzles(p_difficulty IN NUMBER DEFAULT NULL); 
+    PROCEDURE show_my_puzzles(p_difficulty IN CHAR DEFAULT NULL); 
     
     PROCEDURE delete_my_puzzle(p_puzzle_id IN NUMBER);
     
@@ -230,7 +230,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
     FUNCTION evaluate_board(
         p_board      IN VARCHAR2,
         p_ai_color   IN CHAR,
-        p_difficulty IN NUMBER 
+        p_difficulty IN CHAR
     ) RETURN NUMBER;
 
     FUNCTION apply_move_to_board(
@@ -246,7 +246,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_beta          IN NUMBER,
         p_is_maximizing IN BOOLEAN,
         p_ai_color      IN CHAR,
-        p_difficulty    IN NUMBER,
+        p_difficulty    IN CHAR,
         p_rule_id       IN NUMBER
     ) RETURN r_minimax_result;
 

@@ -104,7 +104,7 @@ CREATE TABLE puzzles (
     rule_id              INT DEFAULT 1 NOT NULL,
     turn_to_move         CHAR(1) DEFAULT 'W' NOT NULL,
     moves_to_solve       INT DEFAULT NULL,
-    difficulty_level     CHAR(1) DEFAULT 1 NOT NULL,
+    difficulty_level     CHAR(1) DEFAULT 'E' NOT NULL,
     created_by_player_id INT,
     end_condition        CHAR(1),
     solution             VARCHAR2(1000), 
@@ -259,32 +259,29 @@ BEGIN
     DELETE FROM C##CHECKERS_APP.daily_puzzles;
     DELETE FROM C##CHECKERS_APP.puzzles WHERE created_by_player_id IS NULL;
     
-    -- Difficulty 0 (Easy)
     INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('12b4b5b2b8w1b1w11w3w8', 'W', 4, 0, NULL);
+    VALUES ('12b4b5b2b8w1b1w11w3w8', 'W', 4, 'E', NULL);
 
     INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('10b1b6b1b8b4w3w13w1b2w5', 'W', 3, 0, NULL);
+    VALUES ('10b1b6b1b8b4w3w13w1b2w5', 'W', 3, 'E', NULL);
 
     INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('12b4b3b8b4w1b1w2w8w12', 'W', 3, 0, NULL);
-
-    -- Difficulty 1 (Medium)
-    INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('1b12b6b3b2b4b1w1b1w6w4w3b2w1w1w1', 'W', 9, 1, NULL);
+    VALUES ('12b4b3b8b4w1b1w2w8w12', 'W', 3, 'E', NULL);
 
     INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('17b1b13w1b3b4b8w1ww3w3', 'W', 5, 1, NULL);
+    VALUES ('1b12b6b3b2b4b1w1b1w6w4w3b2w1w1w1', 'W', 9, 'M', NULL);
 
     INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('14b2b1b1b6b4w6w1w1w15w3', 'W', 6, 1, NULL);
-
-    -- Difficulty 2 (Hard)
-    INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('5b1bb12w2w12b17b4w1w1', 'W', 12, 2, NULL);
+    VALUES ('17b1b13w1b3b4b8w1ww3w3', 'W', 5, 'M', NULL);
 
     INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('8w1b13b3b6b6w1b13w1w3', 'W', 5, 2, NULL);
+    VALUES ('14b2b1b1b6b4w6w1w1w15w3', 'W', 6, 'M', NULL);
+
+    INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
+    VALUES ('5b1bb12w2w12b17b4w1w1', 'W', 12, 'H', NULL);
+
+    INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
+    VALUES ('8w1b13b3b6b6w1b13w1w3', 'W', 5, 'H', NULL);
 
     INSERT INTO C##CHECKERS_APP.puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
     VALUES ('8w1b1b1w18w1b4b10w3b8', 'W', 4, 2, NULL);

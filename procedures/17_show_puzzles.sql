@@ -1,5 +1,5 @@
 PROCEDURE show_puzzles(
-    p_difficulty IN NUMBER DEFAULT NULL, 
+    p_difficulty IN CHAR DEFAULT NULL, 
     p_puzzle_id  IN NUMBER DEFAULT NULL
 ) IS
     v_player_id players.player_id%TYPE;

@@ -37,7 +37,7 @@ BEGIN
     );
     v_chosen_move := v_minimax_result.move;
 
-    IF p_difficulty = 0 AND DBMS_RANDOM.VALUE < 0.25 THEN
+    IF p_difficulty = 'E' AND DBMS_RANDOM.VALUE < 0.25 THEN
          DECLARE
             v_random_moves t_move_list := find_all_player_moves(v_decoded_board, p_ai_color, p_rule_id);
          BEGIN

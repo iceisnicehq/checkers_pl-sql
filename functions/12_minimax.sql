@@ -5,7 +5,7 @@ FUNCTION minimax(
     p_beta          IN NUMBER, 
     p_is_maximizing IN BOOLEAN,
     p_ai_color      IN CHAR,
-    p_difficulty    IN NUMBER,
+    p_difficulty    IN CHAR,
     p_rule_id       IN NUMBER
 ) RETURN r_minimax_result IS
     v_result         r_minimax_result;

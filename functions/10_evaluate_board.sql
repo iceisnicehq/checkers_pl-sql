@@ -1,7 +1,7 @@
 FUNCTION evaluate_board(
     p_board      IN VARCHAR2,
     p_ai_color   IN CHAR,
-    p_difficulty IN NUMBER
+    p_difficulty IN CHAR
 ) RETURN NUMBER IS
     v_score          NUMBER := 0;
     v_piece          CHAR(1);
@@ -51,7 +51,7 @@ BEGIN
                 
                 v_score := v_score + (v_piece_value * v_multiplier);
 
-                IF p_difficulty < 2 THEN
+                IF p_difficulty != 'H' THEN
                     IF v_col = 1 OR v_col = v_board_size THEN
                         v_position_bonus := v_position_bonus + c_side_val;
                     END IF;

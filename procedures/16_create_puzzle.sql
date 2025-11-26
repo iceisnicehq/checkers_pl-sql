@@ -2,7 +2,7 @@ PROCEDURE create_puzzle(
     p_board_position   IN CLOB,
     p_turn_to_move     IN CHAR,
     p_moves_to_solve   IN NUMBER DEFAULT NULL,
-    p_difficulty_level IN NUMBER DEFAULT 1
+    p_difficulty_level IN CHAR DEFAULT 'E'
 ) IS
     v_player_id players.player_id%TYPE;
     v_error_msg VARCHAR2(500);
@@ -36,6 +36,12 @@ BEGIN
     
     IF p_moves_to_solve IS NOT NULL AND p_moves_to_solve <= 0 THEN
          v_error_msg := 'Ошибка: p_moves_to_solve должен быть больше 0 или NULL.';
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
+    IF p_difficulty_level IS NOT NULL AND p_difficulty_level NOT IN ('E', 'M', 'H') THEN
+        v_error_msg := 'Ошибка: p_difficulty_level должен быть ''E'' (Easy), ''M'' (Medium) или ''H'' (Hard).';
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
