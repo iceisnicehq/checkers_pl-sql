@@ -14,12 +14,12 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     -- =========================================================================
     TYPE rec_board_field IS RECORD(
         idx      PLS_INTEGER,
-        notation VARCHAR2(10), -- Увеличено с 2 до 10 для поддержки нотаций типа 'j10' для досок 10x10
+        notation VARCHAR2(50), -- Увеличено до 50 для поддержки длинных нотаций
         row_num  PLS_INTEGER,
         col_num  PLS_INTEGER
     );
     -- Тип для карты "нотация -> поле"
-    TYPE map_notation_to_field IS TABLE OF rec_board_field INDEX BY VARCHAR2(10); -- Увеличено до 10 (для 'j10')
+    TYPE map_notation_to_field IS TABLE OF rec_board_field INDEX BY VARCHAR2(50);
     
     -- Тип для карты "индекс -> поле"
     TYPE map_idx_to_field IS TABLE OF rec_board_field INDEX BY PLS_INTEGER;
@@ -31,19 +31,19 @@ CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
     -- "Флаг" который говорит нам, карта какого размера сейчас в кэше
     g_current_map_size  PLS_INTEGER := 0;
 
--- @function encode_board
--- @brief Compresses (encodes) a board string using RLE.
--- [ИЗМЕНЕНИЕ] Увеличен буфер v_encoded_board для поддержки 10x10 без риска переполнения
+-- =========================================================================
+-- ФУНКЦИЯ: encode_board
+-- =========================================================================
+-- Сжимает строку доски используя RLE (Run-Length Encoding).
+-- Пример: "+++b++w" -> "3b2w" (3 пустых, b, 2 пустых, w)
+-- Алгоритм: Проходит по строке, считает последовательные пустые клетки (+),
+-- заменяет их на число. Непустые клетки (w, W, b, B) записываются как есть.
+-- Возвращает: Сжатую строку.
 FUNCTION encode_board(p_decoded_board IN VARCHAR2) RETURN VARCHAR2 IS
-    v_encoded_board VARCHAR2(128) := '';
+    v_encoded_board VARCHAR2(100) := '';
     v_plus_count    PLS_INTEGER := 0;
     v_char          CHAR(1);
 BEGIN
-    -- Если строка не содержит плюсов, возможно, она уже сжата.
-    IF INSTR(p_decoded_board, c_empty_field) = 0 THEN
-        RETURN p_decoded_board;
-    END IF;
-
     FOR i IN 1 .. LENGTH(p_decoded_board) LOOP
         v_char := SUBSTR(p_decoded_board, i, 1);
         IF v_char = c_empty_field THEN
@@ -63,20 +63,20 @@ BEGIN
 
     RETURN v_encoded_board;
 END encode_board;
--- @function decode_board
--- @brief Decompresses (decodes) an RLE board string into a full string.
--- [ИЗМЕНЕНИЕ] Увеличен буфер v_decoded_board для поддержки 10x10
+-- =========================================================================
+-- ФУНКЦИЯ: decode_board
+-- =========================================================================
+-- Распаковывает RLE-сжатую строку доски в полную строку.
+-- Пример: "3b2w" -> "+++b++w" (3 пустых, b, 2 пустых, w)
+-- Алгоритм: Проходит по строке, встречая числа - заменяет их на соответствующее
+-- количество пустых клеток (+), остальные символы копирует как есть.
+-- Возвращает: Распакованную строку.
 FUNCTION decode_board(p_encoded_board IN VARCHAR2) RETURN VARCHAR2 IS
-    v_decoded_board VARCHAR2(128) := ''; 
+    v_decoded_board VARCHAR2(100) := ''; 
     v_num_str       VARCHAR2(2) := '';
     v_char          CHAR(1);
     i               PLS_INTEGER := 1;
 BEGIN
-    -- Если строка содержит плюсы, она уже, скорее всего, раскодирована.
-    IF INSTR(p_encoded_board, c_empty_field) > 0 THEN
-        RETURN p_encoded_board;
-    END IF;
-
     WHILE i <= LENGTH(p_encoded_board) LOOP
         v_char := SUBSTR(p_encoded_board, i, 1);
 
@@ -98,13 +98,14 @@ BEGIN
 
     RETURN v_decoded_board;
 END decode_board;
--- @function get_active_game
--- @brief Finds ANY active session (game OR spectating).
--- @return game_id if the player is busy (playing or watching), otherwise NULL.
--- @dependencies:
---   - games (table)
---   - spectators (table)
-
+-- =========================================================================
+-- ФУНКЦИЯ: get_active_game
+-- =========================================================================
+-- Находит любую активную сессию игрока: игру или просмотр.
+-- Проверяет два источника:
+--   1. Таблица games - игрок участвует в игре (статусы 'A', 'O', 'C')
+--   2. Таблица spectators - игрок смотрит игру (left_at IS NULL)
+-- Возвращает: game_id если игрок занят, иначе NULL.
 FUNCTION get_active_game(p_user_id IN players.player_id%TYPE) RETURN NUMBER IS
     v_game_id games.game_id%TYPE;
 BEGIN
@@ -140,11 +141,13 @@ BEGIN
             RETURN NULL;
     END;
 END get_active_game;
--- @function get_or_create_player_id
--- @brief Retrieves the player_id for a given username, creating the player if it doesn't exist.
--- @dependencies:
---   - players (table)
-
+-- =========================================================================
+-- ФУНКЦИЯ: get_or_create_player_id
+-- =========================================================================
+-- Получает player_id для указанного username, создавая игрока если его нет.
+-- Для нового игрока автоматически создаются начальные рейтинги (500) для всех правил
+-- в текущем сезоне. Сезон берется активный или последний созданный.
+-- Возвращает: player_id (существующий или новый).
 FUNCTION get_or_create_player_id(p_username IN VARCHAR2) RETURN NUMBER IS
     v_player_id players.player_id%TYPE;
     v_current_season_id seasons.season_id%TYPE;
@@ -163,35 +166,14 @@ BEGIN
             -- Создаем начальные рейтинги для нового игрока (500 по умолчанию)
             -- Для всех правил и текущего сезона
             BEGIN
-                -- Получаем текущий сезон
                 SELECT season_id INTO v_current_season_id
                 FROM seasons
                 WHERE SYSDATE BETWEEN start_date AND end_date
                 AND ROWNUM = 1;
             EXCEPTION
                 WHEN NO_DATA_FOUND THEN
-                    -- Если сезона нет, берем последний созданный или создаем новый
-                    BEGIN
-                        SELECT MAX(season_id) INTO v_current_season_id FROM seasons;
-                        IF v_current_season_id IS NULL THEN
-                            -- Создаем сезон если его нет
-                            DECLARE
-                                v_month_names SYS.ODCIVARCHAR2LIST := SYS.ODCIVARCHAR2LIST(
-                                    'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-                                    'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
-                                );
-                                v_month_num PLS_INTEGER := EXTRACT(MONTH FROM SYSDATE);
-                                v_year_num PLS_INTEGER := EXTRACT(YEAR FROM SYSDATE);
-                                v_season_name VARCHAR2(100) := v_month_names(v_month_num) || '-' || v_year_num;
-                                v_start_date DATE := TRUNC(SYSDATE, 'MM');
-                                v_end_date DATE := ADD_MONTHS(v_start_date, 1) - 1;
-                            BEGIN
-                                INSERT INTO seasons (season_name, start_date, end_date)
-                                VALUES (v_season_name, v_start_date, v_end_date)
-                                RETURNING season_id INTO v_current_season_id;
-                            END;
-                        END IF;
-                    END;
+                    -- Если активного сезона нет, берем последний созданный
+                    SELECT MAX(season_id) INTO v_current_season_id FROM seasons;
             END;
             
             -- Создаем рейтинги для всех правил
@@ -201,16 +183,21 @@ BEGIN
                         INSERT INTO player_ratings (player_id, rule_id, season_id, rating)
                         VALUES (v_player_id, r.rule_id, v_current_season_id, 500);
                     EXCEPTION
-                        WHEN OTHERS THEN NULL; -- Игнорируем ошибки
+                        WHEN OTHERS THEN NULL;
                     END;
                 END LOOP;
             END IF;
     END;
     RETURN v_player_id;
 END get_or_create_player_id;
--- @function get_initial_position
--- @brief Returns the starting board position string based on rules.
-
+-- =========================================================================
+-- ФУНКЦИЯ: get_initial_position
+-- =========================================================================
+-- Возвращает начальную позицию доски в зависимости от правил игры.
+-- Для 8x8 (Русские шашки): 64 символа, черные сверху, белые снизу.
+-- Для 10x10 (Международные): 100 символов, черные сверху, белые снизу.
+-- Формат: Строка из символов w/W (белые), b/B (черные), + (пусто).
+-- Порядок: Строка 8/10 (верх) -> Строка 1 (низ), слева направо.
 FUNCTION get_initial_position(p_rule_id IN NUMBER) RETURN VARCHAR2 IS
     v_rule      game_rules%ROWTYPE;
     v_error_msg VARCHAR2(255); 
@@ -260,12 +247,14 @@ BEGIN
         RETURN NULL;
     END IF;
 END get_initial_position;
--- @function idx_to_notation
--- @brief Converts a board index to its notation (e.g., 1 -> 'a1').
--- @dependencies:
---   - p_init_board_map (procedure)
---   - g_map_by_idx (global variable)
-
+-- =========================================================================
+-- ФУНКЦИЯ: idx_to_notation
+-- =========================================================================
+-- Преобразует линейный индекс доски в шахматную нотацию.
+-- Примеры: 1 -> 'a1', 8 -> 'h1', 57 -> 'a8', 100 -> 'j10' (для 10x10).
+-- Использует кэш g_map_by_idx для быстрого доступа.
+-- Параметры: p_idx - линейный индекс (1..64 для 8x8, 1..100 для 10x10),
+--            p_board_size - размер доски (8 или 10).
 FUNCTION idx_to_notation(
     p_idx IN PLS_INTEGER, 
     p_board_size IN NUMBER -- <-- НОВЫЙ ПАРАМЕТР
@@ -282,17 +271,16 @@ EXCEPTION
     WHEN NO_DATA_FOUND THEN
         RETURN NULL;
 END idx_to_notation;
--- @function find_capture_paths
--- @brief Recursively finds all possible capture paths from a starting position.
--- @dependencies:
---   - decode_board (function)
---   - p_init_board_map (procedure)
---   - p_audit_log (procedure)
---   - game_rules (table)
---   - c_black_man, c_black_king, c_white_man, c_white_king, c_empty_field (constants)
---   - g_map_by_idx (global variable)
---   - rec_board_field, t_move_list, t_move_path, r_move_step, r_move (types)
-
+-- =========================================================================
+-- ФУНКЦИЯ: find_capture_paths
+-- =========================================================================
+-- Рекурсивно находит все возможные пути взятий (capture paths) из начальной позиции.
+-- Алгоритм: Для каждого направления прыжка проверяет возможность взятия,
+-- рекурсивно продолжает поиск с новой позиции после взятия.
+-- Поддерживает цепочки взятий (множественные взятия за один ход).
+-- Для простых шашек: прыжок на 2 клетки по диагонали.
+-- Для дамок: прыжок на любое расстояние по диагонали с произвольным приземлением.
+-- Возвращает: Список всех возможных путей взятий (t_move_list).
 FUNCTION find_capture_paths(
     p_start_idx    IN PLS_INTEGER,
     p_board        IN VARCHAR2,
@@ -305,7 +293,7 @@ FUNCTION find_capture_paths(
     v_leaf_paths          t_move_list := t_move_list();
     v_opponent_man        CHAR(1);
     v_opponent_king       CHAR(1);
-    v_decoded_board       VARCHAR2(128) := decode_board(p_board); -- 128 chars max
+    v_decoded_board       VARCHAR2(100) := decode_board(p_board);
     
     v_rule                game_rules%ROWTYPE;
     v_board_size          PLS_INTEGER;
@@ -516,18 +504,19 @@ BEGIN
     END IF;
 
 END find_capture_paths;
--- @function find_all_player_moves
--- @brief Finds all legal moves for a given player.
--- @dependencies:
---   - decode_board (function)
---   - find_capture_paths (function)
---   - p_init_board_map (procedure)
---   - p_audit_log (procedure)
---   - game_rules (table)
---   - c_white_man, c_white_king, c_black_man, c_black_king, c_empty_field (constants)
---   - g_map_by_idx (global variable)
---   - t_move_list, r_move, r_move_step, rec_board_field (types)
-
+-- =========================================================================
+-- ФУНКЦИЯ: find_all_player_moves
+-- =========================================================================
+-- Находит все легальные ходы для указанного игрока на текущей позиции доски.
+-- Алгоритм:
+--   1. Сначала ищет все возможные взятия (captures) через find_capture_paths
+--   2. Если есть взятия - возвращает их (обязательно бить в шашках)
+--      - Русские (rule_id=1): можно выбрать любое взятие
+--      - Международные (rule_id=2): обязательно максимальное количество фигур
+--   3. Если взятий нет - ищет тихие ходы (simple moves)
+--      - Простые шашки: ход на 1 клетку вперед по диагонали
+--      - Дамки: ход на любое количество клеток по диагонали
+-- Возвращает: Список всех легальных ходов (t_move_list).
 FUNCTION find_all_player_moves(
     p_board        IN VARCHAR2,
     p_player_color IN CHAR,
@@ -539,7 +528,7 @@ FUNCTION find_all_player_moves(
     v_player_man      CHAR(1);
     v_player_king     CHAR(1);
     v_max_captures    PLS_INTEGER := 0;
-    v_decoded_board   VARCHAR2(128) := decode_board(p_board); -- Max 128
+    v_decoded_board   VARCHAR2(100) := decode_board(p_board);
     
     v_rule            game_rules%ROWTYPE;
     v_board_size      PLS_INTEGER;
@@ -716,58 +705,15 @@ BEGIN
 
     RETURN v_simple_moves;
 END find_all_player_moves;
--- @function get_sorted_possible_moves
--- @brief Gets all possible moves and sorts them based on a heuristic score.
--- @dependencies:
---   - find_all_player_moves (function)
---   - t_move_list, r_move (types)
-
-FUNCTION get_sorted_possible_moves(
-    p_board   IN VARCHAR2,
-    p_color   IN CHAR,
-    p_rule_id IN NUMBER
-) RETURN t_move_list IS
-    v_moves t_move_list;
-    v_temp  r_move; -- A temporary record for swapping
-BEGIN
-    v_moves := find_all_player_moves(p_board, p_color, p_rule_id);
-    
-    IF v_moves.COUNT < 2 THEN
-        RETURN v_moves; -- No need to sort if 0 or 1 move
-    END IF;
-
-    -- Assign a score to each move
-    FOR i IN 1..v_moves.COUNT LOOP
-        v_moves(i).score := 0;
-        -- Highest priority: Captures. More captures are better.
-        IF v_moves(i).is_capture = 'Y' THEN
-            v_moves(i).score := 1000 + v_moves(i).capture_count;
-        END IF;
-    END LOOP;
-    
-    -- Sort the collection in PL/SQL using a simple bubble sort
-    FOR i IN 1 .. v_moves.COUNT - 1 LOOP
-        FOR j IN i + 1 .. v_moves.COUNT LOOP
-            -- If the current move has a lower score than the next one, swap them
-            IF v_moves(i).score < v_moves(j).score THEN
-                v_temp := v_moves(i);
-                v_moves(i) := v_moves(j);
-                v_moves(j) := v_temp;
-            END IF;
-        END LOOP;
-    END LOOP;
-
-    RETURN v_moves;
-
-END get_sorted_possible_moves;
--- @function evaluate_board
--- @brief Assigns a numerical score to a given board position.
--- @dependencies:
---   - p_init_board_map (procedure)
---   - c_empty_field (constant)
---   - g_map_by_idx (global variable)
---   - rec_board_field (type)
-
+-- =========================================================================
+-- ФУНКЦИЯ: evaluate_board
+-- =========================================================================
+-- Оценивает позицию доски числовым значением для ИИ.
+-- Оценка включает:
+--   - Материал: Простая шашка = 10, Дамка = 50 (положительно для ИИ, отрицательно для противника)
+--   - Позиционные бонусы (для Easy/Medium): Бонус за борт (+20), за продвижение (+10)
+--   - Терминальные состояния: Победа ИИ = +9999, Поражение ИИ = -9999
+-- Параметр p_difficulty: 'E'/'M' - учитываются позиционные бонусы, 'H' - только материал.
 FUNCTION evaluate_board(
     p_board      IN VARCHAR2,
     p_ai_color   IN CHAR,
@@ -853,25 +799,25 @@ BEGIN
 
     RETURN v_score;
 END evaluate_board;
--- @function apply_move_to_board
--- @brief Simulates a move and returns the new board state as a string.
--- @dependencies:
---   - p_init_board_map (procedure)
---   - p_audit_log (procedure)
---   - c_empty_field, c_white_man, c_black_man, c_white_king, c_black_king (constants)
---   - g_map_by_idx (global variable)
---   - r_move (type)
-
+-- =========================================================================
+-- ФУНКЦИЯ: apply_move_to_board
+-- =========================================================================
+-- Симулирует ход и возвращает новое состояние доски.
+-- Алгоритм:
+--   1. Удаляет фигуру со старой позиции
+--   2. Удаляет срубленные фигуры (если есть взятие)
+--   3. Проверяет превращение в дамку (если фигура достигла последней горизонтали)
+--   4. Ставит фигуру на новую позицию
+-- Используется в minimax для симуляции ходов без изменения реальной игры.
 FUNCTION apply_move_to_board(
     p_board IN VARCHAR2,
     p_move  IN r_move,
     p_color IN CHAR
 ) RETURN VARCHAR2 IS
-    v_new_board    VARCHAR2(128) := p_board; -- Было 200 -> Стало 128
+    v_new_board    VARCHAR2(100) := p_board;
     v_moving_piece CHAR(1) := SUBSTR(v_new_board, p_move.path(1).start_idx, 1);
     v_start_pos    PLS_INTEGER := p_move.path(1).start_idx;
     v_end_pos      PLS_INTEGER := p_move.path(p_move.path.LAST).end_idx;
-    v_promoted     BOOLEAN := FALSE;
     
     v_total_squares PLS_INTEGER;
     v_board_size    PLS_INTEGER;
@@ -894,9 +840,8 @@ BEGIN
     IF v_moving_piece IN (c_white_man, c_black_man) THEN
         DECLARE
             v_end_row PLS_INTEGER := g_map_by_idx(v_end_pos).row_num;
-            v_is_promotion BOOLEAN := (p_color = 'W' AND v_end_row = v_board_size) OR (p_color = 'B' AND v_end_row = 1);
         BEGIN
-            IF v_is_promotion THEN
+            IF (p_color = 'W' AND v_end_row = v_board_size) OR (p_color = 'B' AND v_end_row = 1) THEN
                 v_moving_piece := CASE p_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
             END IF;
         END;
@@ -911,14 +856,16 @@ EXCEPTION
         p_audit_log(NULL, NULL, 'apply_move_to_board: Error ' || SQLERRM);
         RETURN p_board; 
 END apply_move_to_board;
--- @function minimax
--- @brief The core recursive Minimax algorithm with Alpha-Beta Pruning.
--- @dependencies:
---   - get_sorted_possible_moves (function)
---   - evaluate_board (function)
---   - apply_move_to_board (function)
---   - r_minimax_result, t_move_list (types)
-
+-- =========================================================================
+-- ФУНКЦИЯ: minimax
+-- =========================================================================
+-- Реализует алгоритм Minimax с Alpha-Beta отсечением для ИИ.
+-- Алгоритм:
+--   - Рекурсивно исследует дерево ходов на глубину p_depth
+--   - Maximizing player (ИИ) выбирает ход с максимальной оценкой
+--   - Minimizing player (противник) выбирает ход с минимальной оценкой
+--   - Alpha-Beta отсечение: отбрасывает ветви, которые заведомо хуже
+-- Возвращает: Лучший ход и его оценку (r_minimax_result).
 FUNCTION minimax(
     p_board         IN VARCHAR2,
     p_depth         IN PLS_INTEGER,
@@ -937,11 +884,35 @@ FUNCTION minimax(
 BEGIN
     v_current_color := CASE p_is_maximizing WHEN TRUE THEN p_ai_color ELSE CASE p_ai_color WHEN 'W' THEN 'B' ELSE 'W' END END;
     
-    v_possible_moves := get_sorted_possible_moves(
-        p_board   => p_board, 
-        p_color   => v_current_color, 
-        p_rule_id => p_rule_id
-    );
+    -- Получаем все возможные ходы и сортируем их по эвристической оценке
+    -- (встроенная логика вместо отдельной функции, так как используется только здесь)
+    v_possible_moves := find_all_player_moves(p_board, v_current_color, p_rule_id);
+    
+    -- Сортировка ходов: взятия получают приоритет 1000+ (чем больше фигур взято, тем выше)
+    IF v_possible_moves.COUNT >= 2 THEN
+        DECLARE
+            v_temp r_move;
+        BEGIN
+            -- Присваиваем оценку каждому ходу
+            FOR i IN 1..v_possible_moves.COUNT LOOP
+                v_possible_moves(i).score := 0;
+                IF v_possible_moves(i).is_capture = 'Y' THEN
+                    v_possible_moves(i).score := 1000 + v_possible_moves(i).capture_count;
+                END IF;
+            END LOOP;
+            
+            -- Пузырьковая сортировка для ускорения minimax (лучшие ходы проверяются первыми)
+            FOR i IN 1 .. v_possible_moves.COUNT - 1 LOOP
+                FOR j IN i + 1 .. v_possible_moves.COUNT LOOP
+                    IF v_possible_moves(i).score < v_possible_moves(j).score THEN
+                        v_temp := v_possible_moves(i);
+                        v_possible_moves(i) := v_possible_moves(j);
+                        v_possible_moves(j) := v_temp;
+                    END IF;
+                END LOOP;
+            END LOOP;
+        END;
+    END IF;
 
     IF p_depth = 0 OR v_possible_moves.COUNT = 0 THEN
         v_result.score := evaluate_board(p_board, p_ai_color, p_difficulty);
@@ -953,7 +924,7 @@ BEGIN
         v_result.score := -99999; 
         FOR i IN 1..v_possible_moves.COUNT LOOP
             DECLARE
-                v_new_board   VARCHAR2(128) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color); -- Было 200
+                v_new_board   VARCHAR2(100) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color);
                 v_eval_result r_minimax_result;
             BEGIN
                 v_eval_result := minimax(
@@ -984,7 +955,7 @@ BEGIN
         v_result.score := 99999;
         FOR i IN 1..v_possible_moves.COUNT LOOP
             DECLARE
-                v_new_board   VARCHAR2(128) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color); -- Было 200
+                v_new_board   VARCHAR2(100) := apply_move_to_board(p_board, v_possible_moves(i), v_current_color);
                 v_eval_result r_minimax_result;
             BEGIN
                 v_eval_result := minimax(
@@ -1013,16 +984,16 @@ BEGIN
         RETURN v_result;
     END IF;
 END minimax;
--- @function get_ai_move
--- @brief Main entry point for the AI to get its best move.
--- @dependencies:
---   - decode_board (function)
---   - p_init_board_map (procedure)
---   - minimax (function)
---   - find_all_player_moves (function)
---   - idx_to_notation (function)
---   - r_move, r_minimax_result, t_move_list (types)
-
+-- =========================================================================
+-- ФУНКЦИЯ: get_ai_move
+-- =========================================================================
+-- Главная точка входа для получения лучшего хода ИИ.
+-- Алгоритм:
+--   1. Определяет глубину поиска по сложности: 'E'=4, 'M'=8, 'H'=12
+--   2. Вызывает minimax для поиска лучшего хода
+--   3. Для Easy: с вероятностью 25% выбирает случайный ход (для разнообразия)
+--   4. Преобразует найденный ход в нотацию (например, "a3-b4" или "c3:e5")
+-- Возвращает: Строку с нотацией хода или NULL если ходов нет.
 FUNCTION get_ai_move(
     p_board_position IN game_moves.board_position%TYPE, -- ИСПРАВЛЕНО: game_moves вместо games
     p_ai_color       IN games.current_turn%TYPE,
@@ -1031,7 +1002,7 @@ FUNCTION get_ai_move(
 ) RETURN VARCHAR2 IS
     v_best_move_str  VARCHAR2(100);
     v_chosen_move    r_move;
-    v_decoded_board  VARCHAR2(128) := decode_board(p_board_position);
+    v_decoded_board  VARCHAR2(100) := decode_board(p_board_position);
     v_search_depth   PLS_INTEGER;
     v_minimax_result r_minimax_result;
     v_alpha          NUMBER;
@@ -1074,11 +1045,7 @@ BEGIN
 
     -- Формирование строки хода
     IF v_chosen_move.path IS NOT NULL AND v_chosen_move.path.COUNT > 0 THEN
-         v_best_move_str := idx_to_notation(v_chosen_move.path(1).start_idx, v_board_size);
-         FOR j IN 1 .. v_chosen_move.path.COUNT LOOP
-             v_best_move_str := v_best_move_str || CASE v_chosen_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END 
-                              || idx_to_notation(v_chosen_move.path(j).end_idx, v_board_size);
-         END LOOP;
+         v_best_move_str := f_move_to_notation(v_chosen_move, v_board_size);
     ELSE
         -- Fallback, если Minimax вернул NULL
          DECLARE
@@ -1086,11 +1053,7 @@ BEGIN
          BEGIN
              IF v_fallback_moves.COUNT > 0 THEN
                   v_chosen_move := v_fallback_moves(TRUNC(DBMS_RANDOM.VALUE(1, v_fallback_moves.COUNT + 1)));
-                  v_best_move_str := idx_to_notation(v_chosen_move.path(1).start_idx, v_board_size);
-                  FOR j IN 1 .. v_chosen_move.path.COUNT LOOP
-                      v_best_move_str := v_best_move_str || CASE v_chosen_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END 
-                                       || idx_to_notation(v_chosen_move.path(j).end_idx, v_board_size);
-                  END LOOP;
+                  v_best_move_str := f_move_to_notation(v_chosen_move, v_board_size);
              ELSE
                   v_best_move_str := NULL;
              END IF;
@@ -1099,14 +1062,13 @@ BEGIN
 
     RETURN v_best_move_str;
 END get_ai_move;
--- @function f_get_board_as_clob
--- @brief Returns a CLOB representing the board for display.
--- @dependencies:
---   - decode_board (function)
---   - p_init_board_map (procedure)
---   - c_empty_field (constant)
---   - t_map_indices (type)
-
+-- =========================================================================
+-- ФУНКЦИЯ: f_get_board_as_clob
+-- =========================================================================
+-- Возвращает CLOB с визуальным представлением доски для отображения.
+-- Форматирует доску в виде таблицы с координатами (a-h/j, 1-8/10).
+-- Поддерживает подсветку полей через p_highlight_indices.
+-- Используется для вывода доски в консоль и просмотра игр.
 FUNCTION f_get_board_as_clob(
     p_board_position    IN VARCHAR2,
     p_highlight_indices IN t_map_indices DEFAULT t_map_indices()
@@ -1114,7 +1076,7 @@ FUNCTION f_get_board_as_clob(
     v_clob          CLOB;
     v_char          CHAR(1);
     v_linear_idx    PLS_INTEGER;
-    v_decoded_board VARCHAR2(128) := decode_board(p_board_position); -- Было 200
+    v_decoded_board VARCHAR2(100) := decode_board(p_board_position);
     c_nl CONSTANT   VARCHAR2(1)   := CHR(10);
     
     v_board_size    PLS_INTEGER;
@@ -1193,13 +1155,18 @@ EXCEPTION
         DBMS_LOB.append(v_clob, 'КРИТИЧЕСКАЯ ОШИБКА в f_get_board_as_clob: ' || SQLERRM);
         RETURN v_clob;
 END f_get_board_as_clob;
--- @procedure p_init_board_map
--- @brief Initializes global cache maps for board coordinates (Index <-> Notation).
--- @dependencies: global variables g_map_by_notation, g_map_by_idx, g_current_map_size
-
+-- =========================================================================
+-- ПРОЦЕДУРА: p_init_board_map
+-- =========================================================================
+-- Инициализирует глобальные кэш-карты для преобразования координат доски.
+-- Создает две карты:
+--   - g_map_by_notation: нотация -> поле (например, 'a1' -> {idx=57, row=1, col=1})
+--   - g_map_by_idx: индекс -> поле (например, 57 -> {idx=57, notation='a1', row=1, col=1})
+-- Кэш создается один раз для каждого размера доски и переиспользуется.
+-- Это значительно ускоряет преобразования координат в циклах.
 PROCEDURE p_init_board_map(p_board_size IN NUMBER) IS
     v_idx       PLS_INTEGER;
-    v_notation  VARCHAR2(10);
+    v_notation  VARCHAR2(50);
     v_field_rec rec_board_field;
 BEGIN
     -- 1. Проверяем кэш. Если карта нужного размера уже загружена, выходим.
@@ -1239,11 +1206,12 @@ BEGIN
     g_current_map_size := p_board_size;
     
 END p_init_board_map;
--- @procedure p_audit_log
--- @brief Logs an audit event into the audit_log table.
--- @dependencies:
---   - audit_log (table)
-
+-- =========================================================================
+-- ПРОЦЕДУРА: p_audit_log
+-- =========================================================================
+-- Логирует событие в таблицу audit_log для аудита и отладки.
+-- Использует AUTONOMOUS_TRANSACTION для независимого коммита (не откатывается
+-- при ошибках в основной транзакции). Ошибки логирования игнорируются.
 PROCEDURE p_audit_log(
     p_player_id  IN players.player_id%TYPE,
     p_game_id    IN games.game_id%TYPE,
@@ -1264,6 +1232,106 @@ BEGIN
 EXCEPTION
     WHEN OTHERS THEN NULL; -- Ошибки логирования игнорируем
 END p_audit_log;
+
+-- =========================================================================
+-- ВСПОМОГАТЕЛЬНАЯ ПРОЦЕДУРА: Обновление активности игрока
+-- =========================================================================
+-- Унифицирует обновление last_activity_at для игрока.
+-- Используется во всех процедурах для избежания дублирования кода.
+PROCEDURE p_update_player_activity(p_player_id IN players.player_id%TYPE) IS
+BEGIN
+    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = p_player_id;
+EXCEPTION
+    WHEN OTHERS THEN NULL; -- Игнорируем ошибки обновления активности
+END p_update_player_activity;
+
+-- =========================================================================
+-- ВСПОМОГАТЕЛЬНАЯ ПРОЦЕДУРА: Завершение игры
+-- =========================================================================
+-- Унифицирует процесс завершения игры: обновление статуса, закрытие зрителей,
+-- логирование, обновление рейтингов. Используется во всех местах, где игра завершается.
+PROCEDURE p_finish_game(
+    p_game_id           IN NUMBER,
+    p_status            IN CHAR,           -- 'V' (Victory), 'D' (Draw), 'T' (Timeout), 'R' (Resigned)
+    p_winner_color      IN CHAR DEFAULT NULL,
+    p_puzzle_status     IN CHAR DEFAULT NULL,
+    p_audit_event       IN VARCHAR2,
+    p_player_id         IN NUMBER DEFAULT NULL
+) IS
+BEGIN
+    -- Обновляем статус игры
+    UPDATE games
+    SET status              = p_status,
+        end_time            = SYSDATE,
+        winner_player_color = p_winner_color,
+        puzzle_status       = NVL(p_puzzle_status, puzzle_status)
+    WHERE game_id = p_game_id;
+    
+    -- Закрываем всех зрителей
+    UPDATE spectators 
+    SET left_at = SYSDATE 
+    WHERE game_id = p_game_id AND left_at IS NULL;
+    
+    -- Логируем событие
+    p_audit_log(p_player_id, p_game_id, p_audit_event);
+    
+    -- Обновляем рейтинги
+    p_update_ratings(p_game_id);
+    
+    COMMIT;
+END p_finish_game;
+
+-- =========================================================================
+-- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Формирование нотации хода
+-- =========================================================================
+-- Преобразует ход (r_move) в строковую нотацию (например, "a3-b4" или "c3:e5").
+-- Используется в нескольких местах для избежания дублирования кода.
+FUNCTION f_move_to_notation(
+    p_move      IN r_move,
+    p_board_size IN PLS_INTEGER
+) RETURN VARCHAR2 IS
+    v_notation VARCHAR2(100);
+BEGIN
+    IF p_move.path IS NULL OR p_move.path.COUNT = 0 THEN
+        RETURN NULL;
+    END IF;
+    
+    v_notation := idx_to_notation(p_move.path(1).start_idx, p_board_size);
+    FOR j IN 1 .. p_move.path.COUNT LOOP
+        v_notation := v_notation || CASE p_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END 
+                      || idx_to_notation(p_move.path(j).end_idx, p_board_size);
+    END LOOP;
+    
+    RETURN v_notation;
+END f_move_to_notation;
+
+-- =========================================================================
+-- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Получение текущей позиции доски
+-- =========================================================================
+-- Получает текущую позицию доски из последнего хода или начальную позицию.
+-- Возвращает декодированную (полную) позицию доски.
+-- Используется в нескольких местах для избежания дублирования кода.
+FUNCTION f_get_current_board_position(
+    p_game_id IN NUMBER,
+    p_rule_id IN NUMBER
+) RETURN VARCHAR2 IS
+    v_board_position VARCHAR2(100);
+BEGIN
+    BEGIN
+        SELECT decode_board(board_position) INTO v_board_position
+        FROM game_moves
+        WHERE game_id = p_game_id
+        ORDER BY move_number DESC
+        FETCH FIRST 1 ROW ONLY;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            -- Если ходов нет, используем начальную позицию
+            v_board_position := get_initial_position(p_rule_id);
+    END;
+    
+    RETURN v_board_position;
+END f_get_current_board_position;
+
 -- @procedure p_update_ratings
 -- @brief Updates player ratings after a game is finished.
 -- @dependencies:
@@ -1307,13 +1375,11 @@ PROCEDURE p_update_ratings(
 
 BEGIN
     -- Получаем данные игры
-    BEGIN
-        SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN RETURN;
-    END;
+    SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN RETURN;
 
-    -- Определяем текущий сезон (берем последний активный или просто максимальный ID)
+    -- Определяем текущий сезон (берем активный или последний созданный)
     BEGIN
         SELECT season_id INTO v_season_id 
         FROM seasons 
@@ -1321,43 +1387,14 @@ BEGIN
         AND ROWNUM = 1;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-            -- Если сезона нет, берем последний созданный (fallback)
-            BEGIN
-                SELECT MAX(season_id) INTO v_season_id FROM seasons;
-            EXCEPTION
-                WHEN NO_DATA_FOUND THEN
-                    v_season_id := NULL;
-            END;
-            
-            -- Если вообще нет сезонов, создаем начальный сезон автоматически
-            IF v_season_id IS NULL THEN
-                DECLARE
-                    v_current_month DATE := TRUNC(SYSDATE, 'MM');
-                    v_next_month DATE := ADD_MONTHS(v_current_month, 1);
-                    v_season_name VARCHAR2(100);
-                    v_month_names SYS.ODCIVARCHAR2LIST := SYS.ODCIVARCHAR2LIST(
-                        'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-                        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
-                    );
-                    v_month_num PLS_INTEGER;
-                    v_year_num PLS_INTEGER;
-                BEGIN
-                    v_month_num := EXTRACT(MONTH FROM v_current_month);
-                    v_year_num := EXTRACT(YEAR FROM v_current_month);
-                    v_season_name := v_month_names(v_month_num) || '-' || v_year_num;
-                    
-                    INSERT INTO seasons (season_name, start_date, end_date)
-                    VALUES (v_season_name, v_current_month, v_next_month - 1)
-                    RETURNING season_id INTO v_season_id;
-                    
-                    COMMIT;
-                EXCEPTION
-                    WHEN OTHERS THEN
-                        -- Если не удалось создать сезон, выходим
-                        RETURN;
-                END;
-            END IF;
+            -- Если активного сезона нет, берем последний созданный
+            SELECT MAX(season_id) INTO v_season_id FROM seasons;
     END;
+    
+    -- Если сезона нет вообще, выходим (сезоны должны создаваться через scheduler)
+    IF v_season_id IS NULL THEN
+        RETURN;
+    END IF;
 
     -- Логика начисления
     IF v_game.status = 'V' THEN -- Victory (Кто-то выиграл)
@@ -1580,23 +1617,24 @@ EXCEPTION
         -- Ошибки при обработке матча не должны влиять на основную логику
         p_audit_log(NULL, p_completed_game_id, 'MATCH_CONTINUATION_ERROR: ' || SQLERRM);
 END p_process_match_continuation;
--- @procedure p_process_move
--- @brief Processes a player's move, validates it, and updates the game state.
--- @dependencies:
---   - games (table)
---   - game_rules (table)
---   - game_moves (table)
---   - spectators (table)
---   - p_init_board_map (procedure)
---   - decode_board (function)
---   - find_all_player_moves (function)
---   - p_update_ratings (procedure)
---   - idx_to_notation (function)
---   - p_audit_log (procedure)
---   - encode_board (function)
---   - c_white_man, c_black_man, c_white_king, c_black_king, c_empty_field (constants)
---   - t_move_list, r_move (types)
-
+-- =========================================================================
+-- ПРОЦЕДУРА: p_process_move
+-- =========================================================================
+-- Обрабатывает ход игрока: валидирует, применяет и обновляет состояние игры.
+-- Алгоритм:
+--   1. Блокирует игру (FOR UPDATE) для предотвращения конкурентных изменений
+--   2. Получает текущую позицию доски
+--   3. Проверяет лимит времени на партию (если установлен)
+--   4. Определяет цвет игрока (W/B)
+--   5. Находит все легальные ходы для игрока
+--   6. Валидирует ход игрока (сравнивает нотацию с легальными ходами)
+--   7. Применяет ход к доске (удаляет фигуры, проверяет превращение)
+--   8. Сохраняет ход в game_moves
+--   9. Проверяет условия окончания игры:
+--      - Победа (нет фигур противника или нет ходов)
+--      - Ничья (лимит ходов без взятий, повтор позиции)
+--   10. Обновляет очередь хода
+-- Использует вспомогательную процедуру p_finish_game для завершения игры.
 PROCEDURE p_process_move(
     p_game_id        IN NUMBER,
     p_move_notation  IN VARCHAR2,
@@ -1612,9 +1650,9 @@ PROCEDURE p_process_move(
     v_error_msg         VARCHAR2(2000);
     
     v_board_size        PLS_INTEGER;
-    v_decoded_board     VARCHAR2(128); -- Явный тип вместо %TYPE для надежности
-    v_new_board_decoded VARCHAR2(128);
-    v_new_board_encoded VARCHAR2(128); -- Явный тип
+    v_decoded_board     VARCHAR2(100);
+    v_new_board_decoded VARCHAR2(100);
+    v_new_board_encoded VARCHAR2(100);
     
 BEGIN
     -- Блокируем игру для обновления
@@ -1635,23 +1673,12 @@ BEGIN
     END;
 
     -- Получаем текущую позицию доски: из последнего хода или начальная позиция
-    BEGIN
-        SELECT board_position INTO v_decoded_board
-        FROM game_moves
-        WHERE game_id = p_game_id
-        ORDER BY move_number DESC
-        FETCH FIRST 1 ROW ONLY;
-        v_decoded_board := decode_board(v_decoded_board);
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN
-            -- Если ходов нет, используем начальную позицию
-            v_decoded_board := get_initial_position(v_game.rule_id);
-            IF v_decoded_board IS NULL THEN
-                p_status_message := 'Критическая ошибка: Не удалось получить начальную позицию.';
-                ROLLBACK;
-                RETURN;
-            END IF;
-    END;
+    v_decoded_board := f_get_current_board_position(p_game_id, v_game.rule_id);
+    IF v_decoded_board IS NULL THEN
+        p_status_message := 'Критическая ошибка: Не удалось получить начальную позицию.';
+        ROLLBACK;
+        RETURN;
+    END IF;
 
     -- Проверка лимита времени на партию
     IF v_game.time_limit_game_sec IS NOT NULL THEN
@@ -1660,19 +1687,13 @@ BEGIN
         BEGIN
             IF v_elapsed_sec >= v_game.time_limit_game_sec THEN
                 p_drop_move_timeout_job(p_game_id);
-                UPDATE games 
-                SET status = 'T', 
-                    end_time = SYSDATE,
-                    winner_player_color = CASE 
-                        WHEN v_game.current_turn = 'W' THEN 'B' 
-                        ELSE 'W' 
-                    END
-                WHERE game_id = p_game_id;
+                p_finish_game(
+                    p_game_id      => p_game_id,
+                    p_status       => 'T',
+                    p_winner_color => CASE WHEN v_game.current_turn = 'W' THEN 'B' ELSE 'W' END,
+                    p_audit_event  => 'GAME_TIMEOUT'
+                );
                 p_status_message := 'Игра завершена по таймауту (превышен лимит времени на партию: ' || v_game.time_limit_game_sec || ' сек).';
-                UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
-                p_audit_log(NULL, p_game_id, 'GAME_TIMEOUT');
-                p_update_ratings(p_game_id);
-                COMMIT;
                 RETURN;
             END IF;
         END;
@@ -1695,35 +1716,25 @@ BEGIN
     -- Если ходов нет -> Поражение
     IF v_all_legal_moves.COUNT = 0 THEN
         p_drop_move_timeout_job(p_game_id);
-        
-        UPDATE games
-        SET status              = 'V',
-            end_time            = SYSDATE,
-            winner_player_color = CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
-            -- [ВАЖНО] Если это пазл и мы проиграли (ходов нет), ставим 'f' (failed)
-            puzzle_status       = CASE WHEN puzzle_id IS NOT NULL THEN 'f' ELSE puzzle_status END
-        WHERE game_id = p_game_id;
-        
+        p_finish_game(
+            p_game_id       => p_game_id,
+            p_status        => 'V',
+            p_winner_color  => CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
+            p_puzzle_status => CASE WHEN v_game.puzzle_id IS NOT NULL THEN 'f' ELSE NULL END,
+            p_audit_event   => 'GAME_LOST_NO_MOVES',
+            p_player_id     => p_player_id
+        );
         p_status_message := 'Ходов нет. Вы проиграли!';
-        p_update_ratings(p_game_id);
-        COMMIT;
         RETURN;
     END IF;
     
     -- Валидация хода игрока (сравнение нотации)
     FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
         DECLARE
-            v_legal_move r_move := v_all_legal_moves(i);
-            v_notation   VARCHAR2(100);
+            v_notation VARCHAR2(100) := f_move_to_notation(v_all_legal_moves(i), v_board_size);
         BEGIN
-            v_notation := idx_to_notation(v_legal_move.path(1).start_idx, v_board_size);
-            FOR j IN 1 .. v_legal_move.path.COUNT LOOP
-                v_notation := v_notation || CASE v_legal_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END 
-                              || idx_to_notation(v_legal_move.path(j).end_idx, v_board_size);
-            END LOOP;
-            
             IF REPLACE(LOWER(p_move_notation), 'x', ':') = v_notation THEN
-                v_chosen_move   := v_legal_move;
+                v_chosen_move   := v_all_legal_moves(i);
                 v_is_move_valid := TRUE;
                 EXIT;
             END IF;
@@ -1738,11 +1749,7 @@ BEGIN
             BEGIN
                 v_error_msg := 'Неверный ход. Взятие обязательно! Доступные варианты: ';
                 FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
-                    v_notation_str := idx_to_notation(v_all_legal_moves(i).path(1).start_idx, v_board_size);
-                    FOR j IN 1 .. v_all_legal_moves(i).path.COUNT LOOP
-                        v_notation_str := v_notation_str || CASE v_all_legal_moves(i).is_capture WHEN 'Y' THEN ':' ELSE '-' END 
-                                          || idx_to_notation(v_all_legal_moves(i).path(j).end_idx, v_board_size);
-                    END LOOP;
+                    v_notation_str := f_move_to_notation(v_all_legal_moves(i), v_board_size);
                     
                     IF LENGTH(v_error_msg || v_notation_str || ' ') <= 2000 THEN
                         v_error_msg := v_error_msg || v_notation_str || ' ';
@@ -1771,52 +1778,23 @@ BEGIN
         RETURN;
     END IF;
 
-    -- Применение хода
-    v_new_board_decoded := v_decoded_board;
-    DECLARE
-        v_moving_piece CHAR(1) := SUBSTR(v_new_board_decoded, v_chosen_move.path(1).start_idx, 1);
-        v_start_pos    PLS_INTEGER := v_chosen_move.path(1).start_idx;
-        v_end_pos      PLS_INTEGER := v_chosen_move.path(v_chosen_move.path.LAST).end_idx;
-    BEGIN
-        v_new_board_decoded := SUBSTR(v_new_board_decoded, 1, v_start_pos - 1) || c_empty_field || SUBSTR(v_new_board_decoded, v_start_pos + 1);
-        
-        IF v_chosen_move.is_capture = 'Y' THEN
-            FOR i IN 1 .. v_chosen_move.path.COUNT LOOP
-                v_new_board_decoded := SUBSTR(v_new_board_decoded, 1, v_chosen_move.path(i).captured_idx - 1) || c_empty_field || SUBSTR(v_new_board_decoded, v_chosen_move.path(i).captured_idx + 1);
-            END LOOP;
-        END IF;
-        
-        IF v_moving_piece IN (c_white_man, c_black_man) THEN
-            DECLARE
-                v_end_row PLS_INTEGER := g_map_by_idx(v_end_pos).row_num;
-                v_is_final_square_promotion BOOLEAN := (v_player_color = 'W' AND v_end_row = v_board_size) OR (v_player_color = 'B' AND v_end_row = 1);
-            BEGIN
-                IF v_is_final_square_promotion THEN
-                    v_moving_piece := CASE v_player_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
-                END IF;
-            END;
-        END IF;
-        v_new_board_decoded := SUBSTR(v_new_board_decoded, 1, v_end_pos - 1) || v_moving_piece || SUBSTR(v_new_board_decoded, v_end_pos + 1);
-    END;
+    -- Применение хода (используем существующую функцию для избежания дублирования)
+    v_new_board_decoded := apply_move_to_board(v_decoded_board, v_chosen_move, v_player_color);
 
     v_new_board_encoded := encode_board(v_new_board_decoded);
     SELECT COUNT(*) + 1 INTO v_move_count FROM game_moves WHERE game_id = p_game_id;
 
-    -- Определяем очередь хода ПОСЛЕ этого хода
-    DECLARE
-        v_next_turn CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
-    BEGIN
-        UPDATE games
-        SET current_turn          = v_next_turn,
-            draw_offer_status     = NULL, 
-            draw_offered_by_color = NULL, 
-            draw_offered_at       = NULL
-        WHERE game_id = p_game_id;
+    -- Определяем очередь хода ПОСЛЕ этого хода и обновляем игру
+    UPDATE games
+    SET current_turn          = CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
+        draw_offer_status     = NULL, 
+        draw_offered_by_color = NULL, 
+        draw_offered_at       = NULL
+    WHERE game_id = p_game_id;
 
-        -- Сохраняем ход с позицией (очередь хода вычисляется по move_number: нечетные = белые, четные = черные)
-        INSERT INTO game_moves (game_id, move_number, move_notation, is_capture, board_position)
-        VALUES (p_game_id, v_move_count, p_move_notation, v_chosen_move.is_capture, v_new_board_encoded);
-    END;
+    -- Сохраняем ход с позицией (очередь хода вычисляется по move_number: нечетные = белые, четные = черные)
+    INSERT INTO game_moves (game_id, move_number, move_notation, is_capture, board_position)
+    VALUES (p_game_id, v_move_count, p_move_notation, v_chosen_move.is_capture, v_new_board_encoded);
     
     -- Переносим таймаут хода на следующий ход
     BEGIN
@@ -1838,54 +1816,39 @@ BEGIN
         v_opponent_pieces_exist BOOLEAN := FALSE;
         v_repetition_count      NUMBER;
     BEGIN
+        -- Проверяем наличие фигур противника на доске
         IF v_next_turn_color = 'W' THEN
-            IF INSTR(v_new_board_decoded, c_white_man) > 0 OR INSTR(v_new_board_decoded, c_white_king) > 0 THEN
-                v_opponent_pieces_exist := TRUE;
-            END IF;
+            v_opponent_pieces_exist := INSTR(v_new_board_decoded, c_white_man) > 0 OR INSTR(v_new_board_decoded, c_white_king) > 0;
         ELSE
-            IF INSTR(v_new_board_decoded, c_black_man) > 0 OR INSTR(v_new_board_decoded, c_black_king) > 0 THEN
-                v_opponent_pieces_exist := TRUE;
-            END IF;
+            v_opponent_pieces_exist := INSTR(v_new_board_decoded, c_black_man) > 0 OR INSTR(v_new_board_decoded, c_black_king) > 0;
         END IF;
         
         IF NOT v_opponent_pieces_exist THEN
             p_drop_move_timeout_job(p_game_id);
-            
-            UPDATE games 
-            SET status = 'V', 
-                end_time = SYSDATE, 
-                winner_player_color = v_player_color,
-                puzzle_status = CASE WHEN puzzle_id IS NOT NULL THEN 's' ELSE puzzle_status END
-            WHERE game_id = p_game_id;
-            
+            p_finish_game(
+                p_game_id       => p_game_id,
+                p_status        => 'V',
+                p_winner_color  => v_player_color,
+                p_puzzle_status => CASE WHEN v_game.puzzle_id IS NOT NULL THEN 's' ELSE NULL END,
+                p_audit_event   => 'WIN_NO_PIECES',
+                p_player_id     => p_player_id
+            );
             p_status_message := p_status_message || ' Победа! У противника не осталось фигур.';
-            
-            UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
-            
-            p_audit_log(p_player_id, p_game_id, 'WIN_NO_PIECES');
-            p_update_ratings(p_game_id);
-            COMMIT;
             RETURN;
         END IF;
 
         v_next_player_moves := find_all_player_moves(v_new_board_decoded, v_next_turn_color, v_game.rule_id);
         IF v_next_player_moves.COUNT = 0 THEN
             p_drop_move_timeout_job(p_game_id);
-            
-            UPDATE games 
-            SET status = 'V', 
-                end_time = SYSDATE, 
-                winner_player_color = v_player_color,
-                puzzle_status = CASE WHEN puzzle_id IS NOT NULL THEN 's' ELSE puzzle_status END
-            WHERE game_id = p_game_id;
-            
+            p_finish_game(
+                p_game_id       => p_game_id,
+                p_status        => 'V',
+                p_winner_color  => v_player_color,
+                p_puzzle_status => CASE WHEN v_game.puzzle_id IS NOT NULL THEN 's' ELSE NULL END,
+                p_audit_event   => 'WIN_PAT',
+                p_player_id     => p_player_id
+            );
             p_status_message := p_status_message || ' Победа! Противник заблокирован.';
-
-            UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
-            
-            p_audit_log(p_player_id, p_game_id, 'WIN_PAT');
-            p_update_ratings(p_game_id);
-            COMMIT;
             RETURN;
         END IF;
 
@@ -1920,13 +1883,12 @@ BEGIN
                 -- Проверяем лимит (draw_moves_limit - это количество полуходов без взятия)
                 IF v_moves_without_capture >= v_game.draw_moves_limit THEN
                     p_drop_move_timeout_job(p_game_id);
-                    
-                    UPDATE games SET status = 'D', end_time = SYSDATE WHERE game_id = p_game_id;
+                    p_finish_game(
+                        p_game_id      => p_game_id,
+                        p_status       => 'D',
+                        p_audit_event  => 'DRAW_MOVES_LIMIT'
+                    );
                     p_status_message := p_status_message || ' Ничья! Превышен лимит ходов без взятия (' || v_game.draw_moves_limit || ').';
-                    UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
-                    p_audit_log(NULL, p_game_id, 'DRAW_MOVES_LIMIT');
-                    p_update_ratings(p_game_id);
-                    COMMIT;
                     RETURN;
                 END IF;
             END;
@@ -1948,13 +1910,12 @@ BEGIN
                   
                 IF v_repetition_count >= 2 THEN
                     p_drop_move_timeout_job(p_game_id);
-                    
-                    UPDATE games SET status = 'D', end_time = SYSDATE WHERE game_id = p_game_id;
+                    p_finish_game(
+                        p_game_id      => p_game_id,
+                        p_status       => 'D',
+                        p_audit_event  => 'DRAW_REPETITION'
+                    );
                     p_status_message := p_status_message || ' Ничья! Троекратное повторение позиции.';
-                    UPDATE spectators SET left_at = SYSDATE WHERE game_id = p_game_id AND left_at IS NULL;
-                    p_audit_log(NULL, p_game_id, 'DRAW_REPETITION');
-                    p_update_ratings(p_game_id);
-                    COMMIT;
                     RETURN;
                 END IF;
             END;
@@ -2103,8 +2064,8 @@ PROCEDURE create_game(
     v_white_player_id     players.player_id%TYPE;
     v_black_player_id     players.player_id%TYPE;
     v_creator_color       CHAR(1);
-    v_initial_position    VARCHAR2(128); -- Было games.board_position%TYPE, явно задаем 128
-    v_encoded_position    VARCHAR2(128);
+    v_initial_position    VARCHAR2(100);
+    v_encoded_position    VARCHAR2(100);
     v_status              games.status%TYPE;
     v_ai_move             VARCHAR2(50);
     v_ai_msg              VARCHAR2(1000);
@@ -2114,7 +2075,7 @@ PROCEDURE create_game(
     v_error_msg           VARCHAR2(255);
 BEGIN
     v_current_player_id := get_or_create_player_id(v_current_username);
-    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_current_player_id;
+    p_update_player_activity(v_current_player_id);
 
     v_my_active_game_id := get_active_game(v_current_player_id);
     IF v_my_active_game_id IS NOT NULL THEN
@@ -2364,7 +2325,7 @@ PROCEDURE join_game(p_game_id IN NUMBER) IS
     v_error_msg        VARCHAR2(255);
 BEGIN
     v_player_id := get_or_create_player_id(USER);
-    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
+    p_update_player_activity(v_player_id);
 
     BEGIN
         SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE;
@@ -2505,7 +2466,7 @@ BEGIN
         END IF;
     END;
     
-    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
+    p_update_player_activity(v_player_id);
     v_game_id   := get_active_game(v_player_id);
 
     IF v_game_id IS NULL THEN
@@ -2528,17 +2489,13 @@ BEGIN
     -- 1. Сдача в режиме ПАЗЛА
     IF v_game.puzzle_id IS NOT NULL THEN
         p_drop_move_timeout_job(v_game_id);
-        
-        UPDATE games
-        SET status = 'V',
-            end_time = SYSDATE,
-            puzzle_status = 'f' -- Failed
-        WHERE game_id = v_game_id;
-        
-        UPDATE spectators SET left_at = SYSDATE 
-        WHERE game_id = v_game_id AND left_at IS NULL;
-        
-        p_audit_log(v_player_id, v_game_id, p_event_msg => 'QUIT_PUZZLE');
+        p_finish_game(
+            p_game_id       => v_game_id,
+            p_status        => 'V',
+            p_puzzle_status => 'f',
+            p_audit_event   => 'QUIT_PUZZLE',
+            p_player_id     => v_player_id
+        );
         DBMS_OUTPUT.PUT_LINE('[OK] Вы вышли из попытки решения задачи (ID сессии: ' || v_game_id || ').');
         
     -- 2. Сдача в режиме ИГРЫ
@@ -2558,15 +2515,6 @@ BEGIN
 
             p_drop_move_timeout_job(v_game_id);
             
-            UPDATE games
-            SET status              = 'R', -- Resigned
-                winner_player_color = v_winner_color,
-                end_time            = SYSDATE
-            WHERE game_id = v_game_id;
-
-            UPDATE spectators SET left_at = SYSDATE 
-            WHERE game_id = v_game_id AND left_at IS NULL;
-
             -- Сдача во всем МАТЧЕ
             IF UPPER(p_resign_match) = 'Y' AND v_game.match_id IS NOT NULL THEN
                 UPDATE matches
@@ -2584,8 +2532,13 @@ BEGIN
                 v_winner_username := 'AI (Server)';
             END IF;
             
-            p_audit_log(v_player_id, v_game_id, p_event_msg => 'RESIGN_GAME');
-            p_update_ratings(v_game_id); 
+            p_finish_game(
+                p_game_id      => v_game_id,
+                p_status       => 'R',
+                p_winner_color => v_winner_color,
+                p_audit_event  => 'RESIGN_GAME',
+                p_player_id    => v_player_id
+            ); 
             DBMS_OUTPUT.PUT_LINE('[OK] Вы сдались в партии ' || v_game_id || '. Победитель: ' || v_winner_username || '.');
         END;
     END IF;
@@ -2638,7 +2591,7 @@ PROCEDURE watch_game_replay(
 
 BEGIN
     v_player_id := get_or_create_player_id(USER);
-    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
+    p_update_player_activity(v_player_id);
     
     v_seq_name  := 'REPLAY_SEQ_' || p_game_id || '_' || v_player_id;
     v_job_name  := 'DROP_REPLAY_SEQ_' || p_game_id || '_' || v_player_id;
@@ -2930,7 +2883,7 @@ BEGIN
         v_active_player_id  players.player_id%TYPE;
         v_highlight_indices t_map_indices;
         v_legal_moves       t_move_list;
-        v_decoded_board     VARCHAR2(128); -- Было 200
+        v_decoded_board     VARCHAR2(100);
     BEGIN
         IF v_game.player_white_id = v_viewer_player_id THEN
             v_my_color := 'W';
@@ -2984,23 +2937,13 @@ BEGIN
         END IF;
 
         -- Получаем текущую позицию доски: из последнего хода или начальная позиция
-        BEGIN
-            SELECT decode_board(board_position) INTO v_decoded_board
-            FROM game_moves
-            WHERE game_id = v_target_game_id
-            ORDER BY move_number DESC
-            FETCH FIRST 1 ROW ONLY;
-        EXCEPTION
-            WHEN NO_DATA_FOUND THEN
-                -- Если ходов нет, используем начальную позицию
-                v_decoded_board := get_initial_position(v_game.rule_id);
-                IF v_decoded_board IS NULL THEN
-                    v_error_msg := 'Критическая ошибка: Не удалось получить начальную позицию.';
-                    p_audit_log(v_viewer_player_id, v_target_game_id, p_event_msg => v_error_msg);
-                    DBMS_OUTPUT.PUT_LINE(v_error_msg);
-                    RETURN;
-                END IF;
-        END;
+        v_decoded_board := f_get_current_board_position(v_target_game_id, v_game.rule_id);
+        IF v_decoded_board IS NULL THEN
+            v_error_msg := 'Критическая ошибка: Не удалось получить начальную позицию.';
+            p_audit_log(v_viewer_player_id, v_target_game_id, p_event_msg => v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
+        END IF;
         
         -- [ВАЖНО] Инициализируем карту для корректной работы подсветки ходов
         v_board_size := SQRT(LENGTH(v_decoded_board));
@@ -3068,7 +3011,7 @@ BEGIN
     v_player_id := get_or_create_player_id(USER);
     v_game_id   := get_active_game(v_player_id);
     
-    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id; 
+    p_update_player_activity(v_player_id); 
     
     IF v_game_id IS NULL THEN
         v_error_msg := 'Нет активных игр, чтобы сделать ход.';
@@ -3115,7 +3058,7 @@ BEGIN
     DECLARE
         v_next_game_state games%ROWTYPE;
         v_ai_move         VARCHAR2(100);
-        v_ai_board_pos    VARCHAR2(128);
+        v_ai_board_pos    VARCHAR2(100);
     BEGIN
         SELECT * INTO v_next_game_state FROM games WHERE game_id = v_game_id;
 
@@ -3125,24 +3068,16 @@ BEGIN
             (v_next_game_state.current_turn = 'B' AND v_next_game_state.player_black_id IS NULL))
         THEN
             -- Получаем текущую позицию доски: из последнего хода или начальная позиция
-            BEGIN
-                SELECT board_position INTO v_ai_board_pos
-                FROM game_moves
-                WHERE game_id = v_game_id
-                ORDER BY move_number DESC
-                FETCH FIRST 1 ROW ONLY;
-            EXCEPTION
-                WHEN NO_DATA_FOUND THEN
-                    -- Если ходов нет, используем начальную позицию
-                    v_ai_board_pos := get_initial_position(v_next_game_state.rule_id);
-                    IF v_ai_board_pos IS NULL THEN
-                        v_error_msg := 'Критическая ошибка: Не удалось получить начальную позицию для ИИ.';
-                        p_audit_log(v_player_id, v_game_id, v_error_msg);
-                        RETURN;
-                    END IF;
-                    -- Кодируем начальную позицию для передачи в get_ai_move
-                    v_ai_board_pos := encode_board(v_ai_board_pos);
-            END;
+            v_ai_board_pos := f_get_current_board_position(v_game_id, v_next_game_state.rule_id);
+            IF v_ai_board_pos IS NULL THEN
+                v_error_msg := 'Критическая ошибка: Не удалось получить начальную позицию для ИИ.';
+                p_audit_log(v_player_id, v_game_id, v_error_msg);
+                RETURN;
+            END IF;
+            -- Кодируем позицию для передачи в get_ai_move (если она еще не закодирована)
+            IF INSTR(v_ai_board_pos, c_empty_field) > 0 THEN
+                v_ai_board_pos := encode_board(v_ai_board_pos);
+            END IF;
             
             v_ai_move := get_ai_move(
                 p_board_position => v_ai_board_pos, 
@@ -3209,7 +3144,7 @@ BEGIN
         END IF;
     END;
 
-    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
+    p_update_player_activity(v_player_id);
     v_game_id := get_active_game(v_player_id);
     
     IF v_game_id IS NULL THEN
@@ -3374,18 +3309,16 @@ BEGIN
         END IF;
 
         p_drop_move_timeout_job(v_game_id);
-        
+        p_finish_game(
+            p_game_id      => v_game_id,
+            p_status       => 'D',
+            p_audit_event  => 'DRAW_ACCEPT',
+            p_player_id    => v_player_id
+        );
+        -- Обновляем статус предложения ничьей отдельно, так как это специфично для draw
         UPDATE games
-        SET status = 'D',
-            end_time = SYSDATE,
-            draw_offer_status = 'S'
-        WHERE game_id = v_game_id;
-        
-        UPDATE spectators SET left_at = SYSDATE 
-        WHERE game_id = v_game_id AND left_at IS NULL;
-
-        p_audit_log(v_player_id, v_game_id, p_event_msg => 'DRAW_ACCEPT');
-        p_update_ratings(v_game_id); 
+        SET draw_offer_status = 'S'
+        WHERE game_id = v_game_id; 
         DBMS_OUTPUT.PUT_LINE('Ничья по соглашению сторон.');
 
     -- CANCEL / DECLINE
@@ -3658,7 +3591,7 @@ PROCEDURE create_puzzle(
     c_nl                CHAR(1) := CHR(10);
     v_board_size        NUMBER;
     v_rule_id           game_rules.rule_id%TYPE;
-    v_encoded_board     VARCHAR2(128); -- Было puzzles.board_position%TYPE
+    v_encoded_board     VARCHAR2(100);
     v_new_puzzle_id     puzzles.puzzle_id%TYPE;
 
 BEGIN

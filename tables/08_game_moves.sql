@@ -5,7 +5,7 @@ CREATE TABLE game_moves (
     move_notation   VARCHAR2(50) NOT NULL,
     is_capture      CHAR(1) DEFAULT 'N' NOT NULL,
     move_timestamp  DATE DEFAULT SYSDATE NOT NULL,
-    board_position  VARCHAR2(128) NOT NULL,
+    board_position  VARCHAR2(100) NOT NULL,
     CONSTRAINT pk_game_moves PRIMARY KEY (move_id),
     CONSTRAINT fk_game_moves_game FOREIGN KEY (game_id) REFERENCES games(game_id) ON DELETE CASCADE,
     CONSTRAINT chk_game_moves_capture CHECK (is_capture IN ('Y', 'N'))

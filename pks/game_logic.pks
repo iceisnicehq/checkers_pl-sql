@@ -220,12 +220,6 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_player_color IN CHAR,
         p_rule_id      IN NUMBER
     ) RETURN t_move_list;
-
-    FUNCTION get_sorted_possible_moves(
-        p_board   IN VARCHAR2,
-        p_color   IN CHAR,
-        p_rule_id IN NUMBER
-    ) RETURN t_move_list;
     
     FUNCTION evaluate_board(
         p_board      IN VARCHAR2,

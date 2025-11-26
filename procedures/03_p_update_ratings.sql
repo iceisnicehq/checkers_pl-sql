@@ -30,55 +30,28 @@ PROCEDURE p_update_ratings(
     END;
 
 BEGIN
-    BEGIN
-        SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN RETURN;
-    END;
+    SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN RETURN;
+END;
 
-    BEGIN
-        SELECT season_id INTO v_season_id 
-        FROM seasons 
-        WHERE SYSDATE BETWEEN start_date AND end_date 
-        AND ROWNUM = 1;
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN
-            BEGIN
-                SELECT MAX(season_id) INTO v_season_id FROM seasons;
-            EXCEPTION
-                WHEN NO_DATA_FOUND THEN
-                    v_season_id := NULL;
-            END;
-            
-            IF v_season_id IS NULL THEN
-                DECLARE
-                    v_current_month DATE := TRUNC(SYSDATE, 'MM');
-                    v_next_month DATE := ADD_MONTHS(v_current_month, 1);
-                    v_season_name VARCHAR2(100);
-                    v_month_names SYS.ODCIVARCHAR2LIST := SYS.ODCIVARCHAR2LIST(
-                        'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-                        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
-                    );
-                    v_month_num PLS_INTEGER;
-                    v_year_num PLS_INTEGER;
-                BEGIN
-                    v_month_num := EXTRACT(MONTH FROM v_current_month);
-                    v_year_num := EXTRACT(YEAR FROM v_current_month);
-                    v_season_name := v_month_names(v_month_num) || '-' || v_year_num;
-                    
-                    INSERT INTO seasons (season_name, start_date, end_date)
-                    VALUES (v_season_name, v_current_month, v_next_month - INTERVAL '1' SECOND)
-                    RETURNING season_id INTO v_season_id;
-                    
-                    COMMIT;
-                EXCEPTION
-                    WHEN OTHERS THEN
-                        RETURN;
-                END;
-            END IF;
-    END;
+BEGIN
+    SELECT season_id INTO v_season_id 
+    FROM seasons 
+    WHERE SYSDATE BETWEEN start_date AND end_date 
+    AND ROWNUM = 1;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        -- Если активного сезона нет, берем последний созданный
+        SELECT MAX(season_id) INTO v_season_id FROM seasons;
+END;
 
-    IF v_game.ai_difficulty IS NOT NULL AND v_game.puzzle_id IS NULL THEN
+-- Если сезона нет вообще, выходим (сезоны должны создаваться через scheduler)
+IF v_season_id IS NULL THEN
+    RETURN;
+END IF;
+
+IF v_game.ai_difficulty IS NOT NULL AND v_game.puzzle_id IS NULL THEN
         p_audit_log(NULL, p_game_id, 'RATING_SKIP_AI_GAME');
         RETURN;
     END IF;
