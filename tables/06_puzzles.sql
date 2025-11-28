@@ -6,7 +6,7 @@ CREATE TABLE puzzles (
     moves_to_solve       INT DEFAULT NULL,
     difficulty_level     CHAR(1) DEFAULT 'E' NOT NULL,
     created_by_player_id INT,
-    end_condition        CHAR(1) DEFAULT 'W',
+    end_board_state      VARCHAR2(100) DEFAULT NULL, -- NULL = победа, NOT NULL = ничья (достичь эту позицию)
     solution             VARCHAR2(1000), 
     CONSTRAINT pk_puzzles PRIMARY KEY (puzzle_id),
     CONSTRAINT fk_puzzles_rule FOREIGN KEY (rule_id) REFERENCES game_rules(rule_id),

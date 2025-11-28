@@ -232,5 +232,4 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_difficulty     IN games.ai_difficulty%TYPE
     ) RETURN VARCHAR2;
 
-
 END game_logic;
