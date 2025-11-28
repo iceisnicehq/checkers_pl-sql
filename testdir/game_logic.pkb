@@ -151,7 +151,6 @@ END get_active_game;
 -- Возвращает: player_id (существующий или новый).
 FUNCTION get_or_create_player_id(p_username IN VARCHAR2) RETURN NUMBER IS
     v_player_id players.player_id%TYPE;
-    v_current_season_id seasons.season_id%TYPE;
 BEGIN
     BEGIN
         SELECT player_id
@@ -160,34 +159,10 @@ BEGIN
         WHERE username = p_username;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
+            -- Создаем игрока - триггер trg_init_player_ratings автоматически создаст рейтинги
             INSERT INTO players (username)
             VALUES (p_username)
             RETURNING player_id INTO v_player_id;
-            
-            -- Создаем начальные рейтинги для нового игрока (500 по умолчанию)
-            -- Для всех правил и текущего сезона
-            BEGIN
-                SELECT season_id INTO v_current_season_id
-                FROM seasons
-                WHERE SYSDATE BETWEEN start_date AND end_date
-                AND ROWNUM = 1;
-            EXCEPTION
-                WHEN NO_DATA_FOUND THEN
-                    -- Если активного сезона нет, берем последний созданный
-                    SELECT MAX(season_id) INTO v_current_season_id FROM seasons;
-            END;
-            
-            -- Создаем рейтинги для всех правил
-            IF v_current_season_id IS NOT NULL THEN
-                FOR r IN (SELECT rule_id FROM game_rules) LOOP
-                    BEGIN
-                        INSERT INTO player_ratings (player_id, rule_id, season_id, rating)
-                        VALUES (v_player_id, r.rule_id, v_current_season_id, 500);
-                    EXCEPTION
-                        WHEN OTHERS THEN NULL;
-                    END;
-                END LOOP;
-            END IF;
     END;
     RETURN v_player_id;
 END get_or_create_player_id;
@@ -1732,8 +1707,8 @@ BEGIN
                 );
             EXCEPTION
                 WHEN OTHERS THEN
-                    -- Если джоба нет, создаем его
-                    p_create_move_timeout_job(p_game_id);
+                    -- Игнорируем ошибки обновления job (job должен существовать)
+                    NULL;
             END;
         EXCEPTION
             WHEN OTHERS THEN NULL;
@@ -1930,77 +1905,6 @@ BEGIN
     
     COMMIT;
 END p_process_move;
--- @procedure p_create_move_timeout_job
--- @brief Creates a scheduler job to timeout a move if time limit is exceeded
-PROCEDURE p_create_move_timeout_job(p_game_id IN NUMBER) IS
-    v_job_name VARCHAR2(128);
-    v_time_limit NUMBER;
-BEGIN
-    -- Получаем лимит времени на ход
-    SELECT time_limit_move_sec INTO v_time_limit
-    FROM games
-    WHERE game_id = p_game_id;
-    
-    -- Если лимита нет, джоб не нужен
-    IF v_time_limit IS NULL THEN
-        RETURN;
-    END IF;
-    
-    v_job_name := 'MOVE_TIMEOUT_JOB_' || p_game_id;
-    
-    -- Удаляем старый джоб если есть
-    BEGIN
-        DBMS_SCHEDULER.DROP_JOB(v_job_name, force => TRUE);
-    EXCEPTION
-        WHEN OTHERS THEN NULL;
-    END;
-    
-    -- Создаем новый джоб
-    DBMS_SCHEDULER.CREATE_JOB(
-        job_name   => v_job_name,
-        job_type   => 'PLSQL_BLOCK',
-        job_action => 'DECLARE
-                v_game games%ROWTYPE;
-                v_loser_color CHAR(1);
-            BEGIN
-                BEGIN
-                    SELECT * INTO v_game FROM games WHERE game_id = ' || p_game_id || ' FOR UPDATE;
-                EXCEPTION
-                    WHEN NO_DATA_FOUND THEN
-                        RETURN; -- Игра не найдена, выходим
-                END;
-                
-                -- Проверяем что игра еще активна (если уже завершена - просто выходим, job удалится сам)
-                IF v_game.status != ''A'' THEN
-                    RETURN; -- Игра уже завершена, ничего не делаем
-                END IF;
-                
-                -- Проигравший - тот, чей сейчас ход
-                v_loser_color := v_game.current_turn;
-                
-                UPDATE games
-                SET status = ''T'', -- Timeout
-                    end_time = SYSDATE,
-                    winner_player_color = CASE v_loser_color WHEN ''W'' THEN ''B'' ELSE ''W'' END
-                WHERE game_id = ' || p_game_id || ';
-                
-                UPDATE spectators SET left_at = SYSDATE 
-                WHERE game_id = ' || p_game_id || ' AND left_at IS NULL;
-                
-                C##CHECKERS_APP.game_logic.p_update_ratings(' || p_game_id || ');
-                C##CHECKERS_APP.game_logic.p_audit_log(NULL, ' || p_game_id || ', ''MOVE_TIMEOUT'');
-                COMMIT;
-            EXCEPTION
-                WHEN OTHERS THEN NULL;
-            END;',
-        start_date => SYSTIMESTAMP + (v_time_limit / 86400), -- Через time_limit_move_sec секунд
-        enabled    => TRUE,
-        auto_drop  => TRUE,
-        comments   => 'Move timeout job for game ' || p_game_id
-    );
-EXCEPTION
-    WHEN OTHERS THEN NULL; -- Игнорируем ошибки создания джоба
-END p_create_move_timeout_job;
 -- @procedure create_game
 -- @brief Creates a new game (PvP, PvE, or puzzle).
 -- @dependencies:
@@ -2384,9 +2288,73 @@ BEGIN
     
     -- Создаем джоб таймаута хода если есть лимит времени
     BEGIN
-        p_create_move_timeout_job(p_game_id);
+        DECLARE
+            v_time_limit NUMBER;
+            v_job_name VARCHAR2(128);
+        BEGIN
+            SELECT time_limit_move_sec INTO v_time_limit
+            FROM games
+            WHERE game_id = p_game_id;
+            
+            IF v_time_limit IS NOT NULL THEN
+                v_job_name := 'MOVE_TIMEOUT_JOB_' || p_game_id;
+                
+                -- Удаляем старый джоб если есть
+                BEGIN
+                    DBMS_SCHEDULER.DROP_JOB(v_job_name, force => TRUE);
+                EXCEPTION
+                    WHEN OTHERS THEN NULL;
+                END;
+                
+                -- Создаем новый джоб
+                DBMS_SCHEDULER.CREATE_JOB(
+                    job_name   => v_job_name,
+                    job_type   => 'PLSQL_BLOCK',
+                    job_action => 'DECLARE
+                            v_game games%ROWTYPE;
+                            v_loser_color CHAR(1);
+                        BEGIN
+                            BEGIN
+                                SELECT * INTO v_game FROM games WHERE game_id = ' || p_game_id || ' FOR UPDATE;
+                            EXCEPTION
+                                WHEN NO_DATA_FOUND THEN
+                                    RETURN; -- Игра не найдена, выходим
+                            END;
+                            
+                            -- Проверяем что игра еще активна (если уже завершена - просто выходим, job удалится сам)
+                            IF v_game.status != ''A'' THEN
+                                RETURN; -- Игра уже завершена, ничего не делаем
+                            END IF;
+                            
+                            -- Проигравший - тот, чей сейчас ход
+                            v_loser_color := v_game.current_turn;
+                            
+                            UPDATE games
+                            SET status = ''T'', -- Timeout
+                                end_time = SYSDATE,
+                                winner_player_color = CASE v_loser_color WHEN ''W'' THEN ''B'' ELSE ''W'' END
+                            WHERE game_id = ' || p_game_id || ';
+                            
+                            UPDATE spectators SET left_at = SYSDATE 
+                            WHERE game_id = ' || p_game_id || ' AND left_at IS NULL;
+                            
+                            game_logic.p_update_ratings(' || p_game_id || ');
+                            game_logic.p_audit_log(NULL, ' || p_game_id || ', ''MOVE_TIMEOUT'');
+                            COMMIT;
+                        EXCEPTION
+                            WHEN OTHERS THEN NULL;
+                        END;',
+                    start_date => SYSTIMESTAMP + (v_time_limit / 86400),
+                    enabled    => TRUE,
+                    auto_drop  => TRUE,
+                    comments   => 'Move timeout job for game ' || p_game_id
+                );
+            END IF;
+        EXCEPTION
+            WHEN OTHERS THEN NULL; -- Игнорируем ошибки создания джоба
+        END;
     EXCEPTION
-        WHEN OTHERS THEN NULL; -- Игнорируем ошибки создания джоба
+        WHEN OTHERS THEN NULL;
     END;
     
     p_audit_log(v_player_id, p_game_id, 'JOIN_GAME');
