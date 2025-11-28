@@ -131,8 +131,7 @@ BEGIN
         INTO v_game_id
         FROM spectators
         WHERE player_id = p_user_id
-          AND left_at IS NULL
-          AND ROWNUM = 1;
+          AND left_at IS NULL;
         
         -- Если нашли, он тоже занят.
         RETURN v_game_id;
@@ -189,7 +188,7 @@ BEGIN
             RETURN NULL;
     END;
 
-    -- Проверяем РАЗМЕР ДОСКИ
+    -- Проверяем РАЗМЕР ДОСКИ (может быть только 8 или 10)
     IF v_rule.board_size = 8 THEN
         -- 8x8 (Русские шашки: 64 символа)
         RETURN '+b+b+b+b' || -- Row 8
@@ -200,8 +199,7 @@ BEGIN
                'w+w+w+w+' || -- Row 3
                '+w+w+w+w' || -- Row 2
                'w+w+w+w+';   -- Row 1
-
-    ELSIF v_rule.board_size = 10 THEN
+    ELSE
         -- 10x10 (Международные шашки: 100 символов)
         -- Каждая строка должна содержать 10 символов
         -- Порядок: Row 10 (первые 10 символов) -> Row 1 (последние 10 символов)
@@ -215,38 +213,8 @@ BEGIN
                'w+w+w+w+w+' || -- Row 3 (10 символов: начинается с фигуры, заканчивается пустым)
                '+w+w+w+w+w' || -- Row 2 (10 символов: начинается с пустого, заканчивается фигурой)
                'w+w+w+w+w+';   -- Row 1 (10 символов: начинается с фигуры, заканчивается пустым)
-    ELSE
-        -- Неподдерживаемый размер
-        v_error_msg := 'Правила с ID=' || p_rule_id || ' (Размер: ' || v_rule.board_size || ') не поддерживаются.';
-        p_audit_log(p_player_id => NULL, p_game_id => NULL, p_event_msg => v_error_msg);
-        DBMS_OUTPUT.PUT_LINE(v_error_msg);
-        RETURN NULL;
     END IF;
 END get_initial_position;
--- =========================================================================
--- ФУНКЦИЯ: idx_to_notation
--- =========================================================================
--- Преобразует линейный индекс доски в шахматную нотацию.
--- Примеры: 1 -> 'a1', 8 -> 'h1', 57 -> 'a8', 100 -> 'j10' (для 10x10).
--- Использует кэш g_map_by_idx для быстрого доступа.
--- Параметры: p_idx - линейный индекс (1..64 для 8x8, 1..100 для 10x10),
---            p_board_size - размер доски (8 или 10).
-FUNCTION idx_to_notation(
-    p_idx IN PLS_INTEGER, 
-    p_board_size IN NUMBER -- <-- НОВЫЙ ПАРАМЕТР
-) RETURN VARCHAR2 IS
-BEGIN
-    -- 1. Убедиться, что кэш нужного размера загружен
-    p_init_board_map(p_board_size); 
-    
-    -- 2. Мгновенно получить нотацию из кэша по индексу
-    RETURN g_map_by_idx(p_idx).notation;
-    
-EXCEPTION
-    -- Если индекса нет (например, p_idx = 101), вернуть NULL
-    WHEN NO_DATA_FOUND THEN
-        RETURN NULL;
-END idx_to_notation;
 -- =========================================================================
 -- ФУНКЦИЯ: find_capture_paths
 -- =========================================================================
@@ -298,14 +266,6 @@ BEGIN
         ELSE -- 10x10
             v_jump_directions := SYS.ODCINUMBERLIST(-22, -18, 18, 22);
         END IF;
-        
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN
-            p_audit_log(NULL, NULL, 'find_capture_paths: Rule ' || p_rule_id || ' not found.');
-            RETURN v_results;
-        WHEN OTHERS THEN
-            p_audit_log(NULL, NULL, 'find_capture_paths error: ' || SQLERRM);
-            RETURN v_results; 
     END;
     
     -- 2. Определение фигур противника
@@ -533,11 +493,6 @@ BEGIN
             v_simple_move_b   := SYS.ODCINUMBERLIST(9, 11);
             v_simple_move_all := SYS.ODCINUMBERLIST(-11, -9, 9, 11);
         END IF;
-        
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN
-            p_audit_log(NULL, NULL, 'find_all_player_moves: Rule ' || p_rule_id || ' not found.');
-            RETURN v_all_moves;
     END;
 
     IF p_player_color = 'W' THEN
@@ -1247,10 +1202,16 @@ BEGIN
         RETURN NULL;
     END IF;
     
-    v_notation := idx_to_notation(p_move.path(1).start_idx, p_board_size);
+    -- Инициализируем кэш доски
+    p_init_board_map(p_board_size);
+    
+    -- Получаем нотацию начальной позиции
+    v_notation := g_map_by_idx(p_move.path(1).start_idx).notation;
+    
+    -- Добавляем нотацию каждого шага хода
     FOR j IN 1 .. p_move.path.COUNT LOOP
         v_notation := v_notation || CASE p_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END 
-                      || idx_to_notation(p_move.path(j).end_idx, p_board_size);
+                      || g_map_by_idx(p_move.path(j).end_idx).notation;
     END LOOP;
     
     RETURN v_notation;
@@ -1330,16 +1291,19 @@ BEGIN
 EXCEPTION
     WHEN NO_DATA_FOUND THEN RETURN;
 
-    -- Определяем текущий сезон (берем активный или последний созданный)
+    -- Определяем сезон, в котором игра началась (используем start_time, а не SYSDATE)
+    -- Это гарантирует, что рейтинг обновляется в сезоне начала игры, даже если игра закончилась в следующем сезоне
     BEGIN
         SELECT season_id INTO v_season_id 
         FROM seasons 
-        WHERE SYSDATE BETWEEN start_date AND end_date 
+        WHERE v_game.start_time BETWEEN start_date AND end_date 
         AND ROWNUM = 1;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-            -- Если активного сезона нет, берем последний созданный
-            SELECT MAX(season_id) INTO v_season_id FROM seasons;
+            -- Если сезона для start_time нет, берем последний сезон, который начался до start_time
+            SELECT MAX(season_id) INTO v_season_id 
+            FROM seasons 
+            WHERE start_date <= v_game.start_time;
     END;
     
     -- Если сезона нет вообще, выходим (сезоны должны создаваться через scheduler)

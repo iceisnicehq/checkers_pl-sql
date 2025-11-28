@@ -177,11 +177,6 @@ CREATE OR REPLACE PACKAGE game_logic AS
     FUNCTION get_initial_position(
         p_rule_id IN NUMBER
     ) RETURN VARCHAR2;
-
-    FUNCTION idx_to_notation(
-        p_idx IN PLS_INTEGER,
-        p_board_size IN NUMBER
-    ) RETURN VARCHAR2;
     
     FUNCTION f_get_board_as_clob(
         p_board_position  IN VARCHAR2,
