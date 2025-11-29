@@ -108,7 +108,11 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_difficulty_level IN CHAR DEFAULT 'E'
     );
     
-    PROCEDURE show_puzzles(p_difficulty IN CHAR DEFAULT NULL, p_puzzle_id IN NUMBER DEFAULT NULL); 
+    PROCEDURE show_puzzles(
+        p_difficulty IN CHAR DEFAULT NULL, 
+        p_puzzle_id  IN NUMBER DEFAULT NULL,
+        p_solution   IN CHAR DEFAULT 'N'
+    ); 
     
     PROCEDURE show_my_puzzles(p_difficulty IN CHAR DEFAULT NULL); 
     
