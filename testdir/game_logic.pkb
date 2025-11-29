@@ -290,12 +290,9 @@ BEGIN
                 v_land_idx    := p_start_idx + v_jump;
                 v_capture_idx := p_start_idx + (v_jump / 2);
 
-                -- Проверка границ и геометрии (через кэш)
+                -- Проверка границ и геометрии (через вспомогательную функцию)
                 -- ABS(...) = 2 гарантирует, что мы не прыгнули "сквозь стену" (например, с h4 на a5)
-                IF v_land_idx BETWEEN 1 AND v_total_squares 
-                   AND g_map_by_idx.EXISTS(v_land_idx)
-                   AND ABS(v_start_field.col_num - g_map_by_idx(v_land_idx).col_num) = 2 
-                THEN
+                IF f_is_valid_index(v_land_idx, v_total_squares, v_start_field.col_num, 2) THEN
                     -- Проверка содержимого клеток (куда прыгаем - пусто, кого бьем - враг)
                     IF SUBSTR(v_decoded_board, v_land_idx, 1) = c_empty_field 
                        AND SUBSTR(v_decoded_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king) 
@@ -358,10 +355,7 @@ BEGIN
                     v_capture_idx := p_start_idx + (v_jump / 2 * k);
 
                     -- Проверка границ для "перелета" через пустые клетки до жертвы
-                    IF v_capture_idx NOT BETWEEN 1 AND v_total_squares 
-                       OR NOT g_map_by_idx.EXISTS(v_capture_idx)
-                       OR ABS(v_start_field.col_num - g_map_by_idx(v_capture_idx).col_num) != k 
-                    THEN
+                    IF NOT f_is_valid_index(v_capture_idx, v_total_squares, v_start_field.col_num, k) THEN
                         EXIT; -- Уперлись в край
                     END IF;
 
@@ -380,10 +374,7 @@ BEGIN
                         FOR l IN (k + 1) .. v_board_size LOOP 
                             v_land_idx := p_start_idx + (v_jump / 2 * l);
                             
-                            IF v_land_idx NOT BETWEEN 1 AND v_total_squares 
-                               OR NOT g_map_by_idx.EXISTS(v_land_idx)
-                               OR ABS(v_start_field.col_num - g_map_by_idx(v_land_idx).col_num) != l 
-                            THEN
+                            IF NOT f_is_valid_index(v_land_idx, v_total_squares, v_start_field.col_num, l) THEN
                                 EXIT; -- Уперлись в край
                             END IF;
                             
@@ -473,6 +464,7 @@ FUNCTION find_all_player_moves(
     v_simple_move_b   SYS.ODCINUMBERLIST;
     v_simple_move_all SYS.ODCINUMBERLIST;
     v_max_king_range  PLS_INTEGER;
+    v_simple_directions SYS.ODCINUMBERLIST;
 
 BEGIN
     -- 1. Настройка параметров
@@ -498,21 +490,26 @@ BEGIN
     IF p_player_color = 'W' THEN
         v_player_man  := c_white_man;
         v_player_king := c_white_king;
+        v_simple_directions := v_simple_move_w;
     ELSE
         v_player_man  := c_black_man;
         v_player_king := c_black_king;
+        v_simple_directions := v_simple_move_b;
     END IF;
     
-    -- === 1. ПОИСК ВЗЯТИЙ (Captures) ===
+    -- === ОБЪЕДИНЕННЫЙ ПРОХОД: Поиск взятий и тихих ходов за один цикл ===
     FOR i IN 1 .. v_total_squares LOOP
         DECLARE
-            v_piece   CHAR(1) := SUBSTR(v_decoded_board, i, 1);
-            v_paths   t_move_list;
-            v_is_king CHAR(1);
+            v_piece       CHAR(1) := SUBSTR(v_decoded_board, i, 1);
+            v_start_field rec_board_field := g_map_by_idx(i);
+            v_paths       t_move_list;
+            v_is_king     CHAR(1);
         BEGIN
+            -- Проверяем, принадлежит ли фигура игроку
             IF v_piece IN (v_player_man, v_player_king) THEN
                 v_is_king := CASE WHEN v_piece IN (c_white_king, c_black_king) THEN 'Y' ELSE 'N' END;
                 
+                -- === 1. ПОИСК ВЗЯТИЙ ===
                 v_paths := find_capture_paths(i, v_decoded_board, p_player_color, v_is_king, p_rule_id);
                 
                 IF v_paths.COUNT > 0 THEN
@@ -524,17 +521,93 @@ BEGIN
                         END IF;
                     END LOOP;
                 END IF;
+                
+                -- === 2. ПОИСК ТИХИХ ХОДОВ ===
+                -- Собираем тихие ходы только если еще не нашли взятий (оптимизация)
+                -- Если нашли хотя бы одно взятие, тихие ходы не нужны (обязательно бить)
+                IF v_capture_moves.COUNT = 0 THEN
+                    IF v_piece = v_player_man THEN
+                        -- Простая шашка
+                        FOR d IN 1 .. v_simple_directions.COUNT LOOP
+                            DECLARE
+                                v_end_idx   PLS_INTEGER := i + v_simple_directions(d);
+                                v_end_field rec_board_field;
+                            BEGIN
+                                -- Проверяем границы, существование в кэше и пустоту клетки
+                                IF v_end_idx BETWEEN 1 AND v_total_squares
+                                   AND g_map_by_idx.EXISTS(v_end_idx)
+                                   AND SUBSTR(v_decoded_board, v_end_idx, 1) = c_empty_field
+                                THEN
+                                    v_end_field := g_map_by_idx(v_end_idx);
+                                    -- Простая шашка ходит только на соседнюю клетку (разница колонок = 1)
+                                    IF ABS(v_start_field.col_num - v_end_field.col_num) = 1 THEN
+                                        DECLARE
+                                            v_move r_move;
+                                            v_step r_move_step;
+                                        BEGIN
+                                            v_step.start_idx     := i;
+                                            v_step.end_idx       := v_end_idx;
+                                            v_step.captured_idx  := NULL;
+                                            v_move.path          := t_move_path(v_step);
+                                            v_move.is_capture    := 'N';
+                                            v_move.capture_count := 0;
+                                            v_simple_moves.EXTEND;
+                                            v_simple_moves(v_simple_moves.LAST) := v_move;
+                                        END;
+                                    END IF;
+                                END IF;
+                            END;
+                        END LOOP;
+                        
+                    ELSIF v_piece = v_player_king THEN
+                        -- Дамка
+                        FOR d IN 1 .. v_simple_move_all.COUNT LOOP
+                            FOR k IN 1 .. v_max_king_range LOOP 
+                                DECLARE
+                                    v_end_idx   PLS_INTEGER := i + (v_simple_move_all(d) * k);
+                                    v_end_field rec_board_field;
+                                BEGIN
+                                    IF NOT g_map_by_idx.EXISTS(v_end_idx) THEN EXIT; END IF;
+                                    v_end_field := g_map_by_idx(v_end_idx);
+                                    
+                                    -- Проверка геометрии (чтобы не перепрыгнуть через край на другую строку)
+                                    IF k > 1 AND ABS(g_map_by_idx(i + (v_simple_move_all(d) * (k - 1))).col_num - v_end_field.col_num) != 1 THEN
+                                        EXIT;
+                                    END IF;
+
+                                    IF SUBSTR(v_decoded_board, v_end_idx, 1) = c_empty_field THEN
+                                        DECLARE
+                                            v_move r_move;
+                                            v_step r_move_step;
+                                        BEGIN
+                                            v_step.start_idx     := i;
+                                            v_step.end_idx       := v_end_idx;
+                                            v_step.captured_idx  := NULL;
+                                            v_move.path          := t_move_path(v_step);
+                                            v_move.is_capture    := 'N';
+                                            v_move.capture_count := 0;
+                                            v_simple_moves.EXTEND;
+                                            v_simple_moves(v_simple_moves.LAST) := v_move;
+                                        END;
+                                    ELSE
+                                        EXIT; -- Клетка занята, дальше идти нельзя
+                                    END IF;
+                                END;
+                            END LOOP;
+                        END LOOP;
+                    END IF;
+                END IF; -- Конец проверки v_capture_moves.COUNT = 0
             END IF;
         END;
     END LOOP;
 
-    -- === 2. ФИЛЬТРАЦИЯ ВЗЯТИЙ ===
+    -- === 3. ФИЛЬТРАЦИЯ ВЗЯТИЙ И ВОЗВРАТ РЕЗУЛЬТАТА ===
     IF v_capture_moves.COUNT > 0 THEN
         -- Правило 1 (Русские): Обязательно бить, но можно выбрать ЛЮБОЕ количество
         IF p_rule_id = 1 THEN 
             RETURN v_capture_moves;
         ELSE 
-        -- Правило 2 (Международные): Обязательно бить МАКСИМАЛЬНОЕ количество
+            -- Правило 2 (Международные): Обязательно бить МАКСИМАЛЬНОЕ количество
             FOR i IN 1 .. v_capture_moves.COUNT LOOP
                 IF v_capture_moves(i).capture_count = v_max_captures THEN
                     v_all_moves.EXTEND;
@@ -544,95 +617,6 @@ BEGIN
             RETURN v_all_moves;
         END IF;
     END IF;
-
-    -- === 3. ПОИСК "ТИХИХ" ХОДОВ (Simple moves) ===
-    FOR i IN 1 .. v_total_squares LOOP
-        DECLARE
-            v_piece       CHAR(1) := SUBSTR(v_decoded_board, i, 1);
-            v_start_field rec_board_field := g_map_by_idx(i); 
-        BEGIN
-            IF v_piece = v_player_man THEN
-                DECLARE
-                    v_directions SYS.ODCINUMBERLIST;
-                BEGIN
-                    IF p_player_color = 'W' THEN v_directions := v_simple_move_w;
-                    ELSE v_directions := v_simple_move_b; END IF;
-                    
-                    FOR d IN 1 .. v_directions.COUNT LOOP
-                        DECLARE
-                            v_end_idx   PLS_INTEGER := i + v_directions(d);
-                            v_end_field rec_board_field;
-                        BEGIN
-                            -- Проверяем границы и пустоту клетки
-                            IF v_end_idx BETWEEN 1 AND v_total_squares 
-                               AND g_map_by_idx.EXISTS(v_end_idx) 
-                               AND SUBSTR(v_decoded_board, v_end_idx, 1) = c_empty_field 
-                            THEN
-                                v_end_field := g_map_by_idx(v_end_idx);
-                                -- Простая шашка ходит только на соседнюю клетку (разница колонок = 1)
-                                IF ABS(v_start_field.col_num - v_end_field.col_num) = 1 THEN
-                                    DECLARE
-                                        v_move r_move;
-                                        v_step r_move_step;
-                                    BEGIN
-                                        v_step.start_idx     := i;
-                                        v_step.end_idx       := v_end_idx;
-                                        v_step.captured_idx  := NULL;
-                                        v_move.path          := t_move_path(v_step);
-                                        v_move.is_capture    := 'N';
-                                        v_move.capture_count := 0;
-                                        v_simple_moves.EXTEND;
-                                        v_simple_moves(v_simple_moves.LAST) := v_move;
-                                    END;
-                                END IF;
-                            END IF;
-                        END;
-                    END LOOP;
-                END;
-                
-            ELSIF v_piece = v_player_king THEN
-                DECLARE
-                    v_directions SYS.ODCINUMBERLIST := v_simple_move_all;
-                BEGIN
-                    FOR d IN 1 .. v_directions.COUNT LOOP
-                        FOR k IN 1 .. v_max_king_range LOOP 
-                            DECLARE
-                                v_end_idx   PLS_INTEGER := i + (v_directions(d) * k);
-                                v_end_field rec_board_field;
-                            BEGIN
-                                IF NOT g_map_by_idx.EXISTS(v_end_idx) THEN EXIT; END IF;
-                                v_end_field := g_map_by_idx(v_end_idx);
-                                
-                                -- Проверка геометрии (чтобы не перепрыгнуть через край на другую строку)
-                                -- Если это не первый шаг, проверяем связность с предыдущей клеткой
-                                IF k > 1 AND ABS(g_map_by_idx(i + (v_directions(d) * (k - 1))).col_num - v_end_field.col_num) != 1 THEN
-                                    EXIT;
-                                END IF;
-
-                                IF SUBSTR(v_decoded_board, v_end_idx, 1) = c_empty_field THEN
-                                    DECLARE
-                                        v_move r_move;
-                                        v_step r_move_step;
-                                    BEGIN
-                                        v_step.start_idx     := i;
-                                        v_step.end_idx       := v_end_idx;
-                                        v_step.captured_idx  := NULL;
-                                        v_move.path          := t_move_path(v_step);
-                                        v_move.is_capture    := 'N';
-                                        v_move.capture_count := 0;
-                                        v_simple_moves.EXTEND;
-                                        v_simple_moves(v_simple_moves.LAST) := v_move;
-                                    END;
-                                ELSE
-                                    EXIT; -- Клетка занята, дальше идти нельзя
-                                END IF;
-                            END;
-                        END LOOP;
-                    END LOOP;
-                END;
-            END IF;
-        END;
-    END LOOP;
 
     RETURN v_simple_moves;
 END find_all_player_moves;
@@ -1186,6 +1170,27 @@ BEGIN
     
     COMMIT;
 END p_finish_game;
+
+-- =========================================================================
+-- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Проверка валидности индекса и геометрии
+-- =========================================================================
+-- Проверяет, что индекс находится в пределах доски, существует в кэше,
+-- и соответствует ожидаемой геометрической разнице колонок.
+-- Используется для избежания дублирования проверок границ и геометрии.
+FUNCTION f_is_valid_index(
+    p_idx           IN PLS_INTEGER,
+    p_total_squares IN PLS_INTEGER,
+    p_start_col     IN PLS_INTEGER,
+    p_expected_col_diff IN PLS_INTEGER
+) RETURN BOOLEAN IS
+BEGIN
+    RETURN p_idx BETWEEN 1 AND p_total_squares
+       AND g_map_by_idx.EXISTS(p_idx)
+       AND ABS(p_start_col - g_map_by_idx(p_idx).col_num) = p_expected_col_diff;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RETURN FALSE;
+END f_is_valid_index;
 
 -- =========================================================================
 -- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Формирование нотации хода
