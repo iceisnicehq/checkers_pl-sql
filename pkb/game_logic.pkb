@@ -823,7 +823,7 @@ FUNCTION f_get_board_as_clob(
     v_board_size    PLS_INTEGER;
     v_total_squares PLS_INTEGER;
     v_header        VARCHAR2(128) := '  |';
-    v_separator     VARCHAR2(128) := '
+    v_separator     VARCHAR2(128) := '--+';
     
 BEGIN
     DBMS_LOB.createtemporary(v_clob, TRUE);
@@ -850,11 +850,11 @@ BEGIN
                 v_col_letter := 'J';
             END IF;
             v_header    := v_header    || ' ' || v_col_letter || ' ';
-            v_separator := v_separator || '
+            v_separator := v_separator || '---';
         END;
     END LOOP;
     v_header    := v_header    || ' |';
-    v_separator := v_separator || '+
+    v_separator := v_separator || '+--';
 
     DBMS_LOB.append(v_clob, v_header || c_nl);
     DBMS_LOB.append(v_clob, v_separator || c_nl);
@@ -2031,7 +2031,7 @@ BEGIN
                             v_loser_color := v_game.current_turn;
                             
                             UPDATE games
-                            SET status = ''T'',
+                            SET status = ''T'', -- Timeout
                                 end_time = SYSDATE,
                                 winner_player_color = CASE v_loser_color WHEN ''W'' THEN ''B'' ELSE ''W'' END
                             WHERE game_id = ' || p_game_id || ';
@@ -2094,7 +2094,7 @@ BEGIN
             v_error_msg := 'Вы находитесь в режиме просмотра (Игра ID: ' || v_spectating_game_id || '). Нельзя сдаться.';
             p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
-            DBMS_OUTPUT.PUT_LINE('
+            DBMS_OUTPUT.PUT_LINE('--[ Вызовите game_logic.stop_spectating; чтобы выйти из режима просмотра ]--');
             RETURN;
         END IF;
     END;
@@ -2216,7 +2216,7 @@ BEGIN
     WHERE sequence_name = v_seq_name;
 
     IF v_session_exists = 0 THEN
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('--[ Создание новой сессии просмотра для игры ' || p_game_id || ' ]--');
         
         BEGIN
             SELECT * INTO v_game_rec FROM games WHERE game_id = p_game_id;
@@ -2328,13 +2328,13 @@ BEGIN
                     WHEN NO_DATA_FOUND THEN v_final_message := 'Игра не найдена.';
                 END;
                 
-                DBMS_OUTPUT.PUT_LINE('
+                DBMS_OUTPUT.PUT_LINE('--[ КОНЕЦ ПАРТИИ ]-- ' || v_final_message);
                 EXIT;
             END IF;
 
             FOR move_rec IN c_game_moves(p_game_id, v_move_num) LOOP
                 v_color_str := CASE move_rec.player_color WHEN 'W' THEN '(Белые)' ELSE '(Черные)' END;
-                DBMS_OUTPUT.PUT_LINE('
+                DBMS_OUTPUT.PUT_LINE('---');
                 DBMS_OUTPUT.PUT_LINE(
                     'Ход ' || v_move_num || ' ' || 
                     RPAD(NVL(move_rec.username, 'AI'), 20) || ' ' ||
@@ -2457,8 +2457,8 @@ BEGIN
           AND ROWNUM = 1;
         
         IF v_existing_spectator_game_id IS NOT NULL THEN
-            DBMS_OUTPUT.PUT_LINE('
-            DBMS_OUTPUT.PUT_LINE('
+            DBMS_OUTPUT.PUT_LINE('--[ У вас уже есть активная сессия просмотра (ID: ' || v_target_game_id || ') ]--');
+            DBMS_OUTPUT.PUT_LINE('--[ Для отмены вызовите: game_logic.stop_spectating; ]--');
         END IF;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
@@ -2482,7 +2482,7 @@ BEGIN
             VALUES (d.player_id, d.game_id, SYSDATE);
         
         p_audit_log(v_viewer_player_id, v_target_game_id, 'SPECTATOR_JOIN');
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('--[ Вы вошли в режим просмотра (ID: ' || v_target_game_id || ') ]--');
     END IF;
     
     COMMIT;
@@ -2516,7 +2516,7 @@ BEGIN
                     v_loop_start_time := SYSDATE;
                     v_timeout_sec := NVL(v_game.time_limit_move_sec, 300); 
 
-                    DBMS_OUTPUT.PUT_LINE('
+                    DBMS_OUTPUT.PUT_LINE('---');
                     IF v_my_color IS NOT NULL THEN
                         DBMS_OUTPUT.PUT_LINE('Ожидание вашего хода... (Тайм-аут ожидания: 5 минут)');
                     ELSE
@@ -2635,7 +2635,7 @@ BEGIN
                 END IF;
             END;
             
-            DBMS_OUTPUT.PUT_LINE('
+            DBMS_OUTPUT.PUT_LINE('-- Используйте watch_game_replay(' || v_target_game_id || ') для просмотра полной партии.');
             
             UPDATE spectators SET left_at = SYSDATE 
             WHERE player_id = v_viewer_player_id AND game_id = v_target_game_id AND left_at IS NULL;
@@ -2661,7 +2661,7 @@ BEGIN
         END IF;
         
         IF v_wait_message IS NOT NULL THEN
-            DBMS_OUTPUT.PUT_LINE('
+            DBMS_OUTPUT.PUT_LINE('---');
             DBMS_OUTPUT.PUT_LINE(v_wait_message);
         END IF;
 
@@ -2886,7 +2886,7 @@ BEGIN
             v_error_msg := 'Вы находитесь в режиме просмотра (Игра ID: ' || v_spectating_game_id || '). Нельзя отменить игру.';
             p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
-            DBMS_OUTPUT.PUT_LINE('
+            DBMS_OUTPUT.PUT_LINE('--[ Вызовите game_logic.stop_spectating; чтобы выйти из режима просмотра ]--');
             RETURN;
         END IF;
     END;
@@ -2957,7 +2957,7 @@ BEGIN
             v_error_msg := 'Вы находитесь в режиме просмотра (Игра ID: ' || v_spectating_game_id || '). Нельзя управлять ничьей.';
             p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
-            DBMS_OUTPUT.PUT_LINE('
+            DBMS_OUTPUT.PUT_LINE('--[ Вызовите game_logic.stop_spectating; чтобы выйти из режима просмотра ]--');
             RETURN;
         END IF;
     END;
@@ -3511,7 +3511,7 @@ BEGIN
                 DBMS_OUTPUT.PUT_LINE('Сложность: ' || r.difficulty_level);
                 DBMS_OUTPUT.PUT_LINE('Цель:      ' || v_goal_str || ' за ' || NVL(TO_CHAR(r.moves_to_solve), '?') || ' ход(ов)');
                 DBMS_OUTPUT.PUT_LINE('Ваш ход:   ' || CASE r.turn_to_move WHEN 'W' THEN 'Белые' ELSE 'Черные' END);
-                DBMS_OUTPUT.PUT_LINE('
+                DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
                 
                 v_visual_board := f_get_board_as_clob(r.board_position);
                 DBMS_OUTPUT.PUT_LINE(v_visual_board);
@@ -3519,14 +3519,14 @@ BEGIN
                 IF p_solution = 'Y' THEN
                     IF v_has_attempts THEN
                         IF r.solution IS NOT NULL THEN
-                            DBMS_OUTPUT.PUT_LINE('
+                            DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
                             DBMS_OUTPUT.PUT_LINE('РЕШЕНИЕ: ' || r.solution);
                         ELSE
-                            DBMS_OUTPUT.PUT_LINE('
+                            DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
                             DBMS_OUTPUT.PUT_LINE('РЕШЕНИЕ: не указано');
                         END IF;
                     ELSE
-                        DBMS_OUTPUT.PUT_LINE('
+                        DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
                         DBMS_OUTPUT.PUT_LINE('Нельзя смотреть решение, если не было попыток решить задачу.');
                     END IF;
                 END IF;
@@ -3540,7 +3540,7 @@ BEGIN
         RETURN;
     END IF;
 
-    DBMS_OUTPUT.PUT_LINE('
+    DBMS_OUTPUT.PUT_LINE('--- Список Доступных Задач ---');
     IF p_difficulty IS NOT NULL THEN
         DBMS_OUTPUT.PUT_LINE(' (Фильтр по Сложности: ' || p_difficulty || ')');
     ELSE
@@ -3734,12 +3734,12 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('Сложность: ' || v_difficulty);
         DBMS_OUTPUT.PUT_LINE('Задача:    ' || v_goal_str || ' за ' || NVL(TO_CHAR(v_moves_solve), 'N/A') || ' ход(ов)');
         DBMS_OUTPUT.PUT_LINE('Ваш ход:   ' || CASE v_turn WHEN 'W' THEN 'Белые (W)' ELSE 'Черные (B)' END);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
 
         v_visual_board := f_get_board_as_clob(v_board_pos);
         DBMS_OUTPUT.PUT_LINE(v_visual_board);
         
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
 
         DBMS_OUTPUT.PUT_LINE('Для решения: BEGIN game_logic.create_game(p_puzzle_id => ' || v_puzzle_id || '); END;');
 
@@ -3766,7 +3766,7 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('ПОДСКАЗКА: Для просмотра информации по конкретной процедуре передайте параметр:');
         DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_proc_name => ''CREATE_GAME''); END;');
-        DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_proc_name => ''ALL''); END;
+        DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_proc_name => ''ALL''); END;  -=- Полная справка');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('Доступные процедуры: CREATE_GAME, JOIN_GAME, MAKE_MOVE, PRINT_ACTIVE_BOARD,');
         DBMS_OUTPUT.PUT_LINE('  RESIGN_GAME, CANCEL_GAME, DRAW, CREATE_MATCH, JOIN_MATCH,');
@@ -3818,8 +3818,8 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_move_notation - Нотация хода (например, ''a3-b4'' или ''c3:e5'').');
             DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
-            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3-d4''); END;
-            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3:e5''); END;
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3-d4''); END;  -=- Тихий ход');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3:e5''); END;  -=- Взятие');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
@@ -3941,7 +3941,7 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_puzzle_id (обязателен, 0 = удалить все свои задачи)');
             DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.delete_my_puzzle(15); END;');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.delete_my_puzzle(0); END;
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.delete_my_puzzle(0); END; -=- удалить все свои задачи');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
@@ -4049,34 +4049,34 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('================================================================');
         DBMS_OUTPUT.PUT_LINE('Используйте SQL запросы для просмотра статистики:');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('  -- Открытые игры:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_open_games;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('  -- Активные игры:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_active_games;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('  -- Статус игры:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_game_status WHERE game_id = 123;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('  -- Протокол игры:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_game_protocol WHERE game_id = 123 ORDER BY move_number;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('  -- История игрока:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('  -- История игрока за период:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history_by_period;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('  -- Статистика игрока:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_stats;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('  -- Рейтинг по успеху:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_leaderboard;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('  -- Рейтинг по среднему числу ходов:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_leaderboard_by_avg_moves;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('
+        DBMS_OUTPUT.PUT_LINE('  -- Результаты Daily Puzzles:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_daily_puzzle_results;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         
