@@ -128,7 +128,7 @@ END get_or_create_player_id;
 
 FUNCTION get_initial_position(p_rule_id IN NUMBER) RETURN VARCHAR2 IS
     v_rule      game_rules%ROWTYPE;
-    v_error_msg VARCHAR2(2000); 
+    v_error_msg VARCHAR2(100); 
 BEGIN
 
     BEGIN
@@ -142,7 +142,6 @@ BEGIN
     END;
 
     IF v_rule.board_size = 8 THEN
-
         RETURN '+b+b+b+b' ||
                'b+b+b+b+' ||
                '+b+b+b+b' ||
@@ -152,7 +151,6 @@ BEGIN
                '+w+w+w+w' ||
                'w+w+w+w+';
     ELSE
-
         RETURN '+b+b+b+b+b' ||
                'b+b+b+b+b+' ||
                '+b+b+b+b+b' ||
@@ -1329,7 +1327,7 @@ BEGIN
 
     FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
         DECLARE
-            v_notation VARCHAR2(100) := f_move_to_notation(v_all_legal_moves(i), v_board_size);
+            v_notation VARCHAR2(50) := f_move_to_notation(v_all_legal_moves(i), v_board_size);
         BEGIN
             IF LOWER(p_move_notation) = v_notation THEN
                 v_chosen_move   := v_all_legal_moves(i);
@@ -1342,18 +1340,12 @@ BEGIN
     IF NOT v_is_move_valid THEN
         IF v_all_legal_moves(1).is_capture = 'Y' THEN
             DECLARE
-                v_notation_str VARCHAR2(4000);
+                v_notation_str VARCHAR2(150);
             BEGIN
                 v_error_msg := 'Неверный ход. Взятие обязательно! Доступные варианты: ';
                 FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
                     v_notation_str := f_move_to_notation(v_all_legal_moves(i), v_board_size);
-                    
-                    IF LENGTH(v_error_msg || v_notation_str || ' ') <= 2000 THEN
-                        v_error_msg := v_error_msg || v_notation_str || ' ';
-                    ELSE
-                        v_error_msg := v_error_msg || '...';
-                        EXIT;
-                    END IF;
+                    v_error_msg := v_error_msg || v_notation_str || ' ';
                 END LOOP;
                 v_error_msg := RTRIM(v_error_msg);
             END;
@@ -2775,8 +2767,8 @@ PROCEDURE make_move(p_move_notation IN VARCHAR2) IS
     v_game_id   NUMBER;
     v_game      games%ROWTYPE;
     v_player_id players.player_id%TYPE;
-    v_human_msg VARCHAR2(2000);
-    v_ai_msg    VARCHAR2(2000);
+    v_human_msg VARCHAR2(1000);
+    v_ai_msg    VARCHAR2(1000);
     v_error_msg VARCHAR2(2000);
 BEGIN
     v_player_id := get_or_create_player_id(USER);
