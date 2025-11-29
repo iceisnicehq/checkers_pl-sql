@@ -1,4 +1,4 @@
-CREATE OR REPLACE PACKAGE BODY C##CHECKERS_APP.game_logic AS
+CREATE OR REPLACE PACKAGE BODY game_logic AS
 
     c_white_man     CONSTANT VARCHAR2(1) := 'w';
     c_black_man     CONSTANT VARCHAR2(1) := 'b';
@@ -1670,7 +1670,7 @@ PROCEDURE create_game(
     v_game_id             NUMBER;
     v_status_message      VARCHAR2(1000);
     v_my_active_game_id   NUMBER;
-    v_error_msg           VARCHAR2(255);
+    v_error_msg           VARCHAR2(2000);
 BEGIN
     v_current_player_id := get_or_create_player_id(v_current_username);
     UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_current_player_id;
@@ -1923,7 +1923,7 @@ PROCEDURE join_game(p_game_id IN NUMBER) IS
     v_game             games%ROWTYPE;
     v_player_id        players.player_id%TYPE;
     v_active_game_id   NUMBER;
-    v_error_msg        VARCHAR2(255);
+    v_error_msg        VARCHAR2(2000);
 BEGIN
     v_player_id := get_or_create_player_id(USER);
     UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
@@ -2924,7 +2924,7 @@ BEGIN
 EXCEPTION
     WHEN OTHERS THEN
         v_error_msg := 'Неожиданная ошибка при отмене игры: ' || SQLERRM;
-        p_audit_log(v_player_id, v_game_id, SUBSTR(v_error_msg, 1, 255));
+        p_audit_log(v_player_id, v_game_id, SUBSTR(v_error_msg, 1, 2000));
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         ROLLBACK;
 END cancel_game;
@@ -3110,7 +3110,7 @@ PROCEDURE create_match(
 ) IS
     v_current_player_id  players.player_id%TYPE;
     v_error_msg          VARCHAR2(2000);
-    v_status_message     VARCHAR2(255);
+    v_status_message     VARCHAR2(2000);
     
     v_game_id            games.game_id%TYPE;
     v_match_id           matches.match_id%TYPE;
@@ -3741,7 +3741,7 @@ BEGIN
         
         DBMS_OUTPUT.PUT_LINE('
 
-        DBMS_OUTPUT.PUT_LINE('Для решения: BEGIN game_logic.start_daily_puzzle; END;');
+        DBMS_OUTPUT.PUT_LINE('Для решения: BEGIN game_logic.create_game(p_puzzle_id => ' || v_puzzle_id || '); END;');
 
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
