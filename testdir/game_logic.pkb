@@ -1188,7 +1188,8 @@ BEGIN
             END LOOP;
             
             -- Проверяем, завершен ли матч
-            IF v_player1_wins = v_games_to_win THEN
+            -- Победа когда wins > games_to_win/2 (для best of 3 нужно 2 победы, так как 2 > 1.5)
+            IF v_player1_wins > (v_games_to_win / 2) THEN
                 UPDATE matches
                 SET status = 'C',
                     winner_player_id = v_player1_id
@@ -1214,7 +1215,7 @@ BEGIN
                   AND rule_id = v_match_rule_id 
                   AND season_id = v_season_id;
                 
-            ELSIF v_player2_wins = v_games_to_win THEN
+            ELSIF v_player2_wins > (v_games_to_win / 2) THEN
                 UPDATE matches
                 SET status = 'C',
                     winner_player_id = v_player2_id
@@ -2034,19 +2035,27 @@ BEGIN
                 v_creator_color   := 'B';
             END IF;
 
-            INSERT INTO games (
-                rule_id, player_white_id, player_black_id, 
-                creator_player_color,
-                status, current_turn,
-                puzzle_id, is_daily_puzzle, puzzle_status
-            )
-            VALUES (
-                v_puzzle.rule_id, v_white_player_id, v_black_player_id, 
-                v_creator_color,
-                v_status, v_puzzle.turn_to_move,
-                p_puzzle_id, p_daily, 'p'
-            )
-            RETURNING game_id INTO v_game_id;
+            -- Если moves_to_solve IS NULL, то это игра с ИИ из произвольной позиции
+            -- Используем difficulty_level из пазла как ai_difficulty
+            DECLARE
+                v_ai_difficulty_for_puzzle CHAR(1) := CASE WHEN v_puzzle.moves_to_solve IS NULL THEN v_puzzle.difficulty_level ELSE NULL END;
+            BEGIN
+                INSERT INTO games (
+                    rule_id, player_white_id, player_black_id, 
+                    creator_player_color,
+                    status, current_turn,
+                    puzzle_id, is_daily_puzzle, puzzle_status,
+                    ai_difficulty
+                )
+                VALUES (
+                    v_puzzle.rule_id, v_white_player_id, v_black_player_id, 
+                    v_creator_color,
+                    v_status, v_puzzle.turn_to_move,
+                    p_puzzle_id, p_daily, 'p',
+                    v_ai_difficulty_for_puzzle
+                )
+                RETURNING game_id INTO v_game_id;
+            END;
             
             v_status_message := 'Вы начали задачу ID ' || p_puzzle_id || '. (ID сессии: ' || v_game_id || ').';
             p_audit_log(v_current_player_id, v_game_id, 'START_PUZZLE');
@@ -3211,9 +3220,9 @@ BEGIN
                 v_ai_board_pos := encode_board(v_ai_board_pos);
             END IF;
             
-            -- В задачах ИИ всегда средний уровень ('M')
+            -- Используем ai_difficulty из игры (для пазлов с moves_to_solve IS NULL используется difficulty_level из пазла)
             DECLARE
-                v_ai_difficulty CHAR(1) := CASE WHEN v_next_game_state.puzzle_id IS NOT NULL THEN 'M' ELSE v_next_game_state.ai_difficulty END;
+                v_ai_difficulty CHAR(1) := v_next_game_state.ai_difficulty;
             BEGIN
                 v_ai_move := get_ai_move(
                     p_board_position => v_ai_board_pos, 
@@ -3520,7 +3529,7 @@ PROCEDURE create_match(
     p_enable_pos_rep_draw IN CHAR     DEFAULT 'N'
 ) IS
     v_current_player_id  players.player_id%TYPE;
-    v_error_msg          VARCHAR2(255);
+    v_error_msg          VARCHAR2(2000);
     v_status_message     VARCHAR2(255);
     
     v_game_id            games.game_id%TYPE;
@@ -3536,8 +3545,8 @@ BEGIN
         RETURN;
     END IF;
 
-    IF p_games_to_win IS NULL OR p_games_to_win <= 0 THEN
-        v_error_msg := 'Неверное количество игр для победы (p_games_to_win).';
+    IF p_games_to_win IS NULL OR p_games_to_win <= 0 OR MOD(p_games_to_win, 2) = 0 THEN
+        v_error_msg := 'Неверное количество игр для победы (p_games_to_win). Должно быть нечетным числом (best of N, где N нечетное).';
         p_audit_log(v_current_player_id, NULL, p_event_msg => v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
@@ -3636,18 +3645,10 @@ BEGIN
         RETURN;
     END IF;
     
-    BEGIN
-        SELECT * INTO v_match 
-        FROM matches 
-        WHERE match_id = p_match_id 
-        FOR UPDATE;
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN
-            v_error_msg := 'Матч с ID ' || p_match_id || ' не найден.';
-            p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
-            DBMS_OUTPUT.PUT_LINE(v_error_msg);
-            RETURN;
-    END;
+    SELECT * INTO v_match 
+    FROM matches 
+    WHERE match_id = p_match_id 
+    FOR UPDATE;
 
     BEGIN
         SELECT * INTO v_game 
@@ -3716,10 +3717,11 @@ PROCEDURE create_puzzle(
     p_board_position   IN CLOB,
     p_turn_to_move     IN CHAR,
     p_moves_to_solve   IN NUMBER DEFAULT NULL,
-    p_difficulty_level IN CHAR DEFAULT 'E'
+    p_difficulty_level IN CHAR DEFAULT 'M',
+    p_solution          IN VARCHAR2 DEFAULT NULL
 ) IS
     v_player_id players.player_id%TYPE;
-    v_error_msg VARCHAR2(500);
+    v_error_msg VARCHAR2(2000);
     
     v_single_line_board VARCHAR2(200) := '';
     v_line              VARCHAR2(200);
@@ -3783,7 +3785,9 @@ BEGIN
                 -- Защита от переполнения (если кто-то сунет гигантский CLOB)
                 IF LENGTH(v_single_line_board) + LENGTH(v_line) > 200 THEN
                      v_error_msg := 'Ошибка: Размер доски превышает допустимый предел.';
-                     RAISE_APPLICATION_ERROR(-20006, v_error_msg);
+                     p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
+                     DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                     RETURN;
                 END IF;
                 v_single_line_board := v_single_line_board || v_line;
             END IF;
@@ -3795,79 +3799,75 @@ BEGIN
             v_board_size := 10;
         ELSE
             v_error_msg := 'Ошибка: Неверный размер доски. Ожидалось 64 (8x8) или 100 (10x10) символов, получено: ' || LENGTH(v_single_line_board);
-            RAISE_APPLICATION_ERROR(-20001, v_error_msg);
+            p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
         
         IF REGEXP_LIKE(v_single_line_board, '[^wWbB+]') THEN
             v_error_msg := 'Ошибка: Доска содержит недопустимые символы. Разрешены только: w, W, b, B, +.';
-            RAISE_APPLICATION_ERROR(-20002, v_error_msg);
+            p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
         
         IF INSTR(v_single_line_board, 'w') = 0 AND INSTR(v_single_line_board, 'W') = 0 THEN
             v_error_msg := 'Ошибка: На доске нет ни одной белой фигуры (w, W).';
-            RAISE_APPLICATION_ERROR(-20003, v_error_msg);
+            p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
         IF INSTR(v_single_line_board, 'b') = 0 AND INSTR(v_single_line_board, 'B') = 0 THEN
             v_error_msg := 'Ошибка: На доске нет ни одной черной фигуры (b, B).';
-            RAISE_APPLICATION_ERROR(-20004, v_error_msg);
+            p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
         END IF;
 
         -- Валидация позиции: проверка, что все фигуры находятся на темных клетках
-        BEGIN
-            p_init_board_map(v_board_size);
-            
-            FOR i IN 1 .. LENGTH(v_single_line_board) LOOP
-                DECLARE
-                    v_piece CHAR(1) := SUBSTR(v_single_line_board, i, 1);
-                    v_field rec_board_field;
-                    v_row PLS_INTEGER;
-                    v_col PLS_INTEGER;
-                    v_is_dark_square BOOLEAN;
-                BEGIN
-                    -- Проверяем только фигуры (не пустые клетки)
-                    IF v_piece IN ('w', 'W', 'b', 'B') THEN
-                        IF NOT g_map_by_idx.EXISTS(i) THEN
-                            v_error_msg := 'Ошибка: Недопустимый индекс позиции: ' || i;
-                            RAISE_APPLICATION_ERROR(-20007, v_error_msg);
-                        END IF;
-                        
-                        v_field := g_map_by_idx(i);
-                        v_row := v_field.row_num;
-                        v_col := v_field.col_num;
-                        
-                        -- Темная клетка: (row + col) % 2 == 1
-                        v_is_dark_square := (MOD(v_row + v_col, 2) = 1);
-                        
-                        IF NOT v_is_dark_square THEN
-                            v_error_msg := 'Ошибка: Фигура на позиции ' || v_field.notation || 
-                                         ' (индекс ' || i || ', строка ' || v_row || ', столбец ' || v_col || 
-                                         ') находится на светлой клетке. В шашках фигуры могут быть только на темных клетках.';
-                            RAISE_APPLICATION_ERROR(-20008, v_error_msg);
-                        END IF;
+        p_init_board_map(v_board_size);
+        
+        FOR i IN 1 .. LENGTH(v_single_line_board) LOOP
+            DECLARE
+                v_piece CHAR(1) := SUBSTR(v_single_line_board, i, 1);
+                v_field rec_board_field;
+                v_row PLS_INTEGER;
+                v_col PLS_INTEGER;
+                v_is_dark_square BOOLEAN;
+            BEGIN
+                -- Проверяем только фигуры (не пустые клетки)
+                IF v_piece IN ('w', 'W', 'b', 'B') THEN
+                    IF NOT g_map_by_idx.EXISTS(i) THEN
+                        v_error_msg := 'Ошибка: Недопустимый индекс позиции: ' || i;
+                        p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
+                        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                        RETURN;
                     END IF;
-                END;
-            END LOOP;
-        EXCEPTION
-            WHEN OTHERS THEN
-                -- Если ошибка валидации - пробрасываем дальше
-                IF SQLCODE BETWEEN -20007 AND -20008 THEN
-                    RAISE;
-                ELSE
-                    v_error_msg := 'Ошибка при валидации позиции: ' || SQLERRM;
-                    RAISE_APPLICATION_ERROR(-20009, v_error_msg);
+                    
+                    v_field := g_map_by_idx(i);
+                    v_row := v_field.row_num;
+                    v_col := v_field.col_num;
+                    
+                    -- Темная клетка: (row + col) % 2 == 1
+                    v_is_dark_square := (MOD(v_row + v_col, 2) = 1);
+                    
+                    IF NOT v_is_dark_square THEN
+                        v_error_msg := 'Ошибка: Фигура на позиции ' || v_field.notation || 
+                                     ' (индекс ' || i || ', строка ' || v_row || ', столбец ' || v_col || 
+                                     ') находится на светлой клетке. В шашках фигуры могут быть только на темных клетках.';
+                        p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
+                        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                        RETURN;
+                    END IF;
                 END IF;
-        END;
+            END;
+        END LOOP;
 
-        BEGIN
-            SELECT rule_id INTO v_rule_id
-            FROM game_rules
-            WHERE board_size = v_board_size
-            AND ROWNUM = 1;
-        EXCEPTION
-            WHEN NO_DATA_FOUND THEN
-                v_error_msg := 'Ошибка: Не найдено правило в game_rules для доски ' || v_board_size || 'x' || v_board_size;
-                RAISE_APPLICATION_ERROR(-20005, v_error_msg);
-        END;
+        -- Определяем rule_id по размеру доски (64 = 8x8, 100 = 10x10)
+        SELECT rule_id INTO v_rule_id
+        FROM game_rules
+        WHERE board_size = v_board_size
+        AND ROWNUM = 1;
 
         v_encoded_board := encode_board(v_single_line_board);
         
@@ -3877,14 +3877,16 @@ BEGIN
             turn_to_move,
             moves_to_solve,
             difficulty_level,
-            created_by_player_id
+            created_by_player_id,
+            solution
         ) VALUES (
             v_encoded_board,
             v_rule_id,
             UPPER(p_turn_to_move),
             p_moves_to_solve,
             p_difficulty_level,
-            v_player_id
+            v_player_id,
+            p_solution
         )
         RETURNING puzzle_id INTO v_new_puzzle_id;
         
@@ -3928,7 +3930,7 @@ PROCEDURE show_puzzles(
             puz.puzzle_id,
             puz.difficulty_level,
             puz.moves_to_solve,
-            NVL(pl.username, 'System') AS creator_username,
+            pl.username AS creator_username,
             puz.board_position,
             puz.turn_to_move,
             puz.end_board_state,
@@ -3945,51 +3947,57 @@ BEGIN
 
     -- ВАРИАНТ 1: Поиск конкретной задачи (Красивый вывод)
     IF p_puzzle_id IS NOT NULL THEN
-        FOR r IN c_puzzles LOOP
-            v_found := TRUE;
-            v_goal_str := CASE WHEN r.end_board_state IS NULL THEN 'Победа' ELSE 'Ничья' END;
-            
-            -- Проверяем, были ли попытки решить эту задачу
-            SELECT COUNT(*) INTO v_has_attempts
-            FROM games
-            WHERE puzzle_id = r.puzzle_id
-              AND (player_white_id = v_player_id OR player_black_id = v_player_id);
-            
-            v_has_attempts := (v_has_attempts > 0);
-            
-            DBMS_OUTPUT.PUT_LINE('==================================================');
-            DBMS_OUTPUT.PUT_LINE('ЗАДАЧА ID: ' || r.puzzle_id);
-            DBMS_OUTPUT.PUT_LINE('Автор:     ' || r.creator_username);
-            DBMS_OUTPUT.PUT_LINE('Сложность: ' || r.difficulty_level);
-            DBMS_OUTPUT.PUT_LINE('Цель:      ' || v_goal_str || ' за ' || NVL(TO_CHAR(r.moves_to_solve), '?') || ' ход(ов)');
-            DBMS_OUTPUT.PUT_LINE('Ваш ход:   ' || CASE r.turn_to_move WHEN 'W' THEN 'Белые' ELSE 'Черные' END);
-            DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
-            
-            v_visual_board := f_get_board_as_clob(r.board_position);
-            DBMS_OUTPUT.PUT_LINE(v_visual_board);
-            
-            -- Вывод решения (только если были попытки и запрошено)
-            IF p_solution = 'Y' THEN
-                IF v_has_attempts THEN
-                    IF r.solution IS NOT NULL THEN
-                        DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
-                        DBMS_OUTPUT.PUT_LINE('РЕШЕНИЕ: ' || r.solution);
+        DECLARE
+            r c_puzzles%ROWTYPE;
+        BEGIN
+            OPEN c_puzzles;
+            FETCH c_puzzles INTO r;
+            IF c_puzzles%FOUND THEN
+                v_goal_str := CASE WHEN r.end_board_state IS NULL THEN 'Победа' ELSE 'Ничья' END;
+                
+                -- Проверяем, были ли попытки решить эту задачу
+                SELECT COUNT(*) INTO v_has_attempts
+                FROM games
+                WHERE puzzle_id = r.puzzle_id
+                  AND (player_white_id = v_player_id OR player_black_id = v_player_id);
+                
+                v_has_attempts := (v_has_attempts > 0);
+                
+                DBMS_OUTPUT.PUT_LINE('==================================================');
+                DBMS_OUTPUT.PUT_LINE('ЗАДАЧА ID: ' || r.puzzle_id);
+                IF r.creator_username IS NOT NULL THEN
+                    DBMS_OUTPUT.PUT_LINE('Автор:     ' || r.creator_username);
+                END IF;
+                DBMS_OUTPUT.PUT_LINE('Сложность: ' || r.difficulty_level);
+                DBMS_OUTPUT.PUT_LINE('Цель:      ' || v_goal_str || ' за ' || NVL(TO_CHAR(r.moves_to_solve), '?') || ' ход(ов)');
+                DBMS_OUTPUT.PUT_LINE('Ваш ход:   ' || CASE r.turn_to_move WHEN 'W' THEN 'Белые' ELSE 'Черные' END);
+                DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
+                
+                v_visual_board := f_get_board_as_clob(r.board_position);
+                DBMS_OUTPUT.PUT_LINE(v_visual_board);
+                
+                -- Вывод решения (только если были попытки и запрошено)
+                IF p_solution = 'Y' THEN
+                    IF v_has_attempts THEN
+                        IF r.solution IS NOT NULL THEN
+                            DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
+                            DBMS_OUTPUT.PUT_LINE('РЕШЕНИЕ: ' || r.solution);
+                        ELSE
+                            DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
+                            DBMS_OUTPUT.PUT_LINE('РЕШЕНИЕ: не указано');
+                        END IF;
                     ELSE
                         DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
-                        DBMS_OUTPUT.PUT_LINE('РЕШЕНИЕ: не указано');
+                        DBMS_OUTPUT.PUT_LINE('Нельзя смотреть решение, если не было попыток решить задачу.');
                     END IF;
-                ELSE
-                    DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
-                    DBMS_OUTPUT.PUT_LINE('Нельзя смотреть решение, если не было попыток решить задачу.');
                 END IF;
+                
+                DBMS_OUTPUT.PUT_LINE('==================================================');
+            ELSE
+                DBMS_OUTPUT.PUT_LINE('Задача с ID ' || p_puzzle_id || ' не найдена.');
             END IF;
-            
-            DBMS_OUTPUT.PUT_LINE('==================================================');
-        END LOOP;
-        
-        IF NOT v_found THEN
-            DBMS_OUTPUT.PUT_LINE('Задача с ID ' || p_puzzle_id || ' не найдена.');
-        END IF;
+            CLOSE c_puzzles;
+        END;
         RETURN;
     END IF;
 
@@ -4026,10 +4034,6 @@ BEGIN
             SUBSTR(r.board_position, 1, 25) || (CASE WHEN LENGTH(r.board_position) > 25 THEN '...' ELSE '' END)
         );
     END LOOP;
-    
-    IF NOT v_found THEN
-        DBMS_OUTPUT.PUT_LINE('... Задачи не найдены. ...');
-    END IF;
     
 EXCEPTION
     WHEN OTHERS THEN
@@ -4106,7 +4110,14 @@ END show_my_puzzles;
 PROCEDURE delete_my_puzzle(p_puzzle_id IN NUMBER) IS
     v_player_id players.player_id%TYPE;
     v_error_msg VARCHAR2(2000);
+    v_deleted_count NUMBER;
 BEGIN
+    IF p_puzzle_id IS NULL THEN
+        v_error_msg := 'Ошибка: Параметр p_puzzle_id обязателен. Используйте 0 для удаления всех своих задач.';
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
     v_player_id := get_or_create_player_id(USER);
     
     IF get_active_game(v_player_id) IS NOT NULL THEN
@@ -4117,36 +4128,42 @@ BEGIN
     END IF;
 
     BEGIN
-        DELETE FROM puzzles
-        WHERE puzzle_id = p_puzzle_id
-          AND created_by_player_id = v_player_id;
-          
-        IF SQL%ROWCOUNT = 0 THEN
-            DECLARE
-                v_count PLS_INTEGER;
-            BEGIN
-                SELECT 1 INTO v_count FROM puzzles WHERE puzzle_id = p_puzzle_id;
-                v_error_msg := 'Ошибка: Невозможно удалить задачу. Она не существует или не принадлежит вам.';
-            EXCEPTION
-                WHEN NO_DATA_FOUND THEN
-                    v_error_msg := 'Ошибка: Задача с ID ' || p_puzzle_id || ' не существует.';
-            END;
-            DBMS_OUTPUT.PUT_LINE(v_error_msg);
-            ROLLBACK;
+        IF p_puzzle_id = 0 THEN
+            -- Удаляем все задачи пользователя
+            DELETE FROM puzzles
+            WHERE created_by_player_id = v_player_id;
+            v_deleted_count := SQL%ROWCOUNT;
+            
+            IF v_deleted_count = 0 THEN
+                v_error_msg := 'У вас нет созданных задач для удаления.';
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                ROLLBACK;
+            ELSE
+                DBMS_OUTPUT.PUT_LINE('Успешно удалено задач: ' || v_deleted_count || '.');
+                p_audit_log(v_player_id, NULL, p_event_msg => 'PUZZLES_DELETED_ALL');
+                COMMIT;
+            END IF;
         ELSE
-            DBMS_OUTPUT.PUT_LINE('Задача (ID: ' || p_puzzle_id || ') успешно удалена.');
-            p_audit_log(v_player_id, NULL, p_event_msg => 'PUZZLE_DELETED');
-            COMMIT;
+            -- Удаляем конкретную задачу
+            DELETE FROM puzzles
+            WHERE puzzle_id = p_puzzle_id
+              AND created_by_player_id = v_player_id;
+              
+            IF SQL%ROWCOUNT = 0 THEN
+                v_error_msg := 'Ошибка: Задача с ID ' || p_puzzle_id || ' не существует или не принадлежит вам.';
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                ROLLBACK;
+            ELSE
+                DBMS_OUTPUT.PUT_LINE('Задача (ID: ' || p_puzzle_id || ') успешно удалена.');
+                p_audit_log(v_player_id, NULL, p_event_msg => 'PUZZLE_DELETED');
+                COMMIT;
+            END IF;
         END IF;
         
     EXCEPTION
         WHEN OTHERS THEN
             ROLLBACK;
-            IF SQLCODE = -2292 THEN
-                v_error_msg := 'Ошибка: Невозможно удалить задачу. Она используется (или использовалась) как "Задача Дня".';
-            ELSE
-                v_error_msg := 'Ошибка при удалении: ' || SQLERRM;
-            END IF;
+            v_error_msg := 'Ошибка при удалении: ' || SQLERRM;
             p_audit_log(v_player_id, NULL, p_event_msg => SUBSTR(v_error_msg, 1, 2000));
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
     END;
@@ -4187,7 +4204,7 @@ BEGIN
             p.turn_to_move,
             p.board_position,
             p.end_board_state,
-            NVL(pl.username, 'System')
+            pl.username
         INTO 
             v_puzzle_id, v_difficulty, v_moves_solve, v_turn, v_board_pos, v_end_board_state, v_author
         FROM daily_puzzles dp
@@ -4201,8 +4218,7 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('          ЗАДАЧА ДНЯ (' || TO_CHAR(v_today, 'DD.MM.YYYY') || ')');
         DBMS_OUTPUT.PUT_LINE('==================================================');
         DBMS_OUTPUT.PUT_LINE('ID:        ' || v_puzzle_id);
-        -- Не показываем автора если это System
-        IF v_author IS NOT NULL AND UPPER(v_author) != 'SYSTEM' THEN
+        IF v_author IS NOT NULL THEN
             DBMS_OUTPUT.PUT_LINE('Автор:     ' || v_author);
         END IF;
         DBMS_OUTPUT.PUT_LINE('Сложность: ' || v_difficulty);
@@ -4230,7 +4246,7 @@ END show_daily_puzzle;
 --   - (none)
 
 PROCEDURE info(p_proc_name IN VARCHAR2 DEFAULT NULL) IS
-    v_proc_name VARCHAR2(100) := UPPER(TRIM(p_proc_name));
+    v_proc_name VARCHAR2(30) := UPPER(TRIM(p_proc_name));
     v_show_all BOOLEAN := (v_proc_name IS NULL OR v_proc_name = 'ALL');
     v_show_full BOOLEAN := (v_proc_name = 'ALL');
     v_found BOOLEAN := FALSE;
@@ -4425,8 +4441,9 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('DELETE_MY_PUZZLE - Удаляет задачу, созданную вами.');
         IF v_show_full THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_puzzle_id');
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_puzzle_id (обязателен, 0 = удалить все свои задачи)');
             DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.delete_my_puzzle(15); END;');
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.delete_my_puzzle(0); END; -- удалить все свои задачи');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
@@ -4475,7 +4492,7 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('  - Дамка: ходит на любое число клеток по диагонали.');
         DBMS_OUTPUT.PUT_LINE('  - Дамка бьет: на любое расстояние с произвольным приземлением за бьющей.');
         DBMS_OUTPUT.PUT_LINE('  - Взятие обязательно МАКСИМАЛЬНОЕ количество фигур.');
-        DBMS_OUTPUT.PUT_LINE('  - Превращение происходит немедленно при достижении последней горизонтали.');
+        DBMS_OUTPUT.PUT_LINE('  - Превращение происходит при остановке на последней горизонтали.');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         
         DBMS_OUTPUT.PUT_LINE('ОБЩИЕ ПРАВИЛА:');
@@ -4605,7 +4622,10 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(c_nl);
         
         DBMS_OUTPUT.PUT_LINE('================================================================');
-        DBMS_OUTPUT.PUT_LINE('Рейтинг: Победа +16, Поражение -16, Пазл +5 (первый раз).');
+        DBMS_OUTPUT.PUT_LINE('Рейтинг:');
+        DBMS_OUTPUT.PUT_LINE('  - Обычная игра: Победа +16, Поражение -16');
+        DBMS_OUTPUT.PUT_LINE('  - Пазл: +5 (первый раз, только общие пазлы)');
+        DBMS_OUTPUT.PUT_LINE('  - Матч: +16 за победу в игре, -16 за поражение, +10*N бонус за матч (N = games_to_win)');
         DBMS_OUTPUT.PUT_LINE('Удачи в игре!');
         DBMS_OUTPUT.PUT_LINE('================================================================');
     END IF;
