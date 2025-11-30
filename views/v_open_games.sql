@@ -23,6 +23,22 @@ SELECT
         ELSE NULL
     END AS challenged_player,
     
+    -- Определяем цвет, который получит присоединяющийся игрок
+    CASE 
+        WHEN g.status = 'O' THEN
+            -- Для открытой игры: присоединяющийся получает противоположный цвет создателю
+            CASE g.creator_player_color
+                WHEN 'W' THEN 'B' -- Создатель белые -> присоединяющийся черные
+                WHEN 'B' THEN 'W' -- Создатель черные -> присоединяющийся белые
+            END
+        WHEN g.status = 'C' THEN
+            -- Для прямого вызова: присоединяющийся получает противоположный цвет создателю
+            CASE g.creator_player_color
+                WHEN 'W' THEN 'B' -- Создатель белые -> вызванный черные
+                WHEN 'B' THEN 'W' -- Создатель черные -> вызванный белые
+            END
+    END AS your_color,
+    
     g.start_time AS created_at
     
 FROM games g

@@ -51,7 +51,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
         move  r_move
     );
 
-    PROCEDURE info(p_proc_name IN VARCHAR2 DEFAULT NULL);
+    PROCEDURE info(p_query IN VARCHAR2 DEFAULT NULL);
 
     -- =========================================================================
     -- 1. УПРАВЛЕНИЕ ИГРОЙ (PvP, PvE, Puzzles)
@@ -152,6 +152,10 @@ CREATE OR REPLACE PACKAGE game_logic AS
 
     PROCEDURE p_update_ratings(
         p_game_id IN games.game_id%TYPE
+    );
+
+    PROCEDURE p_process_inactive_timeouts(
+        p_timeout_hours IN NUMBER DEFAULT 24
     );
 
     PROCEDURE p_process_move(

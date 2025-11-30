@@ -128,7 +128,7 @@ END get_or_create_player_id;
 
 FUNCTION get_initial_position(p_rule_id IN NUMBER) RETURN VARCHAR2 IS
     v_rule      game_rules%ROWTYPE;
-    v_error_msg VARCHAR2(100); 
+    v_error_msg VARCHAR2(2000); 
 BEGIN
 
     BEGIN
@@ -142,6 +142,7 @@ BEGIN
     END;
 
     IF v_rule.board_size = 8 THEN
+
         RETURN '+b+b+b+b' ||
                'b+b+b+b+' ||
                '+b+b+b+b' ||
@@ -151,6 +152,7 @@ BEGIN
                '+w+w+w+w' ||
                'w+w+w+w+';
     ELSE
+
         RETURN '+b+b+b+b+b' ||
                'b+b+b+b+b+' ||
                '+b+b+b+b+b' ||
@@ -163,6 +165,40 @@ BEGIN
                'w+w+w+w+w+';
     END IF;
 END get_initial_position;
+
+FUNCTION f_is_valid_index(
+    p_idx           IN PLS_INTEGER,
+    p_total_squares IN PLS_INTEGER,
+    p_start_col     IN PLS_INTEGER,
+    p_expected_col_diff IN PLS_INTEGER
+) RETURN BOOLEAN IS
+BEGIN
+    RETURN p_idx BETWEEN 1 AND p_total_squares
+       AND g_map_by_idx.EXISTS(p_idx)
+       AND ABS(p_start_col - g_map_by_idx(p_idx).col_num) = p_expected_col_diff;
+END f_is_valid_index;
+
+FUNCTION f_move_to_notation(
+    p_move      IN r_move,
+    p_board_size IN PLS_INTEGER
+) RETURN VARCHAR2 IS
+    v_notation VARCHAR2(100);
+BEGIN
+    IF p_move.path IS NULL OR p_move.path.COUNT = 0 THEN
+        RETURN NULL;
+    END IF;
+
+    p_init_board_map(p_board_size);
+
+    v_notation := g_map_by_idx(p_move.path(1).start_idx).notation;
+
+    FOR j IN 1 .. p_move.path.COUNT LOOP
+        v_notation := v_notation || CASE p_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END 
+                      || g_map_by_idx(p_move.path(j).end_idx).notation;
+    END LOOP;
+    
+    RETURN v_notation;
+END f_move_to_notation;
 
 FUNCTION find_capture_paths(
     p_start_idx    IN PLS_INTEGER,
@@ -232,8 +268,8 @@ BEGIN
                        AND SUBSTR(v_decoded_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king) 
                     THEN
 
-                        FOR k IN 1 .. p_visited_path.COUNT LOOP
-                            IF p_visited_path(k).captured_idx = v_capture_idx THEN
+                        FOR kk IN 1 .. p_visited_path.COUNT LOOP
+                            IF p_visited_path(kk).captured_idx = v_capture_idx THEN
                                 v_is_visited := TRUE;
                                 EXIT;
                             END IF;
@@ -1026,7 +1062,7 @@ BEGIN
 
                 SELECT season_id INTO v_season_id 
                 FROM seasons 
-                WHERE v_match.start_time BETWEEN start_date AND end_date 
+                WHERE v_first_game.start_time BETWEEN start_date AND end_date 
                 AND ROWNUM = 1;
                 
                 UPDATE player_ratings
@@ -1050,7 +1086,7 @@ BEGIN
 
                 SELECT season_id INTO v_season_id 
                 FROM seasons 
-                WHERE v_match.start_time BETWEEN start_date AND end_date 
+                WHERE v_first_game.start_time BETWEEN start_date AND end_date 
                 AND ROWNUM = 1;
                 
                 UPDATE player_ratings
@@ -1105,40 +1141,6 @@ BEGIN
     
     COMMIT;
 END p_finish_game;
-
-FUNCTION f_is_valid_index(
-    p_idx           IN PLS_INTEGER,
-    p_total_squares IN PLS_INTEGER,
-    p_start_col     IN PLS_INTEGER,
-    p_expected_col_diff IN PLS_INTEGER
-) RETURN BOOLEAN IS
-BEGIN
-    RETURN p_idx BETWEEN 1 AND p_total_squares
-       AND g_map_by_idx.EXISTS(p_idx)
-       AND ABS(p_start_col - g_map_by_idx(p_idx).col_num) = p_expected_col_diff;
-END f_is_valid_index;
-
-FUNCTION f_move_to_notation(
-    p_move      IN r_move,
-    p_board_size IN PLS_INTEGER
-) RETURN VARCHAR2 IS
-    v_notation VARCHAR2(100);
-BEGIN
-    IF p_move.path IS NULL OR p_move.path.COUNT = 0 THEN
-        RETURN NULL;
-    END IF;
-
-    p_init_board_map(p_board_size);
-
-    v_notation := g_map_by_idx(p_move.path(1).start_idx).notation;
-
-    FOR j IN 1 .. p_move.path.COUNT LOOP
-        v_notation := v_notation || CASE p_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END 
-                      || g_map_by_idx(p_move.path(j).end_idx).notation;
-    END LOOP;
-    
-    RETURN v_notation;
-END f_move_to_notation;
 
 FUNCTION f_get_current_board_position(
     p_game_id IN NUMBER,
@@ -1327,7 +1329,7 @@ BEGIN
 
     FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
         DECLARE
-            v_notation VARCHAR2(50) := f_move_to_notation(v_all_legal_moves(i), v_board_size);
+            v_notation VARCHAR2(100) := f_move_to_notation(v_all_legal_moves(i), v_board_size);
         BEGIN
             IF LOWER(p_move_notation) = v_notation THEN
                 v_chosen_move   := v_all_legal_moves(i);
@@ -1340,12 +1342,18 @@ BEGIN
     IF NOT v_is_move_valid THEN
         IF v_all_legal_moves(1).is_capture = 'Y' THEN
             DECLARE
-                v_notation_str VARCHAR2(150);
+                v_notation_str VARCHAR2(4000);
             BEGIN
                 v_error_msg := 'Неверный ход. Взятие обязательно! Доступные варианты: ';
                 FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
                     v_notation_str := f_move_to_notation(v_all_legal_moves(i), v_board_size);
-                    v_error_msg := v_error_msg || v_notation_str || ' ';
+                    
+                    IF LENGTH(v_error_msg || v_notation_str || ' ') <= 2000 THEN
+                        v_error_msg := v_error_msg || v_notation_str || ' ';
+                    ELSE
+                        v_error_msg := v_error_msg || '...';
+                        EXIT;
+                    END IF;
                 END LOOP;
                 v_error_msg := RTRIM(v_error_msg);
             END;
@@ -2023,7 +2031,7 @@ BEGIN
                             v_loser_color := v_game.current_turn;
                             
                             UPDATE games
-                            SET status = ''T'', -- Timeout
+                            SET status = ''T'',
                                 end_time = SYSDATE,
                                 winner_player_color = CASE v_loser_color WHEN ''W'' THEN ''B'' ELSE ''W'' END
                             WHERE game_id = ' || p_game_id || ';
@@ -2767,8 +2775,8 @@ PROCEDURE make_move(p_move_notation IN VARCHAR2) IS
     v_game_id   NUMBER;
     v_game      games%ROWTYPE;
     v_player_id players.player_id%TYPE;
-    v_human_msg VARCHAR2(1000);
-    v_ai_msg    VARCHAR2(1000);
+    v_human_msg VARCHAR2(2000);
+    v_ai_msg    VARCHAR2(2000);
     v_error_msg VARCHAR2(2000);
 BEGIN
     v_player_id := get_or_create_player_id(USER);
@@ -3488,12 +3496,16 @@ BEGIN
             IF c_puzzles%FOUND THEN
                 v_goal_str := CASE WHEN r.end_board_state IS NULL THEN 'Победа' ELSE 'Ничья' END;
 
-                SELECT COUNT(*) INTO v_has_attempts
-                FROM games
-                WHERE puzzle_id = r.puzzle_id
-                  AND (player_white_id = v_player_id OR player_black_id = v_player_id);
-                
-                v_has_attempts := (v_has_attempts > 0);
+                DECLARE
+                    v_attempt_count NUMBER;
+                BEGIN
+                    SELECT COUNT(*) INTO v_attempt_count
+                    FROM games
+                    WHERE puzzle_id = r.puzzle_id
+                      AND (player_white_id = v_player_id OR player_black_id = v_player_id);
+                    
+                    v_has_attempts := (v_attempt_count > 0);
+                END;
                 
                 DBMS_OUTPUT.PUT_LINE('==================================================');
                 DBMS_OUTPUT.PUT_LINE('ЗАДАЧА ID: ' || r.puzzle_id);
@@ -3758,7 +3770,7 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('ПОДСКАЗКА: Для просмотра информации по конкретной процедуре передайте параметр:');
         DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_proc_name => ''CREATE_GAME''); END;');
-        DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_proc_name => ''ALL''); END;  -=- Полная справка');
+        DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_proc_name => ''ALL''); END;
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('Доступные процедуры: CREATE_GAME, JOIN_GAME, MAKE_MOVE, PRINT_ACTIVE_BOARD,');
         DBMS_OUTPUT.PUT_LINE('  RESIGN_GAME, CANCEL_GAME, DRAW, CREATE_MATCH, JOIN_MATCH,');
@@ -3810,8 +3822,8 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_move_notation - Нотация хода (например, ''a3-b4'' или ''c3:e5'').');
             DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
-            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3-d4''); END;  -=- Тихий ход');
-            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3:e5''); END;  -=- Взятие');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3-d4''); END;
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3:e5''); END;
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
@@ -3933,7 +3945,7 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_puzzle_id (обязателен, 0 = удалить все свои задачи)');
             DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.delete_my_puzzle(15); END;');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.delete_my_puzzle(0); END; -=- удалить все свои задачи');
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.delete_my_puzzle(0); END;
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
