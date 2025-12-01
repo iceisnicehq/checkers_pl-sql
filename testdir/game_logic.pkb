@@ -582,6 +582,7 @@ BEGIN
     END IF;
     
     -- === ОБЪЕДИНЕННЫЙ ПРОХОД: Поиск взятий и тихих ходов за один цикл ===
+    -- ОПТИМИЗАЦИЯ: Если найдены взятия, тихие ходы не собираем (обязательно бить)
     FOR i IN 1 .. v_total_squares LOOP
         DECLARE
             v_piece       CHAR(1) := SUBSTR(v_decoded_board, i, 1);
@@ -607,7 +608,7 @@ BEGIN
                 END IF;
                 
                 -- === 2. ПОИСК ТИХИХ ХОДОВ ===
-                -- Собираем тихие ходы только если еще не нашли взятий (оптимизация)
+                -- ОПТИМИЗАЦИЯ: Собираем тихие ходы только если еще не нашли взятий
                 -- Если нашли хотя бы одно взятие, тихие ходы не нужны (обязательно бить)
                 IF v_capture_moves.COUNT = 0 THEN
                     IF v_piece = v_player_man THEN
@@ -794,16 +795,37 @@ BEGIN
     -- (встроенная логика вместо отдельной функции, так как используется только здесь)
     v_possible_moves := find_all_player_moves(p_board, v_current_color, p_rule_id);
     
-    -- Сортировка ходов: взятия получают приоритет 1000+ (чем больше фигур взято, тем выше)
+    -- ОПТИМИЗАЦИЯ: Сортировка ходов для лучшего Alpha-Beta pruning
+    -- Порядок приоритета: 1) Взятия (по количеству), 2) Ходы с превращением в дамку, 3) Остальные
     IF v_possible_moves.COUNT >= 2 THEN
         DECLARE
             v_temp r_move;
+            v_board_size PLS_INTEGER := SQRT(LENGTH(p_board));
+            v_end_row PLS_INTEGER;
+            v_start_piece CHAR(1);
+            v_promotion_row PLS_INTEGER := CASE v_current_color WHEN 'W' THEN v_board_size ELSE 1 END;
         BEGIN
+            -- Инициализируем карту для определения строк
+            p_init_board_map(v_board_size);
+            
             -- Присваиваем оценку каждому ходу
             FOR i IN 1..v_possible_moves.COUNT LOOP
                 v_possible_moves(i).score := 0;
+                
+                -- 1. Взятия получают максимальный приоритет (1000+ по количеству взятых фигур)
                 IF v_possible_moves(i).is_capture = 'Y' THEN
                     v_possible_moves(i).score := 1000 + v_possible_moves(i).capture_count;
+                ELSE
+                    -- 2. Тихие ходы: проверяем превращение в дамку
+                    IF v_possible_moves(i).path.COUNT > 0 THEN
+                        v_start_piece := SUBSTR(p_board, v_possible_moves(i).path(1).start_idx, 1);
+                        v_end_row := g_map_by_idx(v_possible_moves(i).path(v_possible_moves(i).path.COUNT).end_idx).row_num;
+                        
+                        -- Если простая шашка достигает последней строки - бонус за превращение
+                        IF (v_start_piece IN (c_white_man, c_black_man)) AND (v_end_row = v_promotion_row) THEN
+                            v_possible_moves(i).score := 100; -- Приоритет ниже взятий, но выше обычных ходов
+                        END IF;
+                    END IF;
                 END IF;
             END LOOP;
             
@@ -973,7 +995,7 @@ FUNCTION get_ai_move(
     v_best_move_str  VARCHAR2(100);
     v_chosen_move    r_move;
     v_decoded_board  VARCHAR2(100) := decode_board(p_board_position);
-    v_search_depth   PLS_INTEGER;
+    v_search_depth   PLS_INTEGER := 2;
     v_minimax_result r_minimax_result;
     v_alpha          NUMBER;
     v_beta           NUMBER;
@@ -982,12 +1004,31 @@ BEGIN
     v_board_size := SQRT(LENGTH(v_decoded_board));
     p_init_board_map(v_board_size);
     
-    v_search_depth := CASE p_difficulty
-                        WHEN 'E' THEN 4
-                        WHEN 'M' THEN 8
-                        WHEN 'H' THEN 12
-                        ELSE 2
-                      END;
+    -- ОПТИМИЗАЦИЯ: Если есть только одно обязательное взятие, возвращаем его сразу без minimax
+    DECLARE
+        v_all_moves t_move_list := find_all_player_moves(v_decoded_board, p_ai_color, p_rule_id);
+        v_capture_count PLS_INTEGER := 0;
+    BEGIN
+        -- Подсчитываем количество взятий
+        FOR i IN 1 .. v_all_moves.COUNT LOOP
+            IF v_all_moves(i).is_capture = 'Y' THEN
+                v_capture_count := v_capture_count + 1;
+            END IF;
+        END LOOP;
+        
+        -- Если есть только одно взятие (обязательное), возвращаем его сразу
+        IF v_capture_count = 1 AND v_all_moves.COUNT = 1 THEN
+            v_best_move_str := f_move_to_notation(v_all_moves(1), v_board_size);
+            RETURN v_best_move_str;
+        END IF;
+    END;
+    
+    -- Глубина поиска: по умолчанию 4 (для 'E' и других), для 'M' = 6, для 'H' = 10
+    IF p_difficulty = 'M' THEN
+        v_search_depth := 4;
+    ELSIF p_difficulty = 'H' THEN
+        v_search_depth := 8;
+    END IF;
     v_alpha := -99999;
     v_beta  := 99999;
 
@@ -1390,6 +1431,8 @@ FUNCTION f_get_current_board_position(
     p_rule_id IN NUMBER
 ) RETURN VARCHAR2 IS
     v_board_position VARCHAR2(100);
+    v_is_puzzle CHAR(1);
+    v_puzzle_id NUMBER;
 BEGIN
     BEGIN
         SELECT decode_board(board_position) INTO v_board_position
@@ -1402,8 +1445,26 @@ BEGIN
         WHERE ROWNUM = 1;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-            -- Если ходов нет, используем начальную позицию
-            v_board_position := get_initial_position(p_rule_id);
+            -- Если ходов нет, проверяем, является ли игра задачей
+            BEGIN
+                SELECT puzzle_id, puzzle_status INTO v_puzzle_id, v_is_puzzle
+                FROM games
+                WHERE game_id = p_game_id;
+                
+                -- Если это задача (puzzle_status = 'p'), берем позицию из puzzles
+                IF v_is_puzzle = 'p' AND v_puzzle_id IS NOT NULL THEN
+                    SELECT decode_board(board_position) INTO v_board_position
+                    FROM puzzles
+                    WHERE puzzle_id = v_puzzle_id;
+                ELSE
+                    -- Иначе используем начальную позицию
+                    v_board_position := get_initial_position(p_rule_id);
+                END IF;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    -- Если игра не найдена, используем начальную позицию
+                    v_board_position := get_initial_position(p_rule_id);
+            END;
     END;
     
     RETURN v_board_position;
@@ -1739,77 +1800,7 @@ BEGIN
                 SELECT COUNT(*) INTO v_current_move_count FROM game_moves WHERE game_id = p_game_id;
                 v_encoded_current_board := encode_board(v_new_board_decoded);
                 
-
-                IF v_puzzle_moves_to_solve IS NOT NULL AND v_current_move_count = v_puzzle_moves_to_solve THEN
-                    IF v_puzzle_end_board IS NULL THEN
-
-                        IF NOT v_opponent_pieces_exist THEN
-                            -- Решено, но не оптимально
-                            DECLARE
-                                v_solution_msg VARCHAR2(2000);
-                            BEGIN
-                                v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' ход(ов): ' || NVL(v_puzzle_solution, 'не указано');
-                                
-                                p_finish_game(
-                                    p_game_id       => p_game_id,
-                                    p_status        => 'V',
-                                    p_winner_color  => v_player_color,
-                                    p_puzzle_status => 's',
-                                    p_audit_event   => 'PUZZLE_SOLVED',
-                                    p_player_id     => p_player_id
-                                );
-                                p_status_message := p_status_message || ' Победа! У противника не осталось фигур.' || c_nl || v_solution_msg;
-                                RETURN;
-                            END;
-                        ELSE
-                            -- Не решено за оптимальное количество ходов - поражение
-                            p_finish_game(
-                                p_game_id       => p_game_id,
-                                p_status        => 'V',
-                                p_winner_color  => CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
-                                p_puzzle_status => 'f',
-                                p_audit_event   => 'PUZZLE_FAILED',
-                                p_player_id     => p_player_id
-                            );
-                            p_status_message := 'Попробуйте еще раз! Конечная позиция должна быть: ' || NVL(decode_board(v_puzzle_end_board), 'уничтожение всех фигур противника');
-                            RETURN;
-                        END IF;
-                    ELSE
-                        -- Ничья: проверяем достижение позиции end_board_state
-                        IF v_encoded_current_board = v_puzzle_end_board THEN
-                            -- Решено, но не оптимально
-                            DECLARE
-                                v_solution_msg VARCHAR2(2000);
-                            BEGIN
-                                v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' ход(ов): ' || NVL(v_puzzle_solution, 'не указано');
-                                
-                                p_finish_game(
-                                    p_game_id       => p_game_id,
-                                    p_status        => 'D',
-                                    p_puzzle_status => 's',
-                                    p_audit_event   => 'PUZZLE_SOLVED_DRAW',
-                                    p_player_id     => p_player_id
-                                );
-                                p_status_message := p_status_message || ' Ничья! Достигнута целевая позиция.' || c_nl || v_solution_msg;
-                                RETURN;
-                            END;
-                        ELSE
-                            -- Не решено за оптимальное количество ходов - поражение
-                            p_finish_game(
-                                p_game_id       => p_game_id,
-                                p_status        => 'V',
-                                p_winner_color  => CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
-                                p_puzzle_status => 'f',
-                                p_audit_event   => 'PUZZLE_FAILED',
-                                p_player_id     => p_player_id
-                            );
-                            p_status_message := 'Попробуйте еще раз! Конечная позиция должна быть: ' || decode_board(v_puzzle_end_board);
-                            RETURN;
-                        END IF;
-                    END IF;
-                END IF;
-                
-                -- Если лимит ходов не достигнут, проверяем успешное решение
+                -- Проверяем успешное решение задачи (независимо от количества ходов)
                 IF v_puzzle_end_board IS NULL THEN
                     -- Победа: проверяем уничтожение противника
                     IF NOT v_opponent_pieces_exist THEN
@@ -1995,6 +1986,7 @@ PROCEDURE create_game(
     v_status_message      VARCHAR2(1000);
     v_my_active_game_id   NUMBER;
     v_error_msg           VARCHAR2(2000);
+    v_puzzle_id_to_use    NUMBER; -- Локальная переменная для puzzle_id (может быть из p_puzzle_id или daily_puzzles)
 BEGIN
     v_current_player_id := get_or_create_player_id(v_current_username);
     UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_current_player_id;
@@ -2072,13 +2064,40 @@ BEGIN
             RETURN;
         END IF;
     END IF;
+    
+    -- Обработка задачи дня (p_daily = 'Y')
+    IF p_daily = 'Y' THEN
+        IF p_puzzle_id IS NOT NULL THEN
+            v_error_msg := 'Нельзя одновременно передавать p_daily и p_puzzle_id.';
+            p_audit_log(v_current_player_id, NULL, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
+        END IF;
+        
+        -- Получаем puzzle_id задачи дня для сегодняшней даты
+        BEGIN
+            SELECT puzzle_id INTO v_puzzle_id_to_use
+            FROM daily_puzzles
+            WHERE puzzle_date = TRUNC(SYSDATE)
+            AND ROWNUM = 1;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                v_error_msg := 'Задача дня на ' || TO_CHAR(TRUNC(SYSDATE), 'DD.MM.YYYY') || ' не найдена.';
+                p_audit_log(v_current_player_id, NULL, v_error_msg);
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                RETURN;
+        END;
+    ELSE
+        -- Используем переданный p_puzzle_id, если он есть
+        v_puzzle_id_to_use := p_puzzle_id;
+    END IF;
 
     -- 1. Режим ЗАДАЧИ (Puzzle)
-    IF p_puzzle_id IS NOT NULL THEN
+    IF v_puzzle_id_to_use IS NOT NULL THEN
         DECLARE
             v_puzzle puzzles%ROWTYPE;
         BEGIN
-            SELECT * INTO v_puzzle FROM puzzles WHERE puzzle_id = p_puzzle_id;
+            SELECT * INTO v_puzzle FROM puzzles WHERE puzzle_id = v_puzzle_id_to_use;
             v_initial_position := v_puzzle.board_position;
             v_encoded_position := encode_board(v_initial_position);
             v_status := 'A';
@@ -2094,10 +2113,10 @@ BEGIN
                 v_creator_color   := 'B';
             END IF;
 
-            -- Если moves_to_solve IS NULL, то это игра с ИИ из произвольной позиции
-            -- Используем difficulty_level из пазла как ai_difficulty
+            -- В задачах AI всегда играет против игрока, используем difficulty_level из пазла как ai_difficulty
+            -- Для всех задач (независимо от moves_to_solve) устанавливаем ai_difficulty, чтобы AI мог делать ходы
             DECLARE
-                v_ai_difficulty_for_puzzle CHAR(1) := CASE WHEN v_puzzle.moves_to_solve IS NULL THEN v_puzzle.difficulty_level ELSE NULL END;
+                v_ai_difficulty_for_puzzle CHAR(1) := v_puzzle.difficulty_level;
             BEGIN
                 INSERT INTO games (
                     rule_id, player_white_id, player_black_id, 
@@ -2110,18 +2129,18 @@ BEGIN
                     v_puzzle.rule_id, v_white_player_id, v_black_player_id, 
                     v_creator_color,
                     v_status, v_puzzle.turn_to_move,
-                    p_puzzle_id, p_daily, 'p',
+                    v_puzzle_id_to_use, p_daily, 'p',
                     v_ai_difficulty_for_puzzle
                 )
                 RETURNING game_id INTO v_game_id;
             END;
             
-            v_status_message := 'Вы начали задачу ID ' || p_puzzle_id || '. (ID сессии: ' || v_game_id || ').';
+            v_status_message := 'Вы начали задачу ID ' || v_puzzle_id_to_use || '. (ID сессии: ' || v_game_id || ').';
             p_audit_log(v_current_player_id, v_game_id, 'START_PUZZLE');
         
         EXCEPTION
             WHEN NO_DATA_FOUND THEN
-                v_error_msg := 'Задача с ID ' || p_puzzle_id || ' не найдена.';
+                v_error_msg := 'Задача с ID ' || v_puzzle_id_to_use || ' не найдена.';
                 p_audit_log(v_current_player_id, NULL, v_error_msg);
                 DBMS_OUTPUT.PUT_LINE(v_error_msg);
                 RETURN;
@@ -2241,7 +2260,7 @@ BEGIN
     DBMS_OUTPUT.PUT_LINE(v_status_message);
     
     -- Если игра активна сразу (PvE / Puzzle), показываем доску
-    IF (p_ai_difficulty IS NOT NULL AND v_white_player_id IS NULL) OR (p_puzzle_id IS NOT NULL) THEN
+    IF (p_ai_difficulty IS NOT NULL AND v_white_player_id IS NULL) OR (v_puzzle_id_to_use IS NOT NULL) THEN
         print_active_board(
             p_game_id => v_game_id,
             p_username => NULL,
@@ -3237,16 +3256,31 @@ BEGIN
                 v_white_player_name players.username%TYPE;
                 v_black_player_name players.username%TYPE;
                 v_players_info VARCHAR2(500) := '';
+                v_ai_difficulty_to_show CHAR(1);
             BEGIN
+                -- Для задач получаем difficulty_level из таблицы puzzles
+                IF v_game.puzzle_id IS NOT NULL THEN
+                    BEGIN
+                        SELECT difficulty_level INTO v_ai_difficulty_to_show
+                        FROM puzzles
+                        WHERE puzzle_id = v_game.puzzle_id;
+                    EXCEPTION
+                        WHEN NO_DATA_FOUND THEN
+                            v_ai_difficulty_to_show := v_game.ai_difficulty;
+                    END;
+                ELSE
+                    v_ai_difficulty_to_show := v_game.ai_difficulty;
+                END IF;
+                
                 IF v_game.player_white_id IS NOT NULL THEN
                     BEGIN
                         SELECT username INTO v_white_player_name FROM players WHERE player_id = v_game.player_white_id;
                     EXCEPTION
                         WHEN NO_DATA_FOUND THEN
-                            v_white_player_name := 'AI (difficulty_level: ' || NVL(v_game.ai_difficulty, 'N') || ')';
+                            v_white_player_name := 'AI (difficulty_level: ' || NVL(v_ai_difficulty_to_show, 'N') || ')';
                     END;
                 ELSE
-                    v_white_player_name := 'AI (difficulty_level: ' || NVL(v_game.ai_difficulty, 'N') || ')';
+                    v_white_player_name := 'AI (difficulty_level: ' || NVL(v_ai_difficulty_to_show, 'N') || ')';
                 END IF;
                 
                 IF v_game.player_black_id IS NOT NULL THEN
@@ -3254,10 +3288,10 @@ BEGIN
                         SELECT username INTO v_black_player_name FROM players WHERE player_id = v_game.player_black_id;
                     EXCEPTION
                         WHEN NO_DATA_FOUND THEN
-                            v_black_player_name := 'AI (difficulty_level: ' || NVL(v_game.ai_difficulty, 'N') || ')';
+                            v_black_player_name := 'AI (difficulty_level: ' || NVL(v_ai_difficulty_to_show, 'N') || ')';
                     END;
                 ELSE
-                    v_black_player_name := 'AI (difficulty_level: ' || NVL(v_game.ai_difficulty, 'N') || ')';
+                    v_black_player_name := 'AI (difficulty_level: ' || NVL(v_ai_difficulty_to_show, 'N') || ')';
                 END IF;
                 
                 v_players_info := 'Белые: ' || v_white_player_name || ' | Черные: ' || v_black_player_name;
@@ -3267,7 +3301,27 @@ BEGIN
             IF v_active_player_id IS NOT NULL THEN
                 SELECT p.username INTO v_player_username FROM players p WHERE p.player_id = v_active_player_id;
             END IF;
-            v_status_header := 'Ход(#' || (v_move_count + 1) || ') игрока: ' || NVL(v_player_username, 'AI (Server)') || ' (' || v_game.current_turn || ')';
+            
+            -- Для задач добавляем "Задача №" в статус
+            IF v_game.puzzle_id IS NOT NULL THEN
+                DECLARE
+                    v_puzzle_difficulty CHAR(1);
+                BEGIN
+                    SELECT difficulty_level INTO v_puzzle_difficulty
+                    FROM puzzles
+                    WHERE puzzle_id = v_game.puzzle_id;
+                    
+                    v_status_header := 'Задача №' || v_game.puzzle_id || ' (Сложность: ' || 
+                                      CASE v_puzzle_difficulty WHEN 'E' THEN 'Легкая' WHEN 'M' THEN 'Средняя' WHEN 'H' THEN 'Сложная' ELSE v_puzzle_difficulty END || 
+                                      ') | Ход(#' || (v_move_count + 1) || ') игрока: ' || 
+                                      NVL(v_player_username, 'AI (Server)') || ' (' || v_game.current_turn || ')';
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        v_status_header := 'Ход(#' || (v_move_count + 1) || ') игрока: ' || NVL(v_player_username, 'AI (Server)') || ' (' || v_game.current_turn || ')';
+                END;
+            ELSE
+                v_status_header := 'Ход(#' || (v_move_count + 1) || ') игрока: ' || NVL(v_player_username, 'AI (Server)') || ' (' || v_game.current_turn || ')';
+            END IF;
             
             -- Вывод информации о предложении ничьей (если есть)
             IF v_game.draw_offer_status = 'O' AND v_game.draw_offered_by_color IS NOT NULL THEN
@@ -4177,6 +4231,12 @@ PROCEDURE show_puzzles(
         ORDER BY puz.puzzle_id;
 BEGIN
     v_player_id := get_or_create_player_id(USER);
+    
+    -- Проверка корректности сложности
+    IF p_difficulty IS NOT NULL AND p_difficulty NOT IN ('E', 'M', 'H') THEN
+        DBMS_OUTPUT.PUT_LINE('Ошибка: Сложность должна быть ''E'' (Easy), ''M'' (Medium) или ''H'' (Hard).');
+        RETURN;
+    END IF;
 
     -- ВАРИАНТ 1: Поиск конкретной задачи (Красивый вывод)
     IF p_puzzle_id IS NOT NULL THEN
@@ -4247,28 +4307,33 @@ BEGIN
     END IF;
     
     DBMS_OUTPUT.PUT_LINE(
-        RPAD('ID', 6) || 
+        RPAD('ID', 4) || 
         RPAD('Слож.', 6) || 
-        RPAD('Ходов', 6) || 
-        RPAD('Цель', 7) || 
-        RPAD('Автор', 15) || 
-        RPAD('Ход', 4) || 
+        RPAD('Ходов', 7) || 
+        RPAD('Цель', 8) || 
+        RPAD('Ход', 5) || 
         'Позиция (RLE)'
     );
-    DBMS_OUTPUT.PUT_LINE(RPAD('-', 6, '-') || ' ' || RPAD('-', 6, '-') || ' ' || RPAD('-', 6, '-') || ' ' || RPAD('-', 7, '-') || ' ' || RPAD('-', 15, '-') || ' ' || RPAD('-', 4, '-') || ' ' || RPAD('-', 20, '-'));
+    DBMS_OUTPUT.PUT_LINE(
+        RPAD('-', 3, '-') || ' ' || 
+        RPAD('-', 5, '-') || ' ' || 
+        RPAD('-', 6, '-') || ' ' || 
+        RPAD('-', 7, '-') || ' ' || 
+        RPAD('-', 4, '-') || ' ' || 
+        RPAD('-', 25, '-')
+    );
 
     FOR r IN c_puzzles LOOP
         v_found := TRUE;
         v_goal_str := CASE WHEN r.end_board_state IS NULL THEN 'Победа' ELSE 'Ничья' END;
         
         DBMS_OUTPUT.PUT_LINE(
-            RPAD(r.puzzle_id, 6) || 
-            RPAD(r.difficulty_level, 6) || 
-            RPAD(NVL(TO_CHAR(r.moves_to_solve), '?'), 6) || 
-            RPAD(SUBSTR(v_goal_str, 1, 6), 7) ||
-            RPAD(SUBSTR(r.creator_username, 1, 14), 15) || 
-            RPAD(r.turn_to_move, 4) || 
-            SUBSTR(r.board_position, 1, 25) || (CASE WHEN LENGTH(r.board_position) > 25 THEN '...' ELSE '' END)
+            RPAD(TO_CHAR(r.puzzle_id), 3) || ' ' || 
+            RPAD(r.difficulty_level, 5) || ' ' || 
+            RPAD(NVL(TO_CHAR(r.moves_to_solve), '?'), 6) || ' ' || 
+            RPAD(SUBSTR(v_goal_str, 1, 6), 7) || ' ' ||
+            RPAD(r.turn_to_move, 4) || ' ' || 
+            r.board_position
         );
     END LOOP;
     
