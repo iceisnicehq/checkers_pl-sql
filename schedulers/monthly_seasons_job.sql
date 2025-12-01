@@ -33,6 +33,7 @@ BEGIN
                 v_year_num := EXTRACT(YEAR FROM v_current_month);
                 v_season_name := v_month_names(v_month_num) || '-' || v_year_num;
                 
+                -- Создаем новый сезон - триггер trg_init_season_ratings автоматически создаст рейтинги
                 INSERT INTO seasons (season_name, start_date, end_date)
                 VALUES (v_season_name, v_current_month, v_next_month - 1);
                 

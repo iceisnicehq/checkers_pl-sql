@@ -39,7 +39,7 @@ SELECT
             END
     END AS your_color,
     
-    g.start_time AS created_at
+    TO_CHAR(g.start_time, 'YYYY-MM-DD HH24:MI:SS') AS created_at
     
 FROM games g
 -- Нам больше не нужен JOIN p_creator, так как нет creator_player_id

@@ -1,39 +1,24 @@
--- View для результатов daily puzzles
+-- View для результатов daily puzzles: только для тех, кто решал
 CREATE OR REPLACE VIEW v_daily_puzzle_results AS
 SELECT
-    dp.daily_puzzle_id,
     dp.puzzle_date,
-    p.puzzle_id,
-    p.difficulty_level,
-    p.moves_to_solve,
-    p.turn_to_move,
-    p.end_condition,
-    -- Статистика решений
-    COUNT(DISTINCT g.game_id) AS total_attempts,
-    SUM(CASE WHEN g.puzzle_status = 's' THEN 1 ELSE 0 END) AS successful_solves,
-    SUM(CASE WHEN g.puzzle_status = 'f' THEN 1 ELSE 0 END) AS failed_attempts,
-    SUM(CASE WHEN g.puzzle_status = 'p' OR g.puzzle_status IS NULL THEN 1 ELSE 0 END) AS in_progress,
-    -- Среднее время решения (для успешных)
-    ROUND(AVG(CASE 
-        WHEN g.puzzle_status = 's' AND g.end_time IS NOT NULL AND g.start_time IS NOT NULL
-        THEN (g.end_time - g.start_time) * 24 * 60
-        ELSE NULL
-    END), 2) AS avg_solve_time_minutes,
-    -- Среднее количество ходов для решения
-    ROUND(AVG(CASE 
-        WHEN g.puzzle_status = 's'
-        THEN (SELECT COUNT(*) FROM game_moves gm WHERE gm.game_id = g.game_id)
-        ELSE NULL
-    END), 2) AS avg_moves_to_solve
+    pz.puzzle_id,
+    p.username AS player_name,
+    CASE 
+        WHEN g.puzzle_status = 's' THEN 'Решено'
+        WHEN g.puzzle_status = 'f' THEN 'Не решено'
+        WHEN g.puzzle_status = 'p' OR g.puzzle_status IS NULL THEN 'В процессе'
+        ELSE 'Неизвестно'
+    END AS result
 FROM daily_puzzles dp
-JOIN puzzles p ON dp.puzzle_id = p.puzzle_id
-LEFT JOIN games g ON g.puzzle_id = p.puzzle_id AND g.is_daily_puzzle = 'Y'
-GROUP BY
-    dp.daily_puzzle_id,
-    dp.puzzle_date,
-    p.puzzle_id,
-    p.difficulty_level,
-    p.moves_to_solve,
-    p.turn_to_move,
-    p.end_condition
-ORDER BY dp.puzzle_date DESC;
+JOIN puzzles pz ON dp.puzzle_id = pz.puzzle_id
+JOIN games g ON g.puzzle_id = pz.puzzle_id AND g.is_daily_puzzle = 'Y'
+JOIN players p ON (g.player_white_id = p.player_id OR g.player_black_id = p.player_id)
+WHERE g.puzzle_status IS NOT NULL
+ORDER BY dp.puzzle_date DESC, 
+    CASE 
+        WHEN g.puzzle_status = 's' THEN 1
+        WHEN g.puzzle_status = 'f' THEN 2
+        WHEN g.puzzle_status = 'p' THEN 3
+        ELSE 4
+    END;
