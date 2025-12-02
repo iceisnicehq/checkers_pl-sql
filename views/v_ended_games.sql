@@ -2,6 +2,7 @@
 CREATE OR REPLACE VIEW v_ended_games AS
 SELECT
     g.game_id,
+    g.match_id,
     pw.username AS white_player_username,
     pb.username AS black_player_username,
     g.rule_id,

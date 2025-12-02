@@ -1334,8 +1334,9 @@ BEGIN
             END LOOP;
             
             -- Проверяем, завершен ли матч
-            -- Победа когда wins > games_to_win/2 (для best of 3 нужно 2 победы, так как 2 > 1.5)
-            IF v_player1_wins > (v_games_to_win / 2) THEN
+            -- Для "best of N" нужно выиграть (N+1)/2 игр (для best of 3 нужно 2 победы, для best of 5 - 3 победы)
+            -- Используем TRUNC((v_games_to_win + 1) / 2) для вычисления необходимого количества побед
+            IF v_player1_wins >= TRUNC((v_games_to_win + 1) / 2) THEN
                 UPDATE matches
                 SET status = 'C',
                     winner_player_id = v_player1_id
@@ -1368,7 +1369,7 @@ BEGIN
                   AND rule_id = v_match_rule_id 
                   AND season_id = v_season_id;
                 
-            ELSIF v_player2_wins > (v_games_to_win / 2) THEN
+            ELSIF v_player2_wins >= TRUNC((v_games_to_win + 1) / 2) THEN
                 UPDATE matches
                 SET status = 'C',
                     winner_player_id = v_player2_id
@@ -2669,7 +2670,22 @@ BEGIN
     END;
     
     p_audit_log(v_player_id, p_game_id, 'JOIN_GAME');
-    DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || '.');
+    
+    -- Выводим информацию о матче, если игра является частью матча
+    IF v_game.match_id IS NOT NULL THEN
+        DECLARE
+            v_match matches%ROWTYPE;
+        BEGIN
+            SELECT * INTO v_match FROM matches WHERE match_id = v_game.match_id;
+            DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || ' (часть матча ID ' || v_game.match_id || ', Best of ' || v_match.games_to_win || ').');
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || '.');
+        END;
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || '.');
+    END IF;
+    
     COMMIT;
 
 EXCEPTION
@@ -3550,6 +3566,81 @@ BEGIN
                 
                 v_players_info := 'Белые: ' || v_white_player_name || ' | Черные: ' || v_black_player_name;
                 DBMS_OUTPUT.PUT_LINE(v_players_info);
+                
+                -- Отображение информации о матче (если игра является частью матча)
+                IF v_game.match_id IS NOT NULL THEN
+                    DECLARE
+                        v_match matches%ROWTYPE;
+                        v_player1_id players.player_id%TYPE;
+                        v_player2_id players.player_id%TYPE;
+                        v_player1_wins NUMBER := 0;
+                        v_player2_wins NUMBER := 0;
+                        v_player1_name players.username%TYPE;
+                        v_player2_name players.username%TYPE;
+                        v_match_info VARCHAR2(500);
+                    BEGIN
+                        SELECT * INTO v_match FROM matches WHERE match_id = v_game.match_id;
+                        
+                        -- Получаем игроков из первой игры матча
+                        BEGIN
+                            SELECT player_white_id, player_black_id
+                            INTO v_player1_id, v_player2_id
+                            FROM (
+                                SELECT player_white_id, player_black_id
+                                FROM games
+                                WHERE match_id = v_game.match_id
+                                ORDER BY game_id ASC
+                            )
+                            WHERE ROWNUM = 1;
+                        EXCEPTION
+                            WHEN NO_DATA_FOUND THEN
+                                NULL;
+                        END;
+                        
+                        -- Подсчитываем победы
+                        IF v_player1_id IS NOT NULL AND v_player2_id IS NOT NULL THEN
+                            FOR r IN (
+                                SELECT winner_player_color, status
+                                FROM games
+                                WHERE match_id = v_game.match_id
+                                  AND status IN ('V', 'D', 'T', 'R')
+                            ) LOOP
+                                IF r.status = 'V' THEN
+                                    IF r.winner_player_color = 'W' THEN
+                                        v_player1_wins := v_player1_wins + 1;
+                                    ELSIF r.winner_player_color = 'B' THEN
+                                        v_player2_wins := v_player2_wins + 1;
+                                    END IF;
+                                END IF;
+                            END LOOP;
+                            
+                            -- Получаем имена игроков
+                            BEGIN
+                                SELECT username INTO v_player1_name FROM players WHERE player_id = v_player1_id;
+                            EXCEPTION
+                                WHEN NO_DATA_FOUND THEN
+                                    v_player1_name := 'Игрок 1';
+                            END;
+                            
+                            BEGIN
+                                SELECT username INTO v_player2_name FROM players WHERE player_id = v_player2_id;
+                            EXCEPTION
+                                WHEN NO_DATA_FOUND THEN
+                                    v_player2_name := 'Игрок 2';
+                            END;
+                            
+                            -- Формируем информацию о матче
+                            v_match_info := 'Матч (ID: ' || v_game.match_id || ', Best of ' || v_match.games_to_win || 
+                                          ') | Счет: ' || v_player1_name || ' ' || v_player1_wins || ':' || v_player2_wins || ' ' || v_player2_name ||
+                                          ' | Нужно для победы: ' || (TRUNC(v_match.games_to_win / 2) + 1) || ' игры';
+                            
+                            DBMS_OUTPUT.PUT_LINE(v_match_info);
+                        END IF;
+                    EXCEPTION
+                        WHEN NO_DATA_FOUND THEN
+                            NULL; -- Матч не найден, игнорируем
+                    END;
+                END IF;
             END;
             SELECT COUNT(*) INTO v_move_count FROM game_moves WHERE game_id = v_target_game_id;
             IF v_active_player_id IS NOT NULL THEN

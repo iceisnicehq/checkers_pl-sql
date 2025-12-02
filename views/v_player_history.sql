@@ -2,6 +2,7 @@
 CREATE OR REPLACE VIEW v_player_history AS
 SELECT
     g.game_id,
+    g.match_id,
     p_user.username AS player_name,
     CASE
         WHEN g.status IN ('V', 'T', 'R') AND (

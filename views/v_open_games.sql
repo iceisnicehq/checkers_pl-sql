@@ -1,6 +1,7 @@
 CREATE OR REPLACE VIEW v_open_games AS
 SELECT
     g.game_id,
+    g.match_id,
     
     -- Определяем имя создателя на основе его цвета
     CASE g.creator_player_color

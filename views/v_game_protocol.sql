@@ -2,6 +2,7 @@
 CREATE OR REPLACE VIEW v_game_protocol AS
 SELECT
     g.game_id,
+    g.match_id,
     pw.username AS white_player_username,
     pb.username AS black_player_username,
     g.rule_id,
@@ -38,7 +39,8 @@ SELECT
     -- Последний результат валидации (из audit_log)
     (SELECT event_msg FROM audit_log 
      WHERE game_id = g.game_id 
-     AND (event_msg LIKE '%VALIDATION%' OR event_msg LIKE '%ERROR%' OR event_msg LIKE '%INVALID%')
+     AND (event_msg LIKE '%Неверный ход%' OR event_msg LIKE '%неверный ход%' OR 
+          event_msg LIKE '%Нелегальный ход%' OR event_msg LIKE '%нелегальный ход%')
      ORDER BY log_timestamp DESC 
      FETCH FIRST 1 ROW ONLY) AS last_validation_result
 FROM games g
