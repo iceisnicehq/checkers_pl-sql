@@ -1956,17 +1956,17 @@ BEGIN
                 v_current_move_count := v_move_count;
                 v_encoded_current_board := encode_board(v_new_board_decoded);
                 
-                -- Формируем сообщение о решении (общая логика для победы и ничьей)
-                IF v_puzzle_moves_to_solve IS NOT NULL AND v_current_move_count > v_puzzle_moves_to_solve THEN
-                    v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' хода(ов): ' || NVL(v_puzzle_solution, 'не указано');
-                ELSE
-                    v_solution_msg := 'Поздравляем! Вы решили задачу за ' || v_current_move_count || ' хода(ов)!';
-                END IF;
-                
-                -- Проверяем успешное решение задачи (независимо от количества ходов)
+                -- Проверяем успешное решение задачи
                 IF v_puzzle_end_board IS NULL THEN
                     -- Победа: проверяем уничтожение противника
                     IF NOT v_opponent_pieces_exist THEN
+                        -- Формируем сообщение о решении (только для пазлов на победу)
+                        IF v_puzzle_moves_to_solve IS NOT NULL AND v_current_move_count > v_puzzle_moves_to_solve THEN
+                            v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' хода(ов): ' || NVL(v_puzzle_solution, 'не указано');
+                        ELSE
+                            v_solution_msg := 'Поздравляем! Вы решили задачу за ' || v_current_move_count || ' хода(ов)!';
+                        END IF;
+                        
                         p_finish_game(
                             p_game_id       => p_game_id,
                             p_status        => 'V',
@@ -1986,6 +1986,13 @@ BEGIN
                     BEGIN
                         v_next_player_moves_puzzle := find_all_player_moves(v_new_board_decoded, v_next_turn_color_puzzle, v_game.rule_id);
                         IF v_next_player_moves_puzzle.COUNT = 0 THEN
+                            -- Формируем сообщение о решении (только для пазлов на победу)
+                            IF v_puzzle_moves_to_solve IS NOT NULL AND v_current_move_count > v_puzzle_moves_to_solve THEN
+                                v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' хода(ов): ' || NVL(v_puzzle_solution, 'не указано');
+                            ELSE
+                                v_solution_msg := 'Поздравляем! Вы решили задачу за ' || v_current_move_count || ' хода(ов)!';
+                            END IF;
+                            
                             p_finish_game(
                                 p_game_id       => p_game_id,
                                 p_status        => 'V',
@@ -1999,17 +2006,31 @@ BEGIN
                         END IF;
                     END;
                 ELSE
-                    -- Ничья: проверяем достижение позиции end_board_state
-                    IF v_encoded_current_board = v_puzzle_end_board THEN
-                        p_finish_game(
-                            p_game_id       => p_game_id,
-                            p_status        => 'D',
-                            p_puzzle_status => 's',
-                            p_audit_event   => 'PUZZLE_SOLVED_DRAW',
-                            p_player_id     => p_player_id
-                        );
-                        p_status_message := p_status_message || ' Ничья! Достигнута целевая позиция.' || c_nl || v_solution_msg;
-                        RETURN;
+                    -- Ничья: проверяем достижение позиции end_board_state только при достижении moves_to_solve
+                    IF v_puzzle_moves_to_solve IS NOT NULL THEN
+                        IF v_encoded_current_board = v_puzzle_end_board THEN
+                            -- Задача решена
+                            p_finish_game(
+                                p_game_id       => p_game_id,
+                                p_status        => 'D',
+                                p_puzzle_status => 's',
+                                p_audit_event   => 'PUZZLE_SOLVED_DRAW',
+                                p_player_id     => p_player_id
+                            );
+                            p_status_message := p_status_message || ' Ничья! Достигнута целевая позиция. Задача решена!';
+                            RETURN;
+                        ELSE
+                            -- Задача не решена - достигнуто нужное количество ходов, но позиция не совпадает
+                            p_finish_game(
+                                p_game_id       => p_game_id,
+                                p_status        => 'D',
+                                p_puzzle_status => 'f',
+                                p_audit_event   => 'PUZZLE_FAILED_DRAW',
+                                p_player_id     => p_player_id
+                            );
+                            p_status_message := p_status_message || ' Ничья! Достигнуто ' || v_puzzle_moves_to_solve || ' ход(ов), но целевая позиция не достигнута. Задача не решена.';
+                            RETURN;
+                        END IF;
                     END IF;
                 END IF;
             END;
@@ -4788,8 +4809,8 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(v_visual_board);
         
         DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
-        -- [ИСПРАВЛЕНО] Подсказка для SQL Developer
-        DBMS_OUTPUT.PUT_LINE('Для решения: BEGIN game_logic.create_game(p_puzzle_id => ' || v_puzzle_id || '); END;');
+        -- Подсказка для SQL Developer
+        DBMS_OUTPUT.PUT_LINE('Для решения: BEGIN game_logic.create_game(p_daily => ''Y''); END;');
 
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
