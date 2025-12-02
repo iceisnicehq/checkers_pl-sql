@@ -2867,6 +2867,7 @@ PROCEDURE cancel_game IS
     v_error_msg VARCHAR2(2000);
 BEGIN
     v_player_id := get_or_create_player_id(user);
+    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
 
     DECLARE
         v_spectating_game_id NUMBER := NULL;
@@ -2891,7 +2892,6 @@ BEGIN
         END IF;
     END;
 
-    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
     v_game_id := get_active_game(v_player_id);
     
     IF v_game_id IS NULL THEN

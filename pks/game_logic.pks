@@ -132,7 +132,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
 
     PROCEDURE watch_game_replay( -- <-- ИЗМЕНЕНИЕ: Переименовано
         p_game_id       IN NUMBER,
-        p_moves_to_show IN NUMBER DEFAULT 1
+        p_moves_to_show IN NUMBER DEFAULT 1,
+        p_restart       IN CHAR   DEFAULT 'N'
     ); 
 
     PROCEDURE stop_spectating; 

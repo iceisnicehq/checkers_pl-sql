@@ -17,32 +17,32 @@ COMMENT ON TABLE puzzles IS 'Хранилище для режима "задач�
 
 -- Run this block once to set up the puzzles AFTER GAMES AND DAILY_PUZZLES tables are created
 BEGIN
-    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('12b4b5b2b8w1b1w11w3w8', 'W', 4, 'E', NULL);
+-- 1
+    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
+    VALUES ('12b4b5b2b8w1b1w11w3w8', 'W', 13, 'E', NULL, 1, 
+            'Ход 1: d2-e3 ---> Ход 2: f4:d2 ---> Ход 3: h2-g3 ---> Ход 4: c5:e3 ---> Ход 5: g3-f4 ---> Ход 6: e3:g5 ---> Ход 7: h4:f6:d8:a5:e1 ---> Ход 8: h6-g5 ---> Ход 9: e1:g3 ---> Ход 10: g3-h4 ---> Ход 11: g3-f2 ---> Ход 13: f2:h4');
+-- 2
+    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
+    VALUES ('10b1b6b1b8b4w3w13w1b2w5', 'W', 11, 'E', NULL, 1,
+            'Ход 1: f2-g3 ---> Ход 2: h2:f4 ---> Ход 3: d4-e5 ---> Ход 4: f6:d4 ---> Ход 5: h4:f6:d8:b6:f2 ---> Ход 6: d6-e5 ---> Ход 7: f2-e3 ---> Ход 8: f4:d2 ---> Ход 9: c1:e3 ---> Ход 10: e5-d4 ---> Ход 11: e3:c5');
 
-    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('10b1b6b1b8b4w3w13w1b2w5', 'W', 3, 'E', NULL);
+-- 3
+    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
+    VALUES ('1b12b5b3b3b4b1w1b1w6w4w3b2w1w1w1', 'W', 21, 'M', NULL, 1,
+            'Ход 1: d2-c3 ---> Ход 3: c1:e3:g5:e7 ---> Ход 5: e7-f8 ---> Ход 7: f8:h6:d2:b4 ---> Ход 9: e1-d2 ---> Ход 11: g1-f2 ---> Ход 13: h4:f2 ---> Ход 15: f2-e3 ---> Ход 17: e3-d4 ---> Ход 19: d4-c5 ---> Ход 21: c5:a3');
+-- 4  
+    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
+    VALUES ('17b1b13w1b3b4b8w1ww3w3', 'W', 9, 'M', NULL, 1,
+            'Ход 1: h2-g3 ---> Ход 2: e3-g1 ---> Ход 3: b4-a5 ---> Ход 4: h4:f2 ---> Ход 5: a5:c7:e5:c3 ---> Ход 6: g1-h2 ---> Ход 7: e1:g3 ---> Ход 8: h2:e5:b2 ---> Ход 9: a1:c3');
 
-    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('12b4b3b8b4w1b1w2w8w12', 'W', 3, 'E', NULL);
-
-    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('1b12b6b3b2b4b1w1b1w6w4w3b2w1w1w1', 'W', 9, 'M', NULL);
-
-    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('17b1b13w1b3b4b8w1ww3w3', 'W', 5, 'M', NULL);
-
-    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('14b2b1b1b6b4w6w1w1w15w3', 'W', 6, 'M', NULL);
-
-    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('5b1bb12w2w12b17b4w1w1', 'W', 12, 'H', NULL);
-
-    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('8w1b13b3b6b6w1b13w1w3', 'W', 5, 'H', NULL);
-
-    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id)
-    VALUES ('8w1b1b1w18w1b4b10w3b8', 'W', 4, 'H', NULL);
+-- 5
+    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
+    VALUES ('16b1b6b3w2w1b1b15w1w3w41', 'B', 7, 'H', NULL, 2,
+            'Ход 1: g7-h6 ---> Ход 2: i5:g7:e9 ---> Ход 3: e7-f6 ---> Ход 4: j8:h10:f8 ---> Ход 5: f6:d4:b6:d8:f10 ---> Ход 6: f8-e9 ---> Ход 7: f10:d8');
+-- 6
+    INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
+    VALUES ('7b19b2b1b1w1b1b8b1wb1w1w10w1b1w2w1w14w10', 'W', 31, 'H', NULL, 2,
+            'Ход 1: h4-g3 ---> Ход 2: f4:h2 ---> Ход 3: c7-d6 ---> Ход 4: e5:c7 ---> Ход 5: g7-f6 ---> Ход 6: e7:g5 ---> Ход 7: h6:f4:d2:b4:d6:b8 ---> Ход 8: h2-g3 ---> Ход 9: a5-b4 ---> Ход 10: g3-f4 ---> Ход 11: b4-a3 ---> Ход 12: f4-g5 ---> Ход 13: a3-b2 ---> Ход 14: g5-f6 ---> Ход 15: h8-g7 ---> Ход 16: f6:h8 ---> Ход 17: i7:g9 ---> Ход 18: j6-i7 ---> Ход 19: b2-c1 ---> Ход 20: i7-j8 ---> Ход 21: c1-e3 ---> Ход 22: j4-i5 ---> Ход 23: e3-g1 ---> Ход 24: i5-h6 ---> Ход 25: g9-h8 ---> Ход 26: h6-g7 ---> Ход 27: h8:f6 ---> Ход 28: j8-i9 ---> Ход 29: h10:j8 ---> Ход 30: j2-i3 ---> Ход 31: g1:j4');
 
     COMMIT;
 END;

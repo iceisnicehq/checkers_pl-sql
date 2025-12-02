@@ -16,6 +16,8 @@ CREATE TABLE games (
     end_time                 DATE,
     time_limit_move_sec      INT,
     time_limit_game_sec      INT,
+    time_white_remaining_sec INT,
+    time_black_remaining_sec INT,
     ai_difficulty            CHAR(1),
     
     draw_offer_status        CHAR(1), 

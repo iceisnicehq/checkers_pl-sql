@@ -34,9 +34,9 @@ PROCEDURE p_update_ratings(
 
 BEGIN
     -- Получаем данные игры
-    SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
-EXCEPTION
-    WHEN NO_DATA_FOUND THEN RETURN;
+        SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN RETURN;
 
     -- Определяем сезон, в котором игра началась (используем start_time, а не SYSDATE)
     -- Это гарантирует, что рейтинг обновляется в сезоне начала игры, даже если игра закончилась в следующем сезоне
@@ -83,17 +83,17 @@ EXCEPTION
                 
                 -- Рейтинг обновляется только для общих пазлов (created_by_player_id IS NULL)
                 IF v_puzzle_created_by IS NULL THEN
-                    -- Проверяем, решал ли он эту задачу РАНЬШЕ (успешно)
-                    SELECT COUNT(*) INTO v_prev_solves
-                    FROM games
-                    WHERE puzzle_id = v_game.puzzle_id
-                      AND (player_white_id = v_solver_id OR player_black_id = v_solver_id)
-                      AND status = 'V'
-                      AND game_id != p_game_id; -- Исключаем текущую сессию
+                -- Проверяем, решал ли он эту задачу РАНЬШЕ (успешно)
+                SELECT COUNT(*) INTO v_prev_solves
+                FROM games
+                WHERE puzzle_id = v_game.puzzle_id
+                  AND (player_white_id = v_solver_id OR player_black_id = v_solver_id)
+                  AND status = 'V'
+                  AND game_id != p_game_id; -- Исключаем текущую сессию
 
-                    -- Если решил впервые -> +5 очков
-                    IF v_prev_solves = 0 THEN
-                        update_one_player(v_solver_id, 5);
+                -- Если решил впервые -> +5 очков
+                IF v_prev_solves = 0 THEN
+                    update_one_player(v_solver_id, 5);
                     END IF;
                 END IF;
             END;
@@ -103,13 +103,13 @@ EXCEPTION
             -- Рейтинг обновляется только для PvP игр (не для PvE против AI)
             IF v_game.ai_difficulty IS NULL THEN
                 -- Это PvP игра - обновляем рейтинг
-                IF v_game.winner_player_color = 'W' THEN
-                    update_one_player(v_game.player_white_id, 16); -- Победитель
-                    update_one_player(v_game.player_black_id, -16); -- Проигравший
-                ELSIF v_game.winner_player_color = 'B' THEN
-                    update_one_player(v_game.player_black_id, 16); -- Победитель
-                    update_one_player(v_game.player_white_id, -16); -- Проигравший
-                END IF;
+            IF v_game.winner_player_color = 'W' THEN
+                update_one_player(v_game.player_white_id, 16); -- Победитель
+                update_one_player(v_game.player_black_id, -16); -- Проигравший
+            ELSIF v_game.winner_player_color = 'B' THEN
+                update_one_player(v_game.player_black_id, 16); -- Победитель
+                update_one_player(v_game.player_white_id, -16); -- Проигравший
+            END IF;
             END IF;
             -- Если ai_difficulty IS NOT NULL - это PvE против AI, рейтинг НЕ обновляется
         END IF;

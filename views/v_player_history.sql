@@ -11,7 +11,11 @@ SELECT
         WHEN g.status = 'D' THEN 'DRAW'
         ELSE 'LOSS'
     END AS result,
-    p_opponent.username AS opponent_name,
+    CASE
+        WHEN g.puzzle_id IS NOT NULL THEN 'Puzzle (ID: ' || g.puzzle_id || ')'
+        WHEN g.ai_difficulty IS NOT NULL THEN 'AI (difficulty: ' || g.ai_difficulty || ')'
+        ELSE p_opponent.username
+    END AS opponent_name,
     g.rule_id,
     gr.rule_name,
     (SELECT COUNT(*) FROM game_moves gm WHERE gm.game_id = g.game_id) AS total_moves,
