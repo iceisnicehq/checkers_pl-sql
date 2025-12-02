@@ -11,12 +11,12 @@ PROCEDURE show_my_puzzles(p_difficulty IN CHAR DEFAULT NULL) IS
             puz.moves_to_solve,
             puz.board_position,
             puz.turn_to_move,
-            puz.end_condition
+            puz.end_board_state
         FROM puzzles puz
         WHERE 
             puz.created_by_player_id = v_player_id
             AND (p_difficulty IS NULL OR puz.difficulty_level = p_difficulty)
-        ORDER BY puz.puzzle_id DESC; -- Новые сверху
+        ORDER BY puz.puzzle_id DESC;
 BEGIN
     v_player_id := get_or_create_player_id(USER);
     
@@ -30,14 +30,11 @@ BEGIN
     FOR r IN c_my_puzzles LOOP
         v_found := TRUE;
         
-        v_goal_str := CASE r.end_condition 
-                        WHEN 'D' THEN 'Ничья' 
-                        ELSE 'Победа' 
-                      END;
+        v_goal_str := CASE WHEN r.end_board_state IS NULL THEN 'Победа' ELSE 'Ничья' END;
 
         DBMS_OUTPUT.PUT_LINE('ID: ' || r.puzzle_id || ' | Сложность: ' || r.difficulty_level || ' | Цель: ' || v_goal_str || ' за ' || NVL(TO_CHAR(r.moves_to_solve), '?') || ' ход(ов)');
         DBMS_OUTPUT.PUT_LINE('Первый ход: ' || CASE r.turn_to_move WHEN 'W' THEN 'Белые' ELSE 'Черные' END);
-        
+
         v_visual_board := f_get_board_as_clob(r.board_position);
         DBMS_OUTPUT.PUT_LINE(v_visual_board);
         DBMS_OUTPUT.PUT_LINE('__________________________________________________');

@@ -2,7 +2,7 @@ PROCEDURE join_match(p_match_id IN NUMBER) IS
     v_player_id players.player_id%TYPE;
     v_match     matches%ROWTYPE;
     v_game      games%ROWTYPE;
-    v_error_msg VARCHAR2(255);
+    v_error_msg VARCHAR2(2000);
 BEGIN
     v_player_id := get_or_create_player_id(USER);
     
@@ -12,7 +12,7 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
-    
+
     BEGIN
         SELECT * INTO v_match 
         FROM matches 
@@ -21,7 +21,7 @@ BEGIN
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
             v_error_msg := 'Матч с ID ' || p_match_id || ' не найден.';
-            p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
+            p_audit_log(v_player_id, p_match_id, p_event_msg => v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             RETURN;
     END;
@@ -47,9 +47,9 @@ BEGIN
         ROLLBACK;
         RETURN;
     END IF;
-    
+
     join_game(v_game.game_id);
-    
+
     DECLARE
         v_game_status CHAR(1);
     BEGIN
@@ -66,6 +66,7 @@ BEGIN
             p_audit_log(v_player_id, v_game.game_id, 'MATCH_JOINED');
             COMMIT;
         ELSE
+
             ROLLBACK;
         END IF;
     END;

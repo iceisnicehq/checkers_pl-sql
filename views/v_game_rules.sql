@@ -7,4 +7,3 @@ SELECT
     rule_description
 FROM game_rules
 ORDER BY rule_id;
-

@@ -2191,7 +2191,7 @@ EXCEPTION
     WHEN OTHERS THEN
         ROLLBACK;
         p_audit_log(v_current_player_id, NULL, 'КРИТИЧЕСКАЯ ОШИБКА в create_game: ' || SQLERRM);
-        DBMS_OUTPUT.PUT_LINE('Критическая ошибка при создании игры: ' || SQLERRM);
+        DBMS_OUTPUT.PUT_LINE('Неизвестная ошибка при создании игры: ' || SQLERRM);
 END create_game;
 
 PROCEDURE join_game(p_game_id IN NUMBER) IS

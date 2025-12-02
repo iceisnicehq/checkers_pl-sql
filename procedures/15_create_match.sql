@@ -9,8 +9,8 @@ PROCEDURE create_match(
     p_enable_pos_rep_draw IN CHAR     DEFAULT 'N'
 ) IS
     v_current_player_id  players.player_id%TYPE;
-    v_error_msg          VARCHAR2(255);
-    v_status_message     VARCHAR2(255);
+    v_error_msg          VARCHAR2(2000);
+    v_status_message     VARCHAR2(2000);
     
     v_game_id            games.game_id%TYPE;
     v_match_id           matches.match_id%TYPE;
@@ -25,13 +25,13 @@ BEGIN
         RETURN;
     END IF;
 
-    IF p_games_to_win IS NULL OR p_games_to_win <= 0 THEN
-        v_error_msg := 'Неверное количество игр для победы (p_games_to_win).';
+    IF p_games_to_win IS NULL OR p_games_to_win <= 0 OR MOD(p_games_to_win, 2) = 0 THEN
+        v_error_msg := 'Неверное количество игр для победы (p_games_to_win). Должно быть нечетным числом (best of N, где N нечетное).';
         p_audit_log(v_current_player_id, NULL, p_event_msg => v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
-    
+
     create_game(
         p_opponent_username   => p_opponent_username,
         p_ai_difficulty       => NULL,
@@ -46,7 +46,7 @@ BEGIN
     );
     
     v_game_id := get_active_game(v_current_player_id);
-    
+
     IF v_game_id IS NULL THEN
         RETURN;
     END IF;

@@ -2,10 +2,12 @@ PROCEDURE resign_game(p_resign_match IN CHAR DEFAULT 'N') IS
     v_game        games%ROWTYPE;
     v_player_id   players.player_id%TYPE;
     v_game_id     NUMBER;
-    v_error_msg   VARCHAR2(255);
+    v_error_msg   VARCHAR2(2000);
 BEGIN
     v_player_id := get_or_create_player_id(user);
-    
+    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
+        v_game_id   := get_active_game(v_player_id);
+
     DECLARE
         v_spectating_game_id NUMBER;
     BEGIN
@@ -28,9 +30,6 @@ BEGIN
             RETURN;
         END IF;
     END;
-    
-    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
-    v_game_id   := get_active_game(v_player_id);
 
     IF v_game_id IS NULL THEN
         v_error_msg := 'У вас нет активной партии, чтобы сдаться.';
@@ -50,20 +49,15 @@ BEGIN
     END IF;
 
     IF v_game.puzzle_id IS NOT NULL THEN
-        p_drop_move_timeout_job(v_game_id);
-        
-        UPDATE games
-        SET status = 'V',
-            end_time = SYSDATE,
-            puzzle_status = 'f'
-        WHERE game_id = v_game_id;
-        
-        UPDATE spectators SET left_at = SYSDATE 
-        WHERE game_id = v_game_id AND left_at IS NULL;
-        
-        p_audit_log(v_player_id, v_game_id, p_event_msg => 'QUIT_PUZZLE');
+        p_finish_game(
+            p_game_id       => v_game_id,
+            p_status        => 'V',
+            p_puzzle_status => 'f',
+            p_audit_event   => 'QUIT_PUZZLE',
+            p_player_id     => v_player_id
+        );
         DBMS_OUTPUT.PUT_LINE('[OK] Вы вышли из попытки решения задачи (ID сессии: ' || v_game_id || ').');
-        
+
     ELSE
         DECLARE
             v_winner_id       players.player_id%TYPE;
@@ -77,17 +71,6 @@ BEGIN
                 v_winner_id := v_game.player_white_id;
                 v_winner_color := 'W';
             END IF;
-
-            p_drop_move_timeout_job(v_game_id);
-            
-            UPDATE games
-            SET status              = 'R',
-                winner_player_color = v_winner_color,
-                end_time            = SYSDATE
-            WHERE game_id = v_game_id;
-
-            UPDATE spectators SET left_at = SYSDATE 
-            WHERE game_id = v_game_id AND left_at IS NULL;
 
             IF UPPER(p_resign_match) = 'Y' AND v_game.match_id IS NOT NULL THEN
                 UPDATE matches
@@ -105,8 +88,13 @@ BEGIN
                 v_winner_username := 'AI (Server)';
             END IF;
             
-            p_audit_log(v_player_id, v_game_id, p_event_msg => 'RESIGN_GAME');
-            p_update_ratings(v_game_id); 
+            p_finish_game(
+                p_game_id      => v_game_id,
+                p_status       => 'R',
+                p_winner_color => v_winner_color,
+                p_audit_event  => 'RESIGN_GAME',
+                p_player_id    => v_player_id
+            ); 
             DBMS_OUTPUT.PUT_LINE('[OK] Вы сдались в партии ' || v_game_id || '. Победитель: ' || v_winner_username || '.');
         END;
     END IF;

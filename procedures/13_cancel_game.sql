@@ -2,12 +2,12 @@ PROCEDURE cancel_game IS
     v_game_id   NUMBER;
     v_player_id players.player_id%TYPE;
     v_game      games%ROWTYPE;
-    v_error_msg VARCHAR2(255);
+    v_error_msg VARCHAR2(2000);
 BEGIN
     v_player_id := get_or_create_player_id(user);
-    
+
     DECLARE
-        v_spectating_game_id NUMBER;
+        v_spectating_game_id NUMBER := NULL;
     BEGIN
         BEGIN
             SELECT game_id INTO v_spectating_game_id
@@ -17,7 +17,7 @@ BEGIN
               AND ROWNUM = 1;
         EXCEPTION
             WHEN NO_DATA_FOUND THEN
-                v_spectating_game_id := NULL;
+                NULL;
         END;
         
         IF v_spectating_game_id IS NOT NULL THEN
@@ -48,7 +48,7 @@ BEGIN
         ROLLBACK;
         RETURN;
     END IF;
-    
+
     IF v_game.match_id IS NOT NULL THEN
         DELETE FROM matches WHERE match_id = v_game.match_id;
         p_audit_log(v_player_id, v_game_id, 'MATCH_CANCEL');
@@ -62,7 +62,7 @@ BEGIN
 EXCEPTION
     WHEN OTHERS THEN
         v_error_msg := 'Неожиданная ошибка при отмене игры: ' || SQLERRM;
-        p_audit_log(v_player_id, v_game_id, SUBSTR(v_error_msg, 1, 255));
+        p_audit_log(v_player_id, v_game_id, SUBSTR(v_error_msg, 1, 2000));
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         ROLLBACK;
 END cancel_game;
