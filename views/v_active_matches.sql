@@ -1,7 +1,5 @@
--- View для активных матчей
 CREATE OR REPLACE VIEW v_active_matches AS
 WITH match_players AS (
-    -- Получаем игроков из первой игры матча
     SELECT 
         m.match_id,
         g_first.player_white_id AS player1_id,
@@ -18,7 +16,6 @@ WITH match_players AS (
     WHERE m.status = 'A'
 ),
 match_scores AS (
-    -- Подсчитываем победы для каждого матча
     SELECT 
         m.match_id,
         SUM(CASE WHEN g.winner_player_color = 'W' AND g.status = 'V' THEN 1 ELSE 0 END) AS player1_wins,
@@ -32,7 +29,6 @@ match_scores AS (
     GROUP BY m.match_id
 ),
 current_games AS (
-    -- Получаем текущую активную игру для каждого матча
     SELECT 
         match_id,
         MAX(game_id) AS current_game_id

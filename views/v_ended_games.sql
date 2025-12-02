@@ -1,4 +1,3 @@
--- View для завершенных игр
 CREATE OR REPLACE VIEW v_ended_games AS
 SELECT
     g.game_id,

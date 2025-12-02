@@ -7,7 +7,6 @@ CREATE TABLE seasons (
 );
 COMMENT ON TABLE seasons IS 'Рейтинговые сезоны.';
 
--- Создание начального сезона для текущего месяца
 DECLARE
     v_current_month DATE := TRUNC(SYSDATE, 'MM');
     v_next_month DATE := ADD_MONTHS(v_current_month, 1);
@@ -20,14 +19,12 @@ DECLARE
     v_year_num PLS_INTEGER;
     v_count PLS_INTEGER;
 BEGIN
-    -- Проверяем, существует ли уже сезон на текущий месяц
     SELECT COUNT(*) INTO v_count
     FROM seasons
     WHERE start_date <= v_current_month
       AND end_date >= v_current_month;
     
     IF v_count = 0 THEN
-        -- Создаем начальный сезон
         v_month_num := EXTRACT(MONTH FROM v_current_month);
         v_year_num := EXTRACT(YEAR FROM v_current_month);
         v_season_name := v_month_names(v_month_num) || '-' || v_year_num;
@@ -39,7 +36,5 @@ BEGIN
     END IF;
 EXCEPTION
     WHEN OTHERS THEN
-        -- Игнорируем ошибки при создании начального сезона
-        NULL;
+        DBMS_OUTPUT.PUT_LINE('Сезон не создан: ' || SQLERRM);
 END;
-/

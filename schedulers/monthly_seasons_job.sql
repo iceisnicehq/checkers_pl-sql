@@ -21,19 +21,16 @@ BEGIN
             v_year_num PLS_INTEGER;
             v_count PLS_INTEGER;
         BEGIN
-            -- Проверяем, существует ли уже сезон на текущий месяц
             SELECT COUNT(*) INTO v_count
             FROM seasons
             WHERE start_date <= v_current_month
               AND end_date >= v_current_month;
             
             IF v_count = 0 THEN
-                -- Создаем новый сезон
                 v_month_num := EXTRACT(MONTH FROM v_current_month);
                 v_year_num := EXTRACT(YEAR FROM v_current_month);
                 v_season_name := v_month_names(v_month_num) || '-' || v_year_num;
                 
-                -- Создаем новый сезон - триггер trg_init_season_ratings автоматически создаст рейтинги
                 INSERT INTO seasons (season_name, start_date, end_date)
                 VALUES (v_season_name, v_current_month, v_next_month - 1);
                 
@@ -41,17 +38,15 @@ BEGIN
             END IF;
         EXCEPTION
             WHEN OTHERS THEN
-                -- Логируем ошибку но не падаем
                 NULL;
         END;
     ]',
-    start_date      => TRUNC(SYSTIMESTAMP, 'MM') + INTERVAL '1' MONTH + INTERVAL '1' DAY + INTERVAL '1' HOUR, -- 1-го числа следующего месяца в 01:00
-    repeat_interval => 'FREQ=MONTHLY; BYMONTHDAY=1; BYHOUR=1; BYMINUTE=0', -- Каждый месяц 1-го числа в 01:00
+    start_date      => TRUNC(SYSTIMESTAMP, 'MM') + INTERVAL '1' MONTH + INTERVAL '1' DAY + INTERVAL '1' HOUR,
+    repeat_interval => 'FREQ=MONTHLY; BYMONTHDAY=1; BYHOUR=1; BYMINUTE=0',
     enabled         => TRUE,
     comments        => 'Creates a new season at the beginning of each month.'
   );
   
   DBMS_OUTPUT.PUT_LINE('Job MONTHLY_SEASONS_JOB успешно создан.');
 END;
-/
 

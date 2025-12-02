@@ -6,8 +6,6 @@ CREATE TABLE daily_puzzles (
     CONSTRAINT fk_daily_pzzles_puzzle FOREIGN KEY (puzzle_id) REFERENCES puzzles(puzzle_id)
 );
 
-
-
 DECLARE
     v_puzzle_id puzzles.puzzle_id%TYPE;
     v_today     DATE := TRUNC(SYSDATE);
@@ -38,7 +36,7 @@ BEGIN
                     ) WHERE ROWNUM = 1;
                 EXCEPTION
                     WHEN NO_DATA_FOUND THEN
-                        DBMS_OUTPUT.PUT_LINE('ВНИМАНИЕ: В таблице PUZZLES нет серверных задач!');
+                        DBMS_OUTPUT.PUT_LINE('В таблице PUZZLES нет серверных (общих) задач!');
                         RETURN;
                 END;
         END;

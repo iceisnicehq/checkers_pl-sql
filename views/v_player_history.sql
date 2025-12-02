@@ -1,4 +1,3 @@
--- View для истории игрока: все партии всех игроков с фильтрами
 CREATE OR REPLACE VIEW v_player_history AS
 SELECT
     g.game_id,

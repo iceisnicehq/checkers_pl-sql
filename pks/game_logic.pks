@@ -1,8 +1,5 @@
 CREATE OR REPLACE PACKAGE game_logic AS
 
-    -- =========================================================================
-    -- ТИПЫ
-    -- =========================================================================
     TYPE rec_move_notation IS RECORD (
         move_notation VARCHAR2(100)
     );
@@ -53,9 +50,6 @@ CREATE OR REPLACE PACKAGE game_logic AS
 
     PROCEDURE info(p_query IN VARCHAR2 DEFAULT NULL);
 
-    -- =========================================================================
-    -- 1. УПРАВЛЕНИЕ ИГРОЙ (PvP, PvE, Puzzles)
-    -- =========================================================================
     PROCEDURE create_game(
         p_opponent_username   IN VARCHAR2 DEFAULT NULL,
         p_ai_difficulty       IN CHAR     DEFAULT NULL,
@@ -77,14 +71,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
 
     PROCEDURE cancel_game;
 
-    -- =========================================================================
-    -- 2. УПРАВЛЕНИЕ НИЧЬЕЙ
-    -- =========================================================================
     PROCEDURE draw(p_action IN CHAR); 
 
-    -- =========================================================================
-    -- 3. УПРАВЛЕНИЕ МАТЧАМИ
-    -- =========================================================================
     PROCEDURE create_match(
         p_opponent_username   IN VARCHAR2,
         p_games_to_win        IN NUMBER,
@@ -98,9 +86,6 @@ CREATE OR REPLACE PACKAGE game_logic AS
 
     PROCEDURE join_match(p_match_id IN NUMBER); 
 
-    -- =========================================================================
-    -- 4. РЕЖИМ ЗАДАЧ (Puzzles)
-    -- =========================================================================
     PROCEDURE create_puzzle(
         p_board_position   IN CLOB,
         p_turn_to_move     IN CHAR,
@@ -121,26 +106,18 @@ CREATE OR REPLACE PACKAGE game_logic AS
     
     PROCEDURE show_daily_puzzle; 
     
-    -- =========================================================================
-    -- 5. ПРОСМОТР И СТАТУС (Режим Зрителя и Реплеи)
-    -- =========================================================================
     PROCEDURE print_active_board(
         p_game_id       IN NUMBER   DEFAULT NULL,
         p_username      IN VARCHAR2 DEFAULT NULL,
-        p_wait_for_turn IN CHAR     DEFAULT 'N' -- <-- ИЗМЕНЕНИЕ: Добавлен флаг
-    ); 
+        p_wait_for_turn IN CHAR     DEFAULT 'N'    ); 
 
-    PROCEDURE watch_game_replay( -- <-- ИЗМЕНЕНИЕ: Переименовано
-        p_game_id       IN NUMBER,
+    PROCEDURE watch_game_replay(        p_game_id       IN NUMBER,
         p_moves_to_show IN NUMBER DEFAULT 1,
         p_restart       IN CHAR   DEFAULT 'N'
     ); 
 
     PROCEDURE stop_spectating; 
 
-    -- =========================================================================
-    -- 6. БЫВШИЕ "ПРИВАТНЫЕ" (ТЕПЕРЬ ПУБЛИЧНЫЕ) ФУНКЦИИ
-    -- =========================================================================
     PROCEDURE p_init_board_map(
         p_board_size IN NUMBER
     );
@@ -162,11 +139,9 @@ CREATE OR REPLACE PACKAGE game_logic AS
     PROCEDURE p_process_move(
         p_game_id        IN NUMBER,
         p_move_notation  IN VARCHAR2,
-        p_player_id      IN NUMBER, -- NULL для ИИ
-        p_status_message OUT VARCHAR2
+        p_player_id      IN NUMBER,        p_status_message OUT VARCHAR2
     );
 
-    -- =========================================================================
 
     FUNCTION encode_board(
         p_decoded_board IN VARCHAR2

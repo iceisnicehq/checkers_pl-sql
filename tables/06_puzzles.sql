@@ -6,16 +6,14 @@ CREATE TABLE puzzles (
     moves_to_solve       INT DEFAULT NULL,
     difficulty_level     CHAR(1) DEFAULT 'E' NOT NULL,
     created_by_player_id INT,
-    end_board_state      VARCHAR2(100) DEFAULT NULL, -- NULL = победа, NOT NULL = ничья (достичь эту позицию)
+    end_board_state      VARCHAR2(100) DEFAULT NULL,
     solution             VARCHAR2(1000), 
     CONSTRAINT pk_puzzles PRIMARY KEY (puzzle_id),
     CONSTRAINT fk_puzzles_rule FOREIGN KEY (rule_id) REFERENCES game_rules(rule_id),
     CONSTRAINT fk_puzzles_player FOREIGN KEY (created_by_player_id) REFERENCES players(player_id),
     CONSTRAINT chk_puzzles_turn CHECK (turn_to_move IN ('W', 'B'))
 );
-COMMENT ON TABLE puzzles IS 'Хранилище для режима "задачник" (Puzzles).';
 
--- Run this block once to set up the puzzles AFTER GAMES AND DAILY_PUZZLES tables are created
 BEGIN
 -- 1
     INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
@@ -25,7 +23,6 @@ BEGIN
     INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
     VALUES ('10b1b6b1b8b4w3w13w1b2w5', 'W', 11, 'E', NULL, 1,
             'Ход 1: f2-g3 ---> Ход 2: h2:f4 ---> Ход 3: d4-e5 ---> Ход 4: f6:d4 ---> Ход 5: h4:f6:d8:b6:f2 ---> Ход 6: d6-e5 ---> Ход 7: f2-e3 ---> Ход 8: f4:d2 ---> Ход 9: c1:e3 ---> Ход 10: e5-d4 ---> Ход 11: e3:c5');
-
 -- 3
     INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
     VALUES ('1b12b5b3b3b4b1w1b1w6w4w3b2w1w1w1', 'W', 21, 'M', NULL, 1,
@@ -34,7 +31,6 @@ BEGIN
     INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
     VALUES ('17b1b13w1b3b4b8w1ww3w3', 'W', 9, 'M', NULL, 1,
             'Ход 1: h2-g3 ---> Ход 2: e3-g1 ---> Ход 3: b4-a5 ---> Ход 4: h4:f2 ---> Ход 5: a5:c7:e5:c3 ---> Ход 6: g1-h2 ---> Ход 7: e1:g3 ---> Ход 8: h2:e5:b2 ---> Ход 9: a1:c3');
-
 -- 5
     INSERT INTO puzzles (board_position, turn_to_move, moves_to_solve, difficulty_level, created_by_player_id, rule_id, solution)
     VALUES ('16b1b6b3w2w1b1b15w1w3w41', 'B', 7, 'H', NULL, 2,
@@ -48,6 +44,5 @@ BEGIN
     VALUES ('10b10b1bw1b10w1w4w10w8', 'B', 11, 'M', NULL, 1,
             'Ход 1: c7-d6 ---> Ход 2: h2-g3 ---> Ход 3: f6-e5 ---> Ход 4: h4-g5 ---> Ход 5: e5-d4 ---> Ход 6: g3-h4 ---> Ход 7: d4:f2 ---> Ход 8: f4-e5 ---> Ход 9: d6:f4 ---> Ход 10: g5:e3:g1 ---> Ход 11: c5-d4',
             '23bw10b3w22w1');
-
     COMMIT;
 END;

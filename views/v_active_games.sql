@@ -1,4 +1,3 @@
--- View для активных игр со всеми полями статуса партии
 CREATE OR REPLACE VIEW v_active_games AS
 SELECT
     g.game_id,
@@ -13,7 +12,6 @@ SELECT
     g.time_limit_game_sec,
     TO_CHAR(g.start_time, 'YYYY-MM-DD HH24:MI:SS') AS start_time,
     TO_CHAR(g.end_time, 'YYYY-MM-DD HH24:MI:SS') AS end_time,
-    -- Текущая позиция доски (из последнего хода или начальная)
     COALESCE(
         (SELECT board_position FROM game_moves 
          WHERE game_id = g.game_id 
@@ -21,9 +19,7 @@ SELECT
          FETCH FIRST 1 ROW ONLY),
         (SELECT game_logic.get_initial_position(g.rule_id) FROM DUAL)
     ) AS current_board_position,
-    -- Количество ходов
     (SELECT COUNT(*) FROM game_moves gm WHERE gm.game_id = g.game_id) AS move_count,
-    -- Последний результат валидации (из audit_log)
     (SELECT event_msg FROM audit_log 
      WHERE game_id = g.game_id 
      AND (event_msg LIKE '%ход%' OR event_msg LIKE '%ХОД%' OR event_msg LIKE '%неверный ход%' OR event_msg LIKE '%нелегальный ход%')

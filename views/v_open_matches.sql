@@ -1,7 +1,5 @@
--- View для открытых матчей (ожидающих подключения)
 CREATE OR REPLACE VIEW v_open_matches AS
 WITH match_players AS (
-    -- Получаем игроков из первой игры матча
     SELECT 
         m.match_id,
         g_first.player_white_id AS player1_id,

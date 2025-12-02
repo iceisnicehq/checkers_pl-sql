@@ -1,4 +1,3 @@
--- View для протокола партии: все ходы со всеми полями статуса
 CREATE OR REPLACE VIEW v_game_protocol AS
 SELECT
     g.game_id,
@@ -26,7 +25,6 @@ SELECT
         WHEN MOD(gm.move_number, 2) = 1 THEN 'W'
         ELSE 'B'
     END AS move_player_color,
-    -- Текущая позиция доски (из последнего хода или начальная)
     COALESCE(
         (SELECT board_position FROM game_moves gm2
          WHERE gm2.game_id = g.game_id 
@@ -34,9 +32,7 @@ SELECT
          FETCH FIRST 1 ROW ONLY),
         (SELECT game_logic.get_initial_position(g.rule_id) FROM DUAL)
     ) AS current_board_position,
-    -- Количество ходов
     (SELECT COUNT(*) FROM game_moves gm3 WHERE gm3.game_id = g.game_id) AS move_count,
-    -- Последний результат валидации (из audit_log)
     (SELECT event_msg FROM audit_log 
      WHERE game_id = g.game_id 
      AND (event_msg LIKE '%Неверный ход%' OR event_msg LIKE '%неверный ход%' OR 

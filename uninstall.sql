@@ -9,41 +9,13 @@ BEGIN
             'V_PLAYER_HISTORY', 'V_PLAYER_RATINGS', 'V_GAME_RULES'
         )
     ) LOOP
-        BEGIN
-            EXECUTE IMMEDIATE i.stmt;
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -942 THEN
-                    RAISE;
-                END IF;
-        END;
+        EXECUTE IMMEDIATE i.stmt;
     END LOOP;
-EXCEPTION
-    WHEN OTHERS THEN
-        IF SQLCODE != -942 THEN
-            RAISE;
-        END IF;
 END;
 
 BEGIN
-
-    BEGIN
-        EXECUTE IMMEDIATE 'DROP PACKAGE BODY game_logic';
-    EXCEPTION
-        WHEN OTHERS THEN
-            IF SQLCODE != -4043 THEN
-                RAISE;
-            END IF;
-    END;
-
-    BEGIN
-        EXECUTE IMMEDIATE 'DROP PACKAGE game_logic';
-    EXCEPTION
-        WHEN OTHERS THEN
-            IF SQLCODE != -4043 THEN
-                RAISE;
-            END IF;
-    END;
+    EXECUTE IMMEDIATE 'DROP PACKAGE BODY game_logic';
+    EXECUTE IMMEDIATE 'DROP PACKAGE game_logic';
 END;
 
 BEGIN
@@ -54,24 +26,11 @@ BEGIN
             'TRG_INIT_PLAYER_RATINGS', 'TRG_INIT_SEASON_RATINGS'
         )
     ) LOOP
-        BEGIN
-            EXECUTE IMMEDIATE i.stmt;
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -4080 THEN
-                    RAISE;
-                END IF;
-        END;
+        EXECUTE IMMEDIATE i.stmt;
     END LOOP;
-EXCEPTION
-    WHEN OTHERS THEN
-        IF SQLCODE != -4080 THEN
-            RAISE;
-        END IF;
 END;
 
 BEGIN
-
     FOR i IN (
         SELECT job_name FROM user_scheduler_jobs
         WHERE job_name IN (
@@ -80,30 +39,15 @@ BEGIN
             'MONTHLY_SEASONS_JOB'
         )
     ) LOOP
-        BEGIN
-            DBMS_SCHEDULER.DROP_JOB(job_name => i.job_name, force => TRUE);
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -27475 THEN
-                    RAISE;
-                END IF;
-        END;
+        DBMS_SCHEDULER.DROP_JOB(job_name => i.job_name, force => TRUE);
     END LOOP;
 
     FOR i IN (
         SELECT job_name FROM user_scheduler_jobs
         WHERE job_name LIKE 'MOVE_TIMEOUT_JOB_%'
     ) LOOP
-        BEGIN
-            DBMS_SCHEDULER.DROP_JOB(job_name => i.job_name, force => TRUE);
-        EXCEPTION
-            WHEN OTHERS THEN
-                NULL;
-        END;
+        DBMS_SCHEDULER.DROP_JOB(job_name => i.job_name, force => TRUE);
     END LOOP;
-EXCEPTION
-    WHEN OTHERS THEN
-        NULL;
 END;
 
 BEGIN
@@ -115,20 +59,8 @@ BEGIN
             'GAME_MOVES', 'PUZZLES', 'DAILY_PUZZLES', 'AUDIT_LOG', 'SPECTATORS'
         )
     ) LOOP
-        BEGIN
-            EXECUTE IMMEDIATE i.stmt;
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -942 THEN
-                    RAISE;
-                END IF;
-        END;
+        EXECUTE IMMEDIATE i.stmt;
     END LOOP;
-EXCEPTION
-    WHEN OTHERS THEN
-        IF SQLCODE != -942 THEN
-            RAISE;
-        END IF;
 END;
 
 BEGIN
@@ -137,21 +69,11 @@ BEGIN
         FROM user_sequences
         WHERE sequence_name LIKE 'ISEQ$$_%'
            OR sequence_name IN (
-
+               -- Добавьте сюда пользовательские sequences, если они есть
            )
     ) LOOP
-        BEGIN
-            EXECUTE IMMEDIATE i.stmt;
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -2289 THEN
-                    NULL;
-                END IF;
-        END;
+        EXECUTE IMMEDIATE i.stmt;
     END LOOP;
-EXCEPTION
-    WHEN OTHERS THEN
-        NULL;
 END;
 
 BEGIN

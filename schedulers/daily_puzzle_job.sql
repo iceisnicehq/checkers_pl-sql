@@ -5,7 +5,6 @@ BEGIN
     WHEN OTHERS THEN NULL;
   END;
 
-  -- Создаем джоб заново
   DBMS_SCHEDULER.CREATE_JOB (
     job_name        => 'DAILY_CHECKERS_PUZZLE_JOB',
     job_type        => 'PLSQL_BLOCK',
@@ -15,12 +14,10 @@ BEGIN
             v_today     DATE := TRUNC(SYSDATE);
             v_count     PLS_INTEGER;
         BEGIN
-            -- Проверка на существование
             SELECT COUNT(*) INTO v_count FROM daily_puzzles WHERE puzzle_date = v_today;
 
             IF v_count = 0 THEN
                 BEGIN
-                    -- 1. Попытка найти уникальный за 30 дней
                     SELECT puzzle_id INTO v_puzzle_id
                     FROM (
                         SELECT p.puzzle_id
@@ -32,7 +29,6 @@ BEGIN
                     ) WHERE ROWNUM = 1;
                 EXCEPTION
                     WHEN NO_DATA_FOUND THEN
-                        -- 2. Fallback: Любой серверный пазл
                         SELECT puzzle_id INTO v_puzzle_id
                         FROM (
                             SELECT puzzle_id FROM puzzles 
@@ -41,18 +37,16 @@ BEGIN
                         ) WHERE ROWNUM = 1;
                 END;
 
-                -- Вставка
                 INSERT INTO daily_puzzles (puzzle_date, puzzle_id) VALUES (v_today, v_puzzle_id);
                 COMMIT;
             END IF;
         EXCEPTION
             WHEN OTHERS THEN
-                -- В реальном проде здесь стоит писать в лог ошибок
                 NULL;
         END;
     ]',
-    start_date      => TRUNC(SYSTIMESTAMP) + INTERVAL '1' DAY + INTERVAL '1' HOUR, -- Завтра в 01:00
-    repeat_interval => 'FREQ=DAILY; BYHOUR=1; BYMINUTE=0; BYSECOND=0',             -- Ежедневно в 01:00
+    start_date      => TRUNC(SYSTIMESTAMP) + INTERVAL '1' DAY + INTERVAL '1' HOUR,
+    repeat_interval => 'FREQ=DAILY; BYHOUR=1; BYMINUTE=0; BYSECOND=0',    
     enabled         => TRUE,
     comments        => 'Selects a random checkers puzzle for the daily challenge.'
   );

@@ -1,4 +1,3 @@
--- View для рейтингов/топа: все игроки, все сезоны
 CREATE OR REPLACE VIEW v_player_ratings AS
 WITH game_participations AS (
     SELECT 
@@ -11,7 +10,7 @@ WITH game_participations AS (
         ROUND((g.end_time - g.start_time) * 24 * 60, 2) AS duration_minutes
     FROM games g
     WHERE g.status IN ('V', 'D', 'T', 'R')
-      AND g.ai_difficulty IS NULL -- Только PvP игры
+      AND g.ai_difficulty IS NULL
     
     UNION ALL
     
@@ -25,7 +24,7 @@ WITH game_participations AS (
         ROUND((g.end_time - g.start_time) * 24 * 60, 2) AS duration_minutes
     FROM games g
     WHERE g.status IN ('V', 'D', 'T', 'R')
-      AND g.ai_difficulty IS NULL -- Только PvP игры
+      AND g.ai_difficulty IS NULL
 ),
 player_stats AS (
     SELECT

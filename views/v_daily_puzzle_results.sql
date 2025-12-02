@@ -1,4 +1,3 @@
--- View для результатов daily puzzles: только для тех, кто решал
 CREATE OR REPLACE VIEW v_daily_puzzle_results AS
 SELECT
     g.game_id,
