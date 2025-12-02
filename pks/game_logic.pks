@@ -91,7 +91,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_turn_to_move     IN CHAR,
         p_moves_to_solve   IN NUMBER DEFAULT NULL,
         p_difficulty_level IN CHAR DEFAULT 'M',
-        p_solution          IN VARCHAR2 DEFAULT NULL
+        p_solution         IN VARCHAR2 DEFAULT NULL
     );
     
     PROCEDURE show_puzzles(
@@ -109,9 +109,11 @@ CREATE OR REPLACE PACKAGE game_logic AS
     PROCEDURE print_active_board(
         p_game_id       IN NUMBER   DEFAULT NULL,
         p_username      IN VARCHAR2 DEFAULT NULL,
-        p_wait_for_turn IN CHAR     DEFAULT 'N'    ); 
+        p_wait_for_turn IN CHAR     DEFAULT 'N'
+        ); 
 
-    PROCEDURE watch_game_replay(        p_game_id       IN NUMBER,
+    PROCEDURE watch_game_replay(
+        p_game_id       IN NUMBER,
         p_moves_to_show IN NUMBER DEFAULT 1,
         p_restart       IN CHAR   DEFAULT 'N'
     ); 
@@ -139,7 +141,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
     PROCEDURE p_process_move(
         p_game_id        IN NUMBER,
         p_move_notation  IN VARCHAR2,
-        p_player_id      IN NUMBER,        p_status_message OUT VARCHAR2
+        p_player_id      IN NUMBER,        
+        p_status_message OUT VARCHAR2
     );
 
 
@@ -163,9 +166,16 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_rule_id IN NUMBER
     ) RETURN VARCHAR2;
     
+    -- Из-за проблем с версией Oracle
+    -- Перегрузка 1: без подсветки
+    FUNCTION f_get_board_as_clob(
+        p_board_position  IN VARCHAR2
+    ) RETURN CLOB;
+    
+    -- Перегрузка 2: с подсветкой
     FUNCTION f_get_board_as_clob(
         p_board_position  IN VARCHAR2,
-        p_highlight_indices IN t_map_indices DEFAULT t_map_indices()
+        p_highlight_indices IN t_map_indices
     ) RETURN CLOB;
 
     FUNCTION find_capture_paths(
