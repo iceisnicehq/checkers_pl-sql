@@ -151,7 +151,6 @@ BEGIN
     END;
 
     IF v_rule.board_size = 8 THEN
-
         RETURN '+b+b+b+b' ||
                'b+b+b+b+' ||
                '+b+b+b+b' ||
@@ -161,7 +160,6 @@ BEGIN
                '+w+w+w+w' ||
                'w+w+w+w+';
     ELSE
-
         RETURN '+b+b+b+b+b' ||
                'b+b+b+b+b+' ||
                '+b+b+b+b+b' ||
@@ -2918,7 +2916,18 @@ BEGIN
                                 EXIT;
                             END IF;
                             
-                            dbms_session.sleep(3);
+                            BEGIN
+                                EXECUTE IMMEDIATE 'BEGIN DBMS_LOCK.SLEEP(3); END;';
+                            EXCEPTION
+                                WHEN OTHERS THEN
+                                    DECLARE
+                                        v_start_time DATE := SYSDATE;
+                                    BEGIN
+                                        WHILE (SYSDATE - v_start_time) * 86400 < 3 LOOP
+                                            NULL;
+                                        END LOOP;
+                                    END;
+                            END;
                         END LOOP;
 
                         IF v_game.status IN ('O', 'C') THEN
@@ -2968,7 +2977,18 @@ BEGIN
                             END IF;
                         END;
                         
-                        dbms_session.sleep(3); 
+                        BEGIN
+                            EXECUTE IMMEDIATE 'BEGIN DBMS_LOCK.SLEEP(3); END;';
+                        EXCEPTION
+                            WHEN OTHERS THEN
+                                DECLARE
+                                    v_start_time DATE := SYSDATE;
+                                BEGIN
+                                    WHILE (SYSDATE - v_start_time) * 86400 < 3 LOOP
+                                        NULL;
+                                    END LOOP;
+                                END;
+                        END;
                         SELECT * INTO v_game FROM games WHERE game_id = v_target_game_id;
                     END LOOP;
 
@@ -4401,6 +4421,15 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_active_games;');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_active_games WHERE game_id = 123;  -- статус конкретной игры');
         DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Открытые матчи:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_open_matches;');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Активные матчи:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_active_matches;');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Правила игры:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_game_rules;');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('ПРЕДСТАВЛЕНИЯ С ФИЛЬТРАМИ:');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('  -- Протокол партии (все ходы со статусом):');
@@ -4408,12 +4437,22 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('  -- Завершенные игры:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_games;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_games WHERE rule_id = 1;  -- русские шашки');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_games WHERE match_id IS NOT NULL;  -- игры из матчей');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Завершенные матчи:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_matches;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_matches WHERE rule_id = 1;  -- русские шашки');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Детали матча (все игры в матче):');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_match_details WHERE match_id = 10 ORDER BY game_id;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('  -- История игрока (все партии всех игроков):');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history;');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE player_name = USER;  -- моя история');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE rule_id = 1;  -- русские шашки (1=русские, 2=международные)');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE start_time >= DATE ''2025-01-01'' AND end_time <= DATE ''2025-01-31'';  -- за период');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE match_id IS NOT NULL;  -- игры из матчей');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('  -- Рейтинги/топ (все игроки, все сезоны):');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_ratings;');
@@ -4855,12 +4894,31 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('  -- Завершенные игры:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_games;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_games WHERE rule_id = 1;  -- русские шашки');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_games WHERE match_id IS NOT NULL;  -- игры из матчей');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Открытые матчи:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_open_matches;');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Активные матчи:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_active_matches;');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Завершенные матчи:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_matches;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_matches WHERE rule_id = 1;  -- русские шашки');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Детали матча (все игры в матче):');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_match_details WHERE match_id = 10 ORDER BY game_id;');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Правила игры:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_game_rules;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('  -- История игрока (все партии всех игроков):');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history;');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE player_name = USER;  -- моя история');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE rule_id = 1;  -- русские шашки (1=русские, 2=международные)');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE start_time >= DATE ''2025-01-01'' AND end_time <= DATE ''2025-01-31'';  -- за период');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE match_id IS NOT NULL;  -- игры из матчей');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('  -- Рейтинги/топ (все игроки, все сезоны):');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_ratings;');

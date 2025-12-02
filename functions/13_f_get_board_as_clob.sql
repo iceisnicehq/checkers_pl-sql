@@ -1,12 +1,20 @@
 FUNCTION f_get_board_as_clob(
+    p_board_position    IN VARCHAR2
+) RETURN CLOB IS
+    v_empty_indices t_map_indices;
+BEGIN
+
+    RETURN f_get_board_as_clob(p_board_position, v_empty_indices);
+END f_get_board_as_clob;
+
+FUNCTION f_get_board_as_clob(
     p_board_position    IN VARCHAR2,
-    p_highlight_indices IN t_map_indices DEFAULT t_map_indices()
+    p_highlight_indices IN t_map_indices
 ) RETURN CLOB IS
     v_clob          CLOB;
     v_char          CHAR(1);
     v_linear_idx    PLS_INTEGER;
-    v_decoded_board VARCHAR2(128) := decode_board(p_board_position);
-    c_nl CONSTANT   VARCHAR2(1)   := CHR(10);
+    v_decoded_board VARCHAR2(100) := decode_board(p_board_position);
     
     v_board_size    PLS_INTEGER;
     v_total_squares PLS_INTEGER;
@@ -27,12 +35,14 @@ BEGIN
     p_init_board_map(v_board_size);
     
     FOR c IN 1 .. v_board_size LOOP
+
         DECLARE
             v_col_letter CHAR(1);
         BEGIN
             IF c <= 9 THEN
                 v_col_letter := CHR(ASCII('A') + c - 1);
             ELSE
+
                 v_col_letter := 'J';
             END IF;
             v_header    := v_header    || ' ' || v_col_letter || ' ';
@@ -72,13 +82,4 @@ BEGIN
     DBMS_LOB.append(v_clob, v_separator || c_nl);
     DBMS_LOB.append(v_clob, v_header || c_nl);
     RETURN v_clob;
-    
-EXCEPTION
-    WHEN OTHERS THEN
-        IF DBMS_LOB.istemporary(v_clob) = 1 THEN
-            DBMS_LOB.freetemporary(v_clob);
-        END IF;
-        DBMS_LOB.createtemporary(v_clob, TRUE);
-        DBMS_LOB.append(v_clob, 'КРИТИЧЕСКАЯ ОШИБКА в f_get_board_as_clob: ' || SQLERRM);
-        RETURN v_clob;
 END f_get_board_as_clob;

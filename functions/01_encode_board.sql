@@ -1,12 +1,8 @@
 FUNCTION encode_board(p_decoded_board IN VARCHAR2) RETURN VARCHAR2 IS
-    v_encoded_board VARCHAR2(128) := '';
+    v_encoded_board VARCHAR2(100) := '';
     v_plus_count    PLS_INTEGER := 0;
     v_char          CHAR(1);
 BEGIN
-    IF INSTR(p_decoded_board, c_empty_field) = 0 THEN
-        RETURN p_decoded_board;
-    END IF;
-
     FOR i IN 1 .. LENGTH(p_decoded_board) LOOP
         v_char := SUBSTR(p_decoded_board, i, 1);
         IF v_char = c_empty_field THEN

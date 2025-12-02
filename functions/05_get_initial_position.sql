@@ -1,7 +1,8 @@
 FUNCTION get_initial_position(p_rule_id IN NUMBER) RETURN VARCHAR2 IS
     v_rule      game_rules%ROWTYPE;
-    v_error_msg VARCHAR2(255); 
+    v_error_msg VARCHAR2(2000); 
 BEGIN
+
     BEGIN
         SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
     EXCEPTION
@@ -21,8 +22,7 @@ BEGIN
                'w+w+w+w+' ||
                '+w+w+w+w' ||
                'w+w+w+w+';
-
-    ELSIF v_rule.board_size = 10 THEN
+    ELSE
         RETURN '+b+b+b+b+b' ||
                'b+b+b+b+b+' ||
                '+b+b+b+b+b' ||
@@ -33,10 +33,5 @@ BEGIN
                'w+w+w+w+w+' ||
                '+w+w+w+w+w' ||
                'w+w+w+w+w+';
-    ELSE
-        v_error_msg := 'Правила с ID=' || p_rule_id || ' (Размер: ' || v_rule.board_size || ') не поддерживаются.';
-        p_audit_log(p_player_id => NULL, p_game_id => NULL, p_event_msg => v_error_msg);
-        DBMS_OUTPUT.PUT_LINE(v_error_msg);
-        RETURN NULL;
     END IF;
 END get_initial_position;
