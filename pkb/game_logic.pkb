@@ -1,28 +1,45 @@
 CREATE OR REPLACE PACKAGE BODY game_logic AS
 
+    -- =========================================================================
+    -- КОНСТАНТЫ
+    -- =========================================================================
     c_white_man     CONSTANT VARCHAR2(1) := 'w';
     c_black_man     CONSTANT VARCHAR2(1) := 'b';
     c_white_king    CONSTANT VARCHAR2(1) := 'W';
     c_black_king    CONSTANT VARCHAR2(1) := 'B';
     c_empty_field   CONSTANT VARCHAR2(1) := '+';
-    c_nl            CONSTANT VARCHAR2(1) := CHR(10);
+    c_nl            CONSTANT VARCHAR2(1) := CHR(10); -- Символ новой строки
 
+    -- =========================================================================
+    -- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И ТИПЫ ДЛЯ ВНУТРЕННЕГО ИСПОЛЬЗОВАНИЯ
+    -- =========================================================================
     TYPE rec_board_field IS RECORD(
         idx      PLS_INTEGER,
-        notation VARCHAR2(50),
+        notation VARCHAR2(50), -- Увеличено до 50 для поддержки длинных нотаций
         row_num  PLS_INTEGER,
         col_num  PLS_INTEGER
     );
-
+    -- Тип для карты "нотация -> поле"
     TYPE map_notation_to_field IS TABLE OF rec_board_field INDEX BY VARCHAR2(50);
-
+    
+    -- Тип для карты "индекс -> поле"
     TYPE map_idx_to_field IS TABLE OF rec_board_field INDEX BY PLS_INTEGER;
 
+    -- Наши глобальные переменные-кэши
     g_map_by_notation   map_notation_to_field;
     g_map_by_idx        map_idx_to_field;
-
+    
+    -- "Флаг" который говорит нам, карта какого размера сейчас в кэше
     g_current_map_size  PLS_INTEGER := 0;
 
+-- =========================================================================
+-- ФУНКЦИЯ: encode_board
+-- =========================================================================
+-- Сжимает строку доски используя RLE (Run-Length Encoding).
+-- Пример: "+++b++w" -> "3b2w" (3 пустых, b, 2 пустых, w)
+-- Алгоритм: Проходит по строке, считает последовательные пустые клетки (+),
+-- заменяет их на число. Непустые клетки (w, W, b, B) записываются как есть.
+-- Возвращает: Сжатую строку.
 FUNCTION encode_board(p_decoded_board IN VARCHAR2) RETURN VARCHAR2 IS
     v_encoded_board VARCHAR2(100) := '';
     v_plus_count    PLS_INTEGER := 0;
@@ -47,7 +64,14 @@ BEGIN
 
     RETURN v_encoded_board;
 END encode_board;
-
+-- =========================================================================
+-- ФУНКЦИЯ: decode_board
+-- =========================================================================
+-- Распаковывает RLE-сжатую строку доски в полную строку.
+-- Пример: "3b2w" -> "+++b++w" (3 пустых, b, 2 пустых, w)
+-- Алгоритм: Проходит по строке, встречая числа - заменяет их на соответствующее
+-- количество пустых клеток (+), остальные символы копирует как есть.
+-- Возвращает: Распакованную строку.
 FUNCTION decode_board(p_encoded_board IN VARCHAR2) RETURN VARCHAR2 IS
     v_decoded_board VARCHAR2(100) := ''; 
     v_num_str       VARCHAR2(2) := '';
@@ -75,39 +99,64 @@ BEGIN
 
     RETURN v_decoded_board;
 END decode_board;
-
+-- =========================================================================
+-- ФУНКЦИЯ: get_active_game
+-- =========================================================================
+-- Находит любую активную сессию игрока: игру или просмотр.
+-- Проверяет два источника:
+--   1. Таблица games - игрок участвует в игре (статусы 'A', 'O', 'C')
+--   2. Таблица spectators - игрок смотрит игру (left_at IS NULL)
+-- Возвращает: game_id если игрок занят, иначе NULL.
 FUNCTION get_active_game(p_user_id IN players.player_id%TYPE) RETURN NUMBER IS
     v_game_id games.game_id%TYPE;
 BEGIN
-
+    -- 1. Сначала ищем, не ИГРАЕТ ли пользователь
     BEGIN
         SELECT game_id
         INTO v_game_id
         FROM games
         WHERE (player_white_id = p_user_id OR player_black_id = p_user_id)
-          AND status IN ('A', 'O', 'C');
-
+          AND (
+              -- Активная или открытая игра - всегда блокирует
+              status IN ('A', 'O')
+              OR
+              -- Challenged блокирует только создателя
+              (status = 'C' AND (
+                  (creator_player_color = 'W' AND player_white_id = p_user_id) OR
+                  (creator_player_color = 'B' AND player_black_id = p_user_id)
+              ))
+          );
+        
+        -- Если нашли, он занят. Возвращаем ID.
         RETURN v_game_id;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-            NULL;
+            NULL; -- Не играет. Проверяем, не смотрит ли он.
     END;
 
+    -- 2. Если не играет, ищем, не СМОТРИТ ли он
     BEGIN
         SELECT game_id
         INTO v_game_id
         FROM spectators
         WHERE player_id = p_user_id
           AND left_at IS NULL;
-
+        
+        -- Если нашли, он тоже занят.
         RETURN v_game_id;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-
+            -- Не играет и не смотрит. Он свободен.
             RETURN NULL;
     END;
 END get_active_game;
-
+-- =========================================================================
+-- ФУНКЦИЯ: get_or_create_player_id
+-- =========================================================================
+-- Получает player_id для указанного username, создавая игрока если его нет.
+-- Для нового игрока автоматически создаются начальные рейтинги (500) для всех правил
+-- в текущем сезоне. Сезон берется активный или последний созданный.
+-- Возвращает: player_id (существующий или новый).
 FUNCTION get_or_create_player_id(p_username IN VARCHAR2) RETURN NUMBER IS
     v_player_id players.player_id%TYPE;
 BEGIN
@@ -118,19 +167,26 @@ BEGIN
         WHERE username = p_username;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-
+            -- Создаем игрока - триггер trg_init_player_ratings автоматически создаст рейтинги
             INSERT INTO players (username)
             VALUES (p_username)
             RETURNING player_id INTO v_player_id;
     END;
     RETURN v_player_id;
 END get_or_create_player_id;
-
+-- =========================================================================
+-- ФУНКЦИЯ: get_initial_position
+-- =========================================================================
+-- Возвращает начальную позицию доски в зависимости от правил игры.
+-- Для 8x8 (Русские шашки): 64 символа, черные сверху, белые снизу.
+-- Для 10x10 (Международные): 100 символов, черные сверху, белые снизу.
+-- Формат: Строка из символов w/W (белые), b/B (черные), + (пусто).
+-- Порядок: Строка 8/10 (верх) -> Строка 1 (низ), слева направо.
 FUNCTION get_initial_position(p_rule_id IN NUMBER) RETURN VARCHAR2 IS
     v_rule      game_rules%ROWTYPE;
     v_error_msg VARCHAR2(2000); 
 BEGIN
-
+    -- Сначала пытаемся найти правило
     BEGIN
         SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
     EXCEPTION
@@ -141,31 +197,39 @@ BEGIN
             RETURN NULL;
     END;
 
+    -- Проверяем РАЗМЕР ДОСКИ (может быть только 8 или 10)
     IF v_rule.board_size = 8 THEN
-
-        RETURN '+b+b+b+b' ||
-               'b+b+b+b+' ||
-               '+b+b+b+b' ||
-               '++++++++' ||
-               '++++++++' ||
-               'w+w+w+w+' ||
-               '+w+w+w+w' ||
-               'w+w+w+w+';
+        -- 8x8 (Русские шашки: 64 символа)
+        RETURN '+b+b+b+b' || -- Row 8
+               'b+b+b+b+' || -- Row 7
+               '+b+b+b+b' || -- Row 6
+               '++++++++' || -- Row 5
+               '++++++++' || -- Row 4
+               'w+w+w+w+' || -- Row 3
+               '+w+w+w+w' || -- Row 2
+               'w+w+w+w+';   -- Row 1
     ELSE
-
-        RETURN '+b+b+b+b+b' ||
-               'b+b+b+b+b+' ||
-               '+b+b+b+b+b' ||
-               'b+b+b+b+b+' ||
-               '++++++++++' ||
-               '++++++++++' ||
-               '+w+w+w+w+w' ||
-               'w+w+w+w+w+' ||
-               '+w+w+w+w+w' ||
-               'w+w+w+w+w+';
+        -- 10x10 (Международные шашки: 100 символов)
+        -- Каждая строка должна содержать 10 символов
+        -- Порядок: Row 10 (первые 10 символов) -> Row 1 (последние 10 символов)
+        RETURN '+b+b+b+b+b' || -- Row 10 (10 символов: начинается с пустого, заканчивается фигурой)
+               'b+b+b+b+b+' || -- Row 9 (10 символов: начинается с фигуры, заканчивается пустым)
+               '+b+b+b+b+b' || -- Row 8 (10 символов: начинается с пустого, заканчивается фигурой)
+               'b+b+b+b+b+' || -- Row 7 (10 символов: начинается с фигуры, заканчивается пустым)
+               '++++++++++' || -- Row 6 (10 символов: все пустые)
+               '++++++++++' || -- Row 5 (10 символов: все пустые)
+               '+w+w+w+w+w' || -- Row 4 (10 символов: начинается с пустого, заканчивается фигурой)
+               'w+w+w+w+w+' || -- Row 3 (10 символов: начинается с фигуры, заканчивается пустым)
+               '+w+w+w+w+w' || -- Row 2 (10 символов: начинается с пустого, заканчивается фигурой)
+               'w+w+w+w+w+';   -- Row 1 (10 символов: начинается с фигуры, заканчивается пустым)
     END IF;
 END get_initial_position;
-
+-- =========================================================================
+-- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Проверка валидности индекса и геометрии
+-- =========================================================================
+-- Проверяет, что индекс находится в пределах доски, существует в кэше,
+-- и соответствует ожидаемой геометрической разнице колонок.
+-- Используется для избежания дублирования проверок границ и геометрии.
 FUNCTION f_is_valid_index(
     p_idx           IN PLS_INTEGER,
     p_total_squares IN PLS_INTEGER,
@@ -178,6 +242,11 @@ BEGIN
        AND ABS(p_start_col - g_map_by_idx(p_idx).col_num) = p_expected_col_diff;
 END f_is_valid_index;
 
+-- =========================================================================
+-- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Формирование нотации хода
+-- =========================================================================
+-- Преобразует ход (r_move) в строковую нотацию (например, "a3-b4" или "c3:e5").
+-- Используется в нескольких местах для избежания дублирования кода.
 FUNCTION f_move_to_notation(
     p_move      IN r_move,
     p_board_size IN PLS_INTEGER
@@ -187,11 +256,14 @@ BEGIN
     IF p_move.path IS NULL OR p_move.path.COUNT = 0 THEN
         RETURN NULL;
     END IF;
-
+    
+    -- Инициализируем кэш доски
     p_init_board_map(p_board_size);
-
+    
+    -- Получаем нотацию начальной позиции
     v_notation := g_map_by_idx(p_move.path(1).start_idx).notation;
-
+    
+    -- Добавляем нотацию каждого шага хода
     FOR j IN 1 .. p_move.path.COUNT LOOP
         v_notation := v_notation || CASE p_move.is_capture WHEN 'Y' THEN ':' ELSE '-' END 
                       || g_map_by_idx(p_move.path(j).end_idx).notation;
@@ -200,6 +272,16 @@ BEGIN
     RETURN v_notation;
 END f_move_to_notation;
 
+-- =========================================================================
+-- ФУНКЦИЯ: find_capture_paths
+-- =========================================================================
+-- Рекурсивно находит все возможные пути взятий (capture paths) из начальной позиции.
+-- Алгоритм: Для каждого направления прыжка проверяет возможность взятия,
+-- рекурсивно продолжает поиск с новой позиции после взятия.
+-- Поддерживает цепочки взятий (множественные взятия за один ход).
+-- Для простых шашек: прыжок на 2 клетки по диагонали.
+-- Для дамок: прыжок на любое расстояние по диагонали с произвольным приземлением.
+-- Возвращает: Список всех возможных путей взятий (t_move_list).
 FUNCTION find_capture_paths(
     p_start_idx    IN PLS_INTEGER,
     p_board        IN VARCHAR2,
@@ -217,31 +299,34 @@ FUNCTION find_capture_paths(
     v_rule                game_rules%ROWTYPE;
     v_board_size          PLS_INTEGER;
     v_total_squares       PLS_INTEGER;
-    v_promotion_row       PLS_INTEGER;
+    v_player_promotion_row PLS_INTEGER; -- Строка превращения для текущего игрока
     v_max_king_range      PLS_INTEGER;
     v_jump_directions     SYS.ODCINUMBERLIST;
     v_start_field         rec_board_field;
     
 BEGIN
-
+    -- 1. Инициализация параметров правил и доски
     BEGIN
         SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
         v_board_size      := v_rule.board_size;
         v_total_squares   := v_board_size * v_board_size;
-        v_promotion_row   := v_board_size;
+        -- Определяем строку превращения для текущего игрока один раз
+        v_player_promotion_row := CASE p_player_color WHEN 'W' THEN v_board_size ELSE 1 END;
         v_max_king_range  := v_board_size - 1; 
-
+        
+        -- Обязательно инициализируем кэш перед использованием g_map_by_idx!
         p_init_board_map(v_board_size);
         
         v_start_field := g_map_by_idx(p_start_idx);
 
         IF v_board_size = 8 THEN
             v_jump_directions := SYS.ODCINUMBERLIST(-18, -14, 14, 18);
-        ELSE
+        ELSE -- 10x10
             v_jump_directions := SYS.ODCINUMBERLIST(-22, -18, 18, 22);
         END IF;
     END;
-
+    
+    -- 2. Определение фигур противника
     IF p_player_color = 'W' THEN
         v_opponent_man  := c_black_man;
         v_opponent_king := c_black_king;
@@ -250,6 +335,7 @@ BEGIN
         v_opponent_king := c_white_king;
     END IF;
 
+    -- 3. Перебор направлений прыжка
     FOR i IN 1 .. v_jump_directions.COUNT LOOP
         DECLARE
             v_jump        PLS_INTEGER := v_jump_directions(i);
@@ -257,17 +343,19 @@ BEGIN
             v_capture_idx PLS_INTEGER;
             v_is_visited  BOOLEAN := FALSE;
         BEGIN
-
+            -- === ЛОГИКА ДЛЯ ПРОСТОЙ ===
             IF p_is_king = 'N' THEN
                 v_land_idx    := p_start_idx + v_jump;
                 v_capture_idx := p_start_idx + (v_jump / 2);
 
+                -- Проверка границ и геометрии (через вспомогательную функцию)
+                -- ABS(...) = 2 гарантирует, что мы не прыгнули "сквозь стену" (например, с h4 на a5)
                 IF f_is_valid_index(v_land_idx, v_total_squares, v_start_field.col_num, 2) THEN
-
+                    -- Проверка содержимого клеток (куда прыгаем - пусто, кого бьем - враг)
                     IF SUBSTR(v_decoded_board, v_land_idx, 1) = c_empty_field 
                        AND SUBSTR(v_decoded_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king) 
                     THEN
-
+                        -- Проверка на повторное взятие той же фигуры
                         FOR kk IN 1 .. p_visited_path.COUNT LOOP
                             IF p_visited_path(kk).captured_idx = v_capture_idx THEN
                                 v_is_visited := TRUE;
@@ -279,8 +367,7 @@ BEGIN
                             DECLARE
                                 v_becomes_king        CHAR(1) := 'N';
                                 v_land_row            PLS_INTEGER := g_map_by_idx(v_land_idx).row_num; 
-                                v_is_promotion_square BOOLEAN := (p_player_color = 'W' AND v_land_row = v_promotion_row) 
-                                                              OR (p_player_color = 'B' AND v_land_row = 1);
+                                v_is_promotion_square BOOLEAN := (v_land_row = v_player_promotion_row);
                                 v_step                r_move_step;
                                 v_new_path            t_move_path := p_visited_path;
                                 v_sub_paths           t_move_list;
@@ -292,21 +379,23 @@ BEGIN
                                 v_new_path.EXTEND;
                                 v_new_path(v_new_path.LAST) := v_step;
 
+                                -- В Русских шашках (ID 1) превращение происходит СРАЗУ, и бой продолжается уже дамкой
                                 IF p_rule_id = 1 AND v_is_promotion_square THEN
                                     v_becomes_king := 'Y';
                                 END IF;
 
+                                -- Рекурсия
                                 v_sub_paths := find_capture_paths(v_land_idx, v_decoded_board, p_player_color, v_becomes_king, p_rule_id, v_new_path);
 
                                 IF v_sub_paths.COUNT = 0 THEN
-
+                                    -- Листовой узел (больше бить некого)
                                     v_move.path          := v_new_path;
                                     v_move.is_capture    := 'Y';
                                     v_move.capture_count := v_new_path.COUNT;
                                     v_leaf_paths.EXTEND;
                                     v_leaf_paths(v_leaf_paths.LAST) := v_move;
                                 ELSE
-
+                                    -- Добавляем все найденные продолжения
                                     FOR j IN 1 .. v_sub_paths.COUNT LOOP
                                         v_results.EXTEND;
                                         v_results(v_results.LAST) := v_sub_paths(j);
@@ -316,74 +405,108 @@ BEGIN
                         END IF;
                     END IF;
                 END IF;
-
+                
+            -- === ЛОГИКА ДЛЯ ДАМКИ ===
             ELSE 
                 FOR k IN 1 .. v_max_king_range LOOP 
                     v_capture_idx := p_start_idx + (v_jump / 2 * k);
 
+                    -- Проверка границ для "перелета" через пустые клетки до жертвы
                     IF NOT f_is_valid_index(v_capture_idx, v_total_squares, v_start_field.col_num, k) THEN
-                        EXIT;
+                        EXIT; -- Уперлись в край
                     END IF;
 
+                    -- Нашли врага?
                     IF SUBSTR(v_decoded_board, v_capture_idx, 1) IN (v_opponent_man, v_opponent_king) THEN
-
+                        -- Проверка на повторное взятие
                         FOR m IN 1 .. p_visited_path.COUNT LOOP
                             IF p_visited_path(m).captured_idx = v_capture_idx THEN
                                 v_is_visited := TRUE;
                                 EXIT;
                             END IF;
                         END LOOP;
-                        IF v_is_visited THEN EXIT; END IF;
+                        IF v_is_visited THEN EXIT; END IF; -- Нельзя бить ту же фигуру дважды
 
-                        FOR l IN (k + 1) .. v_board_size LOOP 
-                            v_land_idx := p_start_idx + (v_jump / 2 * l);
-                            
-                            IF NOT f_is_valid_index(v_land_idx, v_total_squares, v_start_field.col_num, l) THEN
-                                EXIT;
-                            END IF;
-
-                            IF SUBSTR(v_decoded_board, v_land_idx, 1) = c_empty_field THEN
+                        -- Ищем место приземления ЗА врагом
+                        -- Дамка должна приземлиться на первой пустой клетке после взятой фигуры
+                        -- Все клетки между фигурой и приземлением должны быть пустыми
+                        -- ВАЖНО: приземление должно быть в том же направлении от взятой фигуры
+                        DECLARE
+                            v_capture_field rec_board_field := g_map_by_idx(v_capture_idx);
+                        BEGIN
+                            FOR l IN (k + 1) .. v_board_size LOOP 
+                                -- Вычисляем позицию приземления от взятой фигуры, а не от старта
+                                v_land_idx := v_capture_idx + (v_jump / 2 * (l - k));
+                                
+                                -- Проверяем границы и геометрию (разница колонок должна быть равна (l - k))
+                                IF NOT f_is_valid_index(v_land_idx, v_total_squares, v_capture_field.col_num, (l - k)) THEN
+                                    EXIT; -- Уперлись в край или неправильная геометрия
+                                END IF;
+                                
+                                -- Проверяем, что все клетки между взятой фигурой и приземлением пустые
                                 DECLARE
-                                    v_step      r_move_step;
-                                    v_new_path  t_move_path := p_visited_path;
-                                    v_sub_paths t_move_list;
-                                    v_move      r_move;
+                                    v_path_is_clear BOOLEAN := TRUE;
+                                    v_check_idx     PLS_INTEGER;
                                 BEGIN
-                                    v_step.start_idx    := p_start_idx;
-                                    v_step.end_idx      := v_land_idx;
-                                    v_step.captured_idx := v_capture_idx;
-                                    v_new_path.EXTEND;
-                                    v_new_path(v_new_path.LAST) := v_step;
+                                    -- Проверяем все клетки от k+1 до l-1 (относительно старта)
+                                    FOR check_pos IN (k + 1) .. (l - 1) LOOP
+                                        v_check_idx := p_start_idx + (v_jump / 2 * check_pos);
+                                        IF f_is_valid_index(v_check_idx, v_total_squares, v_start_field.col_num, check_pos) THEN
+                                            IF SUBSTR(v_decoded_board, v_check_idx, 1) != c_empty_field THEN
+                                                v_path_is_clear := FALSE;
+                                                EXIT; -- Нашли препятствие, дальше проверять не нужно
+                                            END IF;
+                                        END IF;
+                                    END LOOP;
+                                    
+                                    -- Если путь свободен и клетка приземления пустая
+                                    IF v_path_is_clear AND SUBSTR(v_decoded_board, v_land_idx, 1) = c_empty_field THEN
+                                        DECLARE
+                                            v_step      r_move_step;
+                                            v_new_path  t_move_path := p_visited_path;
+                                            v_sub_paths t_move_list;
+                                            v_move      r_move;
+                                        BEGIN
+                                            v_step.start_idx    := p_start_idx;
+                                            v_step.end_idx      := v_land_idx;
+                                            v_step.captured_idx := v_capture_idx;
+                                            v_new_path.EXTEND;
+                                            v_new_path(v_new_path.LAST) := v_step;
+                                            
+                                            -- Рекурсия (дамка остается дамкой)
+                                            v_sub_paths := find_capture_paths(v_land_idx, v_decoded_board, p_player_color, 'Y', p_rule_id, v_new_path);
 
-                                    v_sub_paths := find_capture_paths(v_land_idx, v_decoded_board, p_player_color, 'Y', p_rule_id, v_new_path);
-
-                                    IF v_sub_paths.COUNT = 0 THEN
-                                        v_move.path          := v_new_path;
-                                        v_move.is_capture    := 'Y';
-                                        v_move.capture_count := v_new_path.COUNT;
-                                        v_leaf_paths.EXTEND;
-                                        v_leaf_paths(v_leaf_paths.LAST) := v_move;
-                                    ELSE
-                                        FOR j IN 1 .. v_sub_paths.COUNT LOOP
-                                            v_results.EXTEND;
-                                            v_results(v_results.LAST) := v_sub_paths(j);
-                                        END LOOP;
+                                            IF v_sub_paths.COUNT = 0 THEN
+                                                v_move.path          := v_new_path;
+                                                v_move.is_capture    := 'Y';
+                                                v_move.capture_count := v_new_path.COUNT;
+                                                v_leaf_paths.EXTEND;
+                                                v_leaf_paths(v_leaf_paths.LAST) := v_move;
+                                            ELSE
+                                                FOR j IN 1 .. v_sub_paths.COUNT LOOP
+                                                    v_results.EXTEND;
+                                                    v_results(v_results.LAST) := v_sub_paths(j);
+                                                END LOOP;
+                                            END IF;
+                                        END;
+                                    ELSIF NOT v_path_is_clear OR SUBSTR(v_decoded_board, v_land_idx, 1) != c_empty_field THEN
+                                        -- Если путь не свободен или клетка приземления занята, дальше искать нельзя
+                                        EXIT;
                                     END IF;
                                 END;
-                            ELSE
-                                EXIT;
-                            END IF;
-                        END LOOP;
-                        EXIT;
+                            END LOOP;
+                        END;
+                        EXIT; -- После нахождения первой фигуры на линии и проверки всех приземлений за ней - выходим из цикла по K
                     END IF;
-
+                    
+                    -- Если клетка не пустая и не враг (значит своя фигура) -> прерываем поиск в этом направлении
                     IF SUBSTR(v_decoded_board, v_capture_idx, 1) != c_empty_field THEN
                         EXIT;
                     END IF;
-                END LOOP;
-            END IF;
+                END LOOP; -- Конец цикла по дальности (k)
+            END IF; -- Конец IF p_is_king
         END;
-    END LOOP;
+    END LOOP; -- Конец цикла по направлениям
     
     IF v_results.COUNT > 0 THEN
         RETURN v_results;
@@ -392,7 +515,19 @@ BEGIN
     END IF;
 
 END find_capture_paths;
-
+-- =========================================================================
+-- ФУНКЦИЯ: find_all_player_moves
+-- =========================================================================
+-- Находит все легальные ходы для указанного игрока на текущей позиции доски.
+-- Алгоритм:
+--   1. Сначала ищет все возможные взятия (captures) через find_capture_paths
+--   2. Если есть взятия - возвращает их (обязательно бить в шашках)
+--      - Русские (rule_id=1): можно выбрать любое взятие
+--      - Международные (rule_id=2): обязательно максимальное количество фигур
+--   3. Если взятий нет - ищет тихие ходы (simple moves)
+--      - Простые шашки: ход на 1 клетку вперед по диагонали
+--      - Дамки: ход на любое количество клеток по диагонали
+-- Возвращает: Список всех легальных ходов (t_move_list).
 FUNCTION find_all_player_moves(
     p_board        IN VARCHAR2,
     p_player_color IN CHAR,
@@ -416,7 +551,7 @@ FUNCTION find_all_player_moves(
     v_simple_directions SYS.ODCINUMBERLIST;
 
 BEGIN
-
+    -- 1. Настройка параметров
     BEGIN
         SELECT * INTO v_rule FROM game_rules WHERE rule_id = p_rule_id;
         v_board_size      := v_rule.board_size;
@@ -429,7 +564,7 @@ BEGIN
             v_simple_move_w   := SYS.ODCINUMBERLIST(-9, -7);
             v_simple_move_b   := SYS.ODCINUMBERLIST(7, 9);
             v_simple_move_all := SYS.ODCINUMBERLIST(-9, -7, 7, 9);
-        ELSE
+        ELSE -- 10x10
             v_simple_move_w   := SYS.ODCINUMBERLIST(-11, -9);
             v_simple_move_b   := SYS.ODCINUMBERLIST(9, 11);
             v_simple_move_all := SYS.ODCINUMBERLIST(-11, -9, 9, 11);
@@ -445,7 +580,9 @@ BEGIN
         v_player_king := c_black_king;
         v_simple_directions := v_simple_move_b;
     END IF;
-
+    
+    -- === ОБЪЕДИНЕННЫЙ ПРОХОД: Поиск взятий и тихих ходов за один цикл ===
+    -- ОПТИМИЗАЦИЯ: Если найдены взятия, тихие ходы не собираем (обязательно бить)
     FOR i IN 1 .. v_total_squares LOOP
         DECLARE
             v_piece       CHAR(1) := SUBSTR(v_decoded_board, i, 1);
@@ -453,10 +590,11 @@ BEGIN
             v_paths       t_move_list;
             v_is_king     CHAR(1);
         BEGIN
-
+            -- Проверяем, принадлежит ли фигура игроку
             IF v_piece IN (v_player_man, v_player_king) THEN
                 v_is_king := CASE WHEN v_piece IN (c_white_king, c_black_king) THEN 'Y' ELSE 'N' END;
-
+                
+                -- === 1. ПОИСК ВЗЯТИЙ ===
                 v_paths := find_capture_paths(i, v_decoded_board, p_player_color, v_is_king, p_rule_id);
                 
                 IF v_paths.COUNT > 0 THEN
@@ -468,22 +606,25 @@ BEGIN
                         END IF;
                     END LOOP;
                 END IF;
-
+                
+                -- === 2. ПОИСК ТИХИХ ХОДОВ ===
+                -- ОПТИМИЗАЦИЯ: Собираем тихие ходы только если еще не нашли взятий
+                -- Если нашли хотя бы одно взятие, тихие ходы не нужны (обязательно бить)
                 IF v_capture_moves.COUNT = 0 THEN
                     IF v_piece = v_player_man THEN
-
+                        -- Простая шашка
                         FOR d IN 1 .. v_simple_directions.COUNT LOOP
                             DECLARE
                                 v_end_idx   PLS_INTEGER := i + v_simple_directions(d);
                                 v_end_field rec_board_field;
                             BEGIN
-
+                                -- Проверяем границы, существование в кэше и пустоту клетки
                                 IF v_end_idx BETWEEN 1 AND v_total_squares
                                    AND g_map_by_idx.EXISTS(v_end_idx)
                                    AND SUBSTR(v_decoded_board, v_end_idx, 1) = c_empty_field
                                 THEN
                                     v_end_field := g_map_by_idx(v_end_idx);
-
+                                    -- Простая шашка ходит только на соседнюю клетку (разница колонок = 1)
                                     IF ABS(v_start_field.col_num - v_end_field.col_num) = 1 THEN
                                         DECLARE
                                             v_move r_move;
@@ -504,7 +645,7 @@ BEGIN
                         END LOOP;
                         
                     ELSIF v_piece = v_player_king THEN
-
+                        -- Дамка
                         FOR d IN 1 .. v_simple_move_all.COUNT LOOP
                             FOR k IN 1 .. v_max_king_range LOOP 
                                 DECLARE
@@ -513,7 +654,8 @@ BEGIN
                                 BEGIN
                                     IF NOT g_map_by_idx.EXISTS(v_end_idx) THEN EXIT; END IF;
                                     v_end_field := g_map_by_idx(v_end_idx);
-
+                                    
+                                    -- Проверка геометрии (чтобы не перепрыгнуть через край на другую строку)
                                     IF k > 1 AND ABS(g_map_by_idx(i + (v_simple_move_all(d) * (k - 1))).col_num - v_end_field.col_num) != 1 THEN
                                         EXIT;
                                     END IF;
@@ -533,23 +675,24 @@ BEGIN
                                             v_simple_moves(v_simple_moves.LAST) := v_move;
                                         END;
                                     ELSE
-                                        EXIT;
+                                        EXIT; -- Клетка занята, дальше идти нельзя
                                     END IF;
                                 END;
                             END LOOP;
                         END LOOP;
                     END IF;
-                END IF;
+                END IF; -- Конец проверки v_capture_moves.COUNT = 0
             END IF;
         END;
     END LOOP;
 
+    -- === 3. ФИЛЬТРАЦИЯ ВЗЯТИЙ И ВОЗВРАТ РЕЗУЛЬТАТА ===
     IF v_capture_moves.COUNT > 0 THEN
-
+        -- Правило 1 (Русские): Обязательно бить, но можно выбрать ЛЮБОЕ количество
         IF p_rule_id = 1 THEN 
             RETURN v_capture_moves;
         ELSE 
-
+            -- Правило 2 (Международные): Обязательно бить МАКСИМАЛЬНОЕ количество
             FOR i IN 1 .. v_capture_moves.COUNT LOOP
                 IF v_capture_moves(i).capture_count = v_max_captures THEN
                     v_all_moves.EXTEND;
@@ -562,7 +705,16 @@ BEGIN
 
     RETURN v_simple_moves;
 END find_all_player_moves;
-
+-- =========================================================================
+-- ФУНКЦИЯ: apply_move_to_board
+-- =========================================================================
+-- Симулирует ход и возвращает новое состояние доски.
+-- Алгоритм:
+--   1. Удаляет фигуру со старой позиции
+--   2. Удаляет срубленные фигуры (если есть взятие)
+--   3. Проверяет превращение в дамку (если фигура достигла последней горизонтали)
+--   4. Ставит фигуру на новую позицию
+-- Используется в minimax для симуляции ходов без изменения реальной игры.
 FUNCTION apply_move_to_board(
     p_board IN VARCHAR2,
     p_move  IN r_move,
@@ -580,28 +732,62 @@ BEGIN
     v_board_size    := SQRT(v_total_squares);
     p_init_board_map(v_board_size);
 
+    -- Очистка старой позиции
     v_new_board := SUBSTR(v_new_board, 1, v_start_pos - 1) || c_empty_field || SUBSTR(v_new_board, v_start_pos + 1);
 
+    -- Удаление срубленных шашек
     IF p_move.is_capture = 'Y' THEN
         FOR i IN 1..p_move.path.COUNT LOOP
             v_new_board := SUBSTR(v_new_board, 1, p_move.path(i).captured_idx - 1) || c_empty_field || SUBSTR(v_new_board, p_move.path(i).captured_idx + 1);
         END LOOP;
     END IF;
 
+    -- Превращение в дамку
+    -- Русские шашки (8x8): превращение происходит СРАЗУ при достижении последней линии, даже во время многоходового взятия
+    -- Международные шашки (10x10): превращение происходит только при ОСТАНОВКЕ на последней горизонтали
     IF v_moving_piece IN (c_white_man, c_black_man) THEN
         DECLARE
-            v_end_row PLS_INTEGER := g_map_by_idx(v_end_pos).row_num;
+            v_promotion_row PLS_INTEGER := CASE p_color WHEN 'W' THEN v_board_size ELSE 1 END;
+            v_current_row   PLS_INTEGER;
+            v_rule_id       NUMBER := CASE v_board_size WHEN 8 THEN 1 ELSE 2 END; -- 8x8 = русские, 10x10 = международные
         BEGIN
-            IF (p_color = 'W' AND v_end_row = v_board_size) OR (p_color = 'B' AND v_end_row = 1) THEN
-                v_moving_piece := CASE p_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
+            IF v_rule_id = 1 THEN
+                -- Русские шашки: проверяем все промежуточные позиции в пути
+                -- Превращение происходит сразу при достижении последней линии
+                FOR i IN 1..p_move.path.COUNT LOOP
+                    v_current_row := g_map_by_idx(p_move.path(i).end_idx).row_num;
+                    IF v_current_row = v_promotion_row THEN
+                        -- Шашка достигла последней линии - превращаем в дамку
+                        v_moving_piece := CASE p_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
+                        EXIT; -- Превращение произошло, дальше проверять не нужно
+                    END IF;
+                END LOOP;
+            ELSE
+                -- Международные шашки: проверяем только финальную позицию
+                -- Превращение происходит только при остановке на последней горизонтали
+                v_current_row := g_map_by_idx(v_end_pos).row_num;
+                IF v_current_row = v_promotion_row THEN
+                    -- Шашка остановилась на последней линии - превращаем в дамку
+                    v_moving_piece := CASE p_color WHEN 'W' THEN c_white_king ELSE c_black_king END;
+                END IF;
             END IF;
         END;
     END IF;
 
+    -- Установка фигуры на новое место
     v_new_board := SUBSTR(v_new_board, 1, v_end_pos - 1) || v_moving_piece || SUBSTR(v_new_board, v_end_pos + 1);
     RETURN v_new_board;
 END apply_move_to_board;
-
+-- =========================================================================
+-- ФУНКЦИЯ: minimax
+-- =========================================================================
+-- Реализует алгоритм Minimax с Alpha-Beta отсечением для ИИ.
+-- Алгоритм:
+--   - Рекурсивно исследует дерево ходов на глубину p_depth
+--   - Maximizing player (ИИ) выбирает ход с максимальной оценкой
+--   - Minimizing player (противник) выбирает ход с минимальной оценкой
+--   - Alpha-Beta отсечение: отбрасывает ветви, которые заведомо хуже
+-- Возвращает: Лучший ход и его оценку (r_minimax_result).
 FUNCTION minimax(
     p_board         IN VARCHAR2,
     p_depth         IN PLS_INTEGER,
@@ -617,28 +803,54 @@ FUNCTION minimax(
     v_current_color  CHAR(1);
     v_local_alpha    NUMBER := p_alpha;
     v_local_beta     NUMBER := p_beta;
-
+    
+    -- Константы для оценки доски (встроенная логика evaluate_board)
     c_man_value      CONSTANT NUMBER := 10;
     c_king_value     CONSTANT NUMBER := 50;
     c_side_val       CONSTANT NUMBER := 20; 
     c_wall_val       CONSTANT NUMBER := 10;
 BEGIN
     v_current_color := CASE p_is_maximizing WHEN TRUE THEN p_ai_color ELSE CASE p_ai_color WHEN 'W' THEN 'B' ELSE 'W' END END;
-
+    
+    -- Получаем все возможные ходы и сортируем их по эвристической оценке
+    -- (встроенная логика вместо отдельной функции, так как используется только здесь)
     v_possible_moves := find_all_player_moves(p_board, v_current_color, p_rule_id);
-
+    
+    -- ОПТИМИЗАЦИЯ: Сортировка ходов для лучшего Alpha-Beta pruning
+    -- Порядок приоритета: 1) Взятия (по количеству), 2) Ходы с превращением в дамку, 3) Остальные
     IF v_possible_moves.COUNT >= 2 THEN
         DECLARE
             v_temp r_move;
+            v_board_size PLS_INTEGER := SQRT(LENGTH(p_board));
+            v_end_row PLS_INTEGER;
+            v_start_piece CHAR(1);
+            v_promotion_row PLS_INTEGER := CASE v_current_color WHEN 'W' THEN v_board_size ELSE 1 END;
         BEGIN
-
+            -- Инициализируем карту для определения строк
+            p_init_board_map(v_board_size);
+            
+            -- Присваиваем оценку каждому ходу
             FOR i IN 1..v_possible_moves.COUNT LOOP
                 v_possible_moves(i).score := 0;
+                
+                -- 1. Взятия получают максимальный приоритет (1000+ по количеству взятых фигур)
                 IF v_possible_moves(i).is_capture = 'Y' THEN
                     v_possible_moves(i).score := 1000 + v_possible_moves(i).capture_count;
+                ELSE
+                    -- 2. Тихие ходы: проверяем превращение в дамку
+                    IF v_possible_moves(i).path.COUNT > 0 THEN
+                        v_start_piece := SUBSTR(p_board, v_possible_moves(i).path(1).start_idx, 1);
+                        v_end_row := g_map_by_idx(v_possible_moves(i).path(v_possible_moves(i).path.COUNT).end_idx).row_num;
+                        
+                        -- Если простая шашка достигает последней строки - бонус за превращение
+                        IF (v_start_piece IN (c_white_man, c_black_man)) AND (v_end_row = v_promotion_row) THEN
+                            v_possible_moves(i).score := 100; -- Приоритет ниже взятий, но выше обычных ходов
+                        END IF;
+                    END IF;
                 END IF;
             END LOOP;
-
+            
+            -- Пузырьковая сортировка для ускорения minimax (лучшие ходы проверяются первыми)
             FOR i IN 1 .. v_possible_moves.COUNT - 1 LOOP
                 FOR j IN i + 1 .. v_possible_moves.COUNT LOOP
                     IF v_possible_moves(i).score < v_possible_moves(j).score THEN
@@ -652,7 +864,7 @@ BEGIN
     END IF;
 
     IF p_depth = 0 OR v_possible_moves.COUNT = 0 THEN
-
+        -- Оценка позиции (встроенная логика вместо отдельной функции)
         DECLARE
             v_score          NUMBER := 0;
             v_piece          CHAR(1);
@@ -747,12 +959,12 @@ BEGIN
                 v_local_alpha := GREATEST(v_local_alpha, v_eval_result.score);
                 
                 IF v_local_beta <= v_local_alpha THEN
-                    EXIT;
+                    EXIT; -- Pruning
                 END IF;
             END;
         END LOOP;
         RETURN v_result;
-    ELSE
+    ELSE -- Minimizing player
         v_result.score := 99999;
         FOR i IN 1..v_possible_moves.COUNT LOOP
             DECLARE
@@ -778,16 +990,25 @@ BEGIN
                 v_local_beta := LEAST(v_local_beta, v_eval_result.score);
 
                 IF v_local_beta <= v_local_alpha THEN
-                    EXIT;
+                    EXIT; -- Pruning
                 END IF;
             END;
         END LOOP;
         RETURN v_result;
     END IF;
 END minimax;
-
+-- =========================================================================
+-- ФУНКЦИЯ: get_ai_move
+-- =========================================================================
+-- Главная точка входа для получения лучшего хода ИИ.
+-- Алгоритм:
+--   1. Определяет глубину поиска по сложности: 'E'=4, 'M'=8, 'H'=12
+--   2. Вызывает minimax для поиска лучшего хода
+--   3. Для Easy: с вероятностью 25% выбирает случайный ход (для разнообразия)
+--   4. Преобразует найденный ход в нотацию (например, "a3-b4" или "c3:e5")
+-- Возвращает: Строку с нотацией хода или NULL если ходов нет.
 FUNCTION get_ai_move(
-    p_board_position IN game_moves.board_position%TYPE,
+    p_board_position IN game_moves.board_position%TYPE, -- ИСПРАВЛЕНО: game_moves вместо games
     p_ai_color       IN games.current_turn%TYPE,
     p_rule_id        IN games.rule_id%TYPE,
     p_difficulty     IN games.ai_difficulty%TYPE
@@ -795,7 +1016,7 @@ FUNCTION get_ai_move(
     v_best_move_str  VARCHAR2(100);
     v_chosen_move    r_move;
     v_decoded_board  VARCHAR2(100) := decode_board(p_board_position);
-    v_search_depth   PLS_INTEGER;
+    v_search_depth   PLS_INTEGER := 2;
     v_minimax_result r_minimax_result;
     v_alpha          NUMBER;
     v_beta           NUMBER;
@@ -804,12 +1025,31 @@ BEGIN
     v_board_size := SQRT(LENGTH(v_decoded_board));
     p_init_board_map(v_board_size);
     
-    v_search_depth := CASE p_difficulty
-                        WHEN 'E' THEN 4
-                        WHEN 'M' THEN 8
-                        WHEN 'H' THEN 12
-                        ELSE 2
-                      END;
+    -- ОПТИМИЗАЦИЯ: Если есть только одно обязательное взятие, возвращаем его сразу без minimax
+    DECLARE
+        v_all_moves t_move_list := find_all_player_moves(v_decoded_board, p_ai_color, p_rule_id);
+        v_capture_count PLS_INTEGER := 0;
+    BEGIN
+        -- Подсчитываем количество взятий
+        FOR i IN 1 .. v_all_moves.COUNT LOOP
+            IF v_all_moves(i).is_capture = 'Y' THEN
+                v_capture_count := v_capture_count + 1;
+            END IF;
+        END LOOP;
+        
+        -- Если есть только одно взятие (обязательное), возвращаем его сразу
+        IF v_capture_count = 1 AND v_all_moves.COUNT = 1 THEN
+            v_best_move_str := f_move_to_notation(v_all_moves(1), v_board_size);
+            RETURN v_best_move_str;
+        END IF;
+    END;
+    
+    -- Глубина поиска: по умолчанию 4 (для 'E' и других), для 'M' = 6, для 'H' = 10
+    IF p_difficulty = 'M' THEN
+        v_search_depth := 4;
+    ELSIF p_difficulty = 'H' THEN
+        v_search_depth := 8;
+    END IF;
     v_alpha := -99999;
     v_beta  := 99999;
 
@@ -835,16 +1075,23 @@ BEGIN
          END;
      END IF;
 
+    -- Формирование строки хода
     IF v_chosen_move.path IS NOT NULL AND v_chosen_move.path.COUNT > 0 THEN
          v_best_move_str := f_move_to_notation(v_chosen_move, v_board_size);
     ELSE
-
+         -- Если minimax вернул NULL, значит ходов нет (игра закончена)
          v_best_move_str := NULL;
     END IF;
 
     RETURN v_best_move_str;
 END get_ai_move;
-
+-- =========================================================================
+-- ФУНКЦИЯ: f_get_board_as_clob
+-- =========================================================================
+-- Возвращает CLOB с визуальным представлением доски для отображения.
+-- Форматирует доску в виде таблицы с координатами (a-h/j, 1-8/10).
+-- Поддерживает подсветку полей через p_highlight_indices.
+-- Используется для вывода доски в консоль и просмотра игр.
 FUNCTION f_get_board_as_clob(
     p_board_position    IN VARCHAR2,
     p_highlight_indices IN t_map_indices DEFAULT t_map_indices()
@@ -856,8 +1103,8 @@ FUNCTION f_get_board_as_clob(
     
     v_board_size    PLS_INTEGER;
     v_total_squares PLS_INTEGER;
-    v_header        VARCHAR2(128) := '  |';
-    v_separator     VARCHAR2(128) := '--+';
+    v_header        VARCHAR2(128) := '  |'; -- Было 200
+    v_separator     VARCHAR2(128) := '--+'; -- Было 200
     
 BEGIN
     DBMS_LOB.createtemporary(v_clob, TRUE);
@@ -873,14 +1120,14 @@ BEGIN
     p_init_board_map(v_board_size);
     
     FOR c IN 1 .. v_board_size LOOP
-
+        -- Для доски 10x10 нужна буква 'j' (a-i, затем j)
         DECLARE
             v_col_letter CHAR(1);
         BEGIN
             IF c <= 9 THEN
                 v_col_letter := CHR(ASCII('A') + c - 1);
             ELSE
-
+                -- Для 10-й колонки используем 'J' (или можно 'j', но обычно заглавные)
                 v_col_letter := 'J';
             END IF;
             v_header    := v_header    || ' ' || v_col_letter || ' ';
@@ -921,42 +1168,63 @@ BEGIN
     DBMS_LOB.append(v_clob, v_header || c_nl);
     RETURN v_clob;
 END f_get_board_as_clob;
-
+-- =========================================================================
+-- ПРОЦЕДУРА: p_init_board_map
+-- =========================================================================
+-- Инициализирует глобальные кэш-карты для преобразования координат доски.
+-- Создает две карты:
+--   - g_map_by_notation: нотация -> поле (например, 'a1' -> {idx=57, row=1, col=1})
+--   - g_map_by_idx: индекс -> поле (например, 57 -> {idx=57, notation='a1', row=1, col=1})
+-- Кэш создается один раз для каждого размера доски и переиспользуется.
+-- Это значительно ускоряет преобразования координат в циклах.
 PROCEDURE p_init_board_map(p_board_size IN NUMBER) IS
     v_idx       PLS_INTEGER;
     v_notation  VARCHAR2(50);
     v_field_rec rec_board_field;
 BEGIN
-
+    -- 1. Проверяем кэш. Если карта нужного размера уже загружена, выходим.
     IF p_board_size = g_current_map_size THEN
         RETURN;
     END IF;
-
+    
+    -- 2. Очищаем старые карты
     g_map_by_notation.DELETE;
     g_map_by_idx.DELETE;
-
+    
+    -- 3. Генерируем новые карты
     FOR r IN 1 .. p_board_size LOOP
         FOR c IN 1 .. p_board_size LOOP
-
+            -- Формула индекса: Сверху-вниз (строка 1 в строке = 8/10 ряд на доске)
+            -- Нотация 'a1' находится в конце строки (для 8x8 это индекс 57..64)
             v_idx := ((p_board_size - r) * p_board_size) + c;
-
+            
+            -- Нотация (например, 'a1', 'h8', 'j10')
+            -- ASCII('a') = 97. Для c=1 -> 'a', c=8 -> 'h', c=10 -> 'j'.
             v_notation := CHR(ASCII('a') + c - 1) || r;
 
+            -- Собираем запись
             v_field_rec.idx      := v_idx;
             v_field_rec.notation := v_notation;
             v_field_rec.row_num  := r;
             v_field_rec.col_num  := c;
 
+            -- Заполняем ОБЕ карты
             g_map_by_notation(v_notation) := v_field_rec;
             g_map_by_idx(v_idx)           := v_field_rec;
             
         END LOOP;
     END LOOP;
-
+    
+    -- 4. Обновляем "флаг" кэша
     g_current_map_size := p_board_size;
     
 END p_init_board_map;
-
+-- =========================================================================
+-- ПРОЦЕДУРА: p_audit_log
+-- =========================================================================
+-- Логирует событие в таблицу audit_log для аудита и отладки.
+-- Использует AUTONOMOUS_TRANSACTION для независимого коммита (не откатывается
+-- при ошибках в основной транзакции). Ошибки логирования игнорируются.
 PROCEDURE p_audit_log(
     p_player_id  IN players.player_id%TYPE,
     p_game_id    IN games.game_id%TYPE,
@@ -975,12 +1243,17 @@ BEGIN
     );
     COMMIT;
 EXCEPTION
-    WHEN OTHERS THEN NULL;
+    WHEN OTHERS THEN NULL; -- Ошибки логирования игнорируем
 END p_audit_log;
 
+-- =========================================================================
+-- ВСПОМОГАТЕЛЬНАЯ ПРОЦЕДУРА: Завершение игры
+-- =========================================================================
+-- Унифицирует процесс завершения игры: обновление статуса, закрытие зрителей,
+-- логирование, обновление рейтингов. Используется во всех местах, где игра завершается.
 PROCEDURE p_finish_game(
     p_game_id           IN NUMBER,
-    p_status            IN CHAR,
+    p_status            IN CHAR,           -- 'V' (Victory), 'D' (Draw), 'T' (Timeout), 'R' (Resigned)
     p_winner_color      IN CHAR DEFAULT NULL,
     p_puzzle_status     IN CHAR DEFAULT NULL,
     p_audit_event       IN VARCHAR2,
@@ -988,26 +1261,31 @@ PROCEDURE p_finish_game(
 ) IS
     v_game games%ROWTYPE;
 BEGIN
-
+    -- Получаем данные игры
     SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
-
+    
+    -- Обновляем статус игры
     UPDATE games
     SET status              = p_status,
         end_time            = SYSDATE,
         winner_player_color = p_winner_color,
         puzzle_status       = NVL(p_puzzle_status, puzzle_status)
     WHERE game_id = p_game_id;
-
+    
+    -- Закрываем всех зрителей
     UPDATE spectators 
     SET left_at = SYSDATE 
     WHERE game_id = p_game_id AND left_at IS NULL;
-
+    
+    -- Логируем событие
     p_audit_log(p_player_id, p_game_id, p_audit_event);
-
+    
+    -- Обновляем рейтинги (только для обычных игр, не для матчей)
     IF v_game.match_id IS NULL THEN
         p_update_ratings(p_game_id);
     END IF;
-
+    
+    -- Обработка матчей: создание следующей игры, завершение матча и обновление рейтинга
     IF v_game.match_id IS NOT NULL THEN
         DECLARE
             v_match matches%ROWTYPE;
@@ -1023,7 +1301,8 @@ BEGIN
             v_match_rule_id NUMBER;
         BEGIN
             SELECT * INTO v_match FROM matches WHERE match_id = v_game.match_id;
-
+            
+            -- Получаем первую игру для определения игроков и правил
             SELECT * INTO v_first_game 
             FROM (
                 SELECT * 
@@ -1037,7 +1316,8 @@ BEGIN
             v_player2_id := v_first_game.player_black_id;
             v_games_to_win := v_match.games_to_win;
             v_match_rule_id := v_first_game.rule_id;
-
+            
+            -- Подсчитываем победы
             FOR r IN (
                 SELECT winner_player_color, status
                 FROM games
@@ -1052,19 +1332,31 @@ BEGIN
                     END IF;
                 END IF;
             END LOOP;
-
-            IF v_player1_wins > (v_games_to_win / 2) THEN
+            
+            -- Проверяем, завершен ли матч
+            -- Для "best of N" нужно выиграть (N+1)/2 игр (для best of 3 нужно 2 победы, для best of 5 - 3 победы)
+            -- Используем TRUNC((v_games_to_win + 1) / 2) для вычисления необходимого количества побед
+            IF v_player1_wins >= TRUNC((v_games_to_win + 1) / 2) THEN
                 UPDATE matches
                 SET status = 'C',
                     winner_player_id = v_player1_id
                 WHERE match_id = v_game.match_id;
                 p_audit_log(v_player1_id, p_game_id, 'MATCH_WON');
-
-                SELECT season_id INTO v_season_id 
-                FROM seasons 
-                WHERE v_first_game.start_time BETWEEN start_date AND end_date 
-                AND ROWNUM = 1;
                 
+                -- Обновляем рейтинг после завершения матча
+                -- Рейтинг: +16 за победу, -16 за поражение, +10*N за матч (N = games_to_win)
+                BEGIN
+                    SELECT season_id INTO v_season_id 
+                    FROM seasons 
+                    WHERE v_first_game.start_time BETWEEN start_date AND end_date 
+                    AND ROWNUM = 1;
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        -- Если сезон не найден по дате, берем последний созданный сезон
+                        SELECT MAX(season_id) INTO v_season_id FROM seasons;
+                END;
+                
+                -- Обновляем рейтинги для обоих игроков
                 UPDATE player_ratings
                 SET rating = GREATEST(0, rating + (v_player1_wins * 16) - (v_player2_wins * 16) + (10 * v_games_to_win))
                 WHERE player_id = v_player1_id 
@@ -1077,18 +1369,26 @@ BEGIN
                   AND rule_id = v_match_rule_id 
                   AND season_id = v_season_id;
                 
-            ELSIF v_player2_wins > (v_games_to_win / 2) THEN
+            ELSIF v_player2_wins >= TRUNC((v_games_to_win + 1) / 2) THEN
                 UPDATE matches
                 SET status = 'C',
                     winner_player_id = v_player2_id
                 WHERE match_id = v_game.match_id;
                 p_audit_log(v_player2_id, p_game_id, 'MATCH_WON');
-
-                SELECT season_id INTO v_season_id 
-                FROM seasons 
-                WHERE v_first_game.start_time BETWEEN start_date AND end_date 
-                AND ROWNUM = 1;
                 
+                -- Обновляем рейтинг после завершения матча
+                BEGIN
+                    SELECT season_id INTO v_season_id 
+                    FROM seasons 
+                    WHERE v_first_game.start_time BETWEEN start_date AND end_date 
+                    AND ROWNUM = 1;
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        -- Если сезон не найден по дате, берем последний созданный сезон
+                        SELECT MAX(season_id) INTO v_season_id FROM seasons;
+                END;
+                
+                -- Обновляем рейтинги для обоих игроков
                 UPDATE player_ratings
                 SET rating = GREATEST(0, rating + (v_player1_wins * 16) - (v_player2_wins * 16) + (10 * v_games_to_win))
                 WHERE player_id = v_player1_id 
@@ -1102,7 +1402,7 @@ BEGIN
                   AND season_id = v_season_id;
                 
             ELSE
-
+                -- Матч продолжается - создаем следующую игру
                 DECLARE
                     v_game_count NUMBER;
                 BEGIN
@@ -1135,18 +1435,26 @@ BEGIN
             END IF;
         EXCEPTION
             WHEN NO_DATA_FOUND THEN
-                NULL;
+                NULL; -- Матч не найден, игнорируем
         END;
     END IF;
     
     COMMIT;
 END p_finish_game;
 
+-- =========================================================================
+-- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Получение текущей позиции доски
+-- =========================================================================
+-- Получает текущую позицию доски из последнего хода или начальную позицию.
+-- Возвращает декодированную (полную) позицию доски.
+-- Используется в нескольких местах для избежания дублирования кода.
 FUNCTION f_get_current_board_position(
     p_game_id IN NUMBER,
     p_rule_id IN NUMBER
 ) RETURN VARCHAR2 IS
     v_board_position VARCHAR2(100);
+    v_is_puzzle CHAR(1);
+    v_puzzle_id NUMBER;
 BEGIN
     BEGIN
         SELECT decode_board(board_position) INTO v_board_position
@@ -1159,12 +1467,37 @@ BEGIN
         WHERE ROWNUM = 1;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-
-            v_board_position := get_initial_position(p_rule_id);
+            -- Если ходов нет, проверяем, является ли игра задачей
+            BEGIN
+                SELECT puzzle_id, puzzle_status INTO v_puzzle_id, v_is_puzzle
+                FROM games
+                WHERE game_id = p_game_id;
+                
+                -- Если это задача (puzzle_status = 'p'), берем позицию из puzzles
+                IF v_is_puzzle = 'p' AND v_puzzle_id IS NOT NULL THEN
+                    SELECT decode_board(board_position) INTO v_board_position
+                    FROM puzzles
+                    WHERE puzzle_id = v_puzzle_id;
+                ELSE
+                    -- Иначе используем начальную позицию
+                    v_board_position := get_initial_position(p_rule_id);
+                END IF;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    -- Если игра не найдена, используем начальную позицию
+                    v_board_position := get_initial_position(p_rule_id);
+            END;
     END;
     
     RETURN v_board_position;
 END f_get_current_board_position;
+
+-- @procedure p_update_ratings
+-- @brief Updates player ratings after a game is finished.
+-- @dependencies:
+--   - (none)
+
+-- [РЕАЛИЗАЦИЯ] +5 Puzzle, +16 Win, -16 Loss, Min 0.
 
 PROCEDURE p_update_ratings(
     p_game_id IN games.game_id%TYPE
@@ -1172,55 +1505,86 @@ PROCEDURE p_update_ratings(
     v_game      games%ROWTYPE;
     v_season_id seasons.season_id%TYPE;
 BEGIN
-
+    -- Получаем данные игры
     SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
 
-    SELECT season_id INTO v_season_id 
-    FROM seasons 
-    WHERE v_game.start_time BETWEEN start_date AND end_date 
-    AND ROWNUM = 1;
+    -- Определяем сезон, в котором игра началась (используем start_time, а не SYSDATE)
+    -- Это гарантирует, что рейтинг обновляется в сезоне начала игры, даже если игра закончилась в следующем сезоне
+    BEGIN
+        SELECT season_id INTO v_season_id 
+        FROM seasons 
+        WHERE v_game.start_time BETWEEN start_date AND end_date 
+        AND ROWNUM = 1;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            -- Если сезон не найден по дате, берем последний созданный сезон
+            SELECT MAX(season_id) INTO v_season_id FROM seasons;
+    END;
 
-    IF v_game.status = 'V' AND v_game.match_id IS NULL THEN
-
+    -- Логика начисления (только для обычных игр, не для матчей)
+    -- Рейтинг в матчах обновляется после завершения всего матча в p_finish_game
+    -- Обрабатываем статусы: 'V' (Victory), 'T' (Timeout), 'R' (Resignation)
+    IF v_game.status IN ('V', 'T', 'R') AND v_game.match_id IS NULL THEN
+        
+        -- СЛУЧАЙ А: ПАЗЛ (Puzzle / Daily)
         IF v_game.puzzle_id IS NOT NULL THEN
             DECLARE
                 v_solver_id   NUMBER;
                 v_prev_solves NUMBER;
                 v_puzzle_created_by NUMBER;
             BEGIN
+                -- Рейтинг обновляется только при успешном решении пазла (status = 'V' и puzzle_status = 's')
+                IF v_game.status = 'V' AND v_game.puzzle_status = 's' THEN
+                    -- Кто решал? (В пазлах играет создатель сессии)
+                    v_solver_id := CASE WHEN v_game.creator_player_color = 'W' THEN v_game.player_white_id ELSE v_game.player_black_id END;
+                    
+                    -- Проверяем, является ли пазл общим (не созданным пользователем)
+                    SELECT created_by_player_id INTO v_puzzle_created_by
+                    FROM puzzles
+                    WHERE puzzle_id = v_game.puzzle_id;
+                    
+                    -- Рейтинг обновляется только для общих пазлов (created_by_player_id IS NULL)
+                    IF v_puzzle_created_by IS NULL AND v_solver_id IS NOT NULL THEN
+                        -- Проверяем, решал ли он эту задачу РАНЬШЕ (успешно)
+                        SELECT COUNT(*) INTO v_prev_solves
+                        FROM games
+                        WHERE puzzle_id = v_game.puzzle_id
+                          AND (player_white_id = v_solver_id OR player_black_id = v_solver_id)
+                          AND status = 'V'
+                          AND puzzle_status = 's'
+                          AND game_id != p_game_id; -- Исключаем текущую сессию
 
-                v_solver_id := CASE WHEN v_game.creator_player_color = 'W' THEN v_game.player_white_id ELSE v_game.player_black_id END;
-
-                SELECT created_by_player_id INTO v_puzzle_created_by
-                FROM puzzles
-                WHERE puzzle_id = v_game.puzzle_id;
-
-                IF v_puzzle_created_by IS NULL THEN
-
-                    SELECT COUNT(*) INTO v_prev_solves
-                    FROM games
-                    WHERE puzzle_id = v_game.puzzle_id
-                      AND (player_white_id = v_solver_id OR player_black_id = v_solver_id)
-                      AND status = 'V'
-                      AND game_id != p_game_id;
-
-                    IF v_prev_solves = 0 THEN
-                        UPDATE player_ratings
-                        SET rating = GREATEST(0, rating + 5)
-                        WHERE player_id = v_solver_id 
-                          AND rule_id = v_game.rule_id 
-                          AND season_id = v_season_id;
+                        -- Если решил впервые -> +5 очков
+                        IF v_prev_solves = 0 THEN
+                            -- Убеждаемся, что запись рейтинга существует
+                            INSERT INTO player_ratings (player_id, rule_id, season_id, rating)
+                            SELECT v_solver_id, v_game.rule_id, v_season_id, 5
+                            FROM DUAL
+                            WHERE NOT EXISTS (
+                                SELECT 1 FROM player_ratings 
+                                WHERE player_id = v_solver_id 
+                                  AND rule_id = v_game.rule_id 
+                                  AND season_id = v_season_id
+                            );
+                            
+                            UPDATE player_ratings
+                            SET rating = GREATEST(0, rating + 5)
+                            WHERE player_id = v_solver_id 
+                              AND rule_id = v_game.rule_id 
+                              AND season_id = v_season_id;
+                        END IF;
                     END IF;
                 END IF;
             EXCEPTION
                 WHEN NO_DATA_FOUND THEN
-                    NULL;
+                    NULL; -- Пазл не найден, игнорируем
             END;
 
+        -- СЛУЧАЙ Б: ОБЫЧНАЯ ИГРА (PvP / PvE)
         ELSE
-
+            -- Рейтинг обновляется только для PvP игр (не для PvE против AI)
             IF v_game.ai_difficulty IS NULL THEN
-
+                -- Это PvP игра - обновляем рейтинг
                 IF v_game.winner_player_color = 'W' THEN
                     UPDATE player_ratings
                     SET rating = GREATEST(0, rating + 16)
@@ -1247,13 +1611,33 @@ BEGIN
                       AND season_id = v_season_id;
                 END IF;
             END IF;
-
+            -- Если ai_difficulty IS NOT NULL - это PvE против AI, рейтинг НЕ обновляется
         END IF;
         
     END IF;
+    -- При ничьей (status = 'D') очки не меняются (согласно твоему описанию).
+    -- Статусы 'T' (Timeout) и 'R' (Resignation) обрабатываются так же, как 'V' (Victory),
+    -- так как для них также определяется winner_player_color.
 
 END p_update_ratings;
-
+-- =========================================================================
+-- ПРОЦЕДУРА: p_process_move
+-- =========================================================================
+-- Обрабатывает ход игрока: валидирует, применяет и обновляет состояние игры.
+-- Алгоритм:
+--   1. Блокирует игру (FOR UPDATE) для предотвращения конкурентных изменений
+--   2. Получает текущую позицию доски
+--   3. Проверяет лимит времени на партию (если установлен)
+--   4. Определяет цвет игрока (W/B)
+--   5. Находит все легальные ходы для игрока
+--   6. Валидирует ход игрока (сравнивает нотацию с легальными ходами)
+--   7. Применяет ход к доске (удаляет фигуры, проверяет превращение)
+--   8. Сохраняет ход в game_moves
+--   9. Проверяет условия окончания игры:
+--      - Победа (нет фигур противника или нет ходов)
+--      - Ничья (лимит ходов без взятий, повтор позиции)
+--   10. Обновляет очередь хода
+-- Использует вспомогательную процедуру p_finish_game для завершения игры.
 PROCEDURE p_process_move(
     p_game_id        IN NUMBER,
     p_move_notation  IN VARCHAR2,
@@ -1273,35 +1657,26 @@ PROCEDURE p_process_move(
     v_new_board_decoded VARCHAR2(100);
     v_new_board_encoded VARCHAR2(100);
     
+    -- Переменные для расчета времени (шахматные часы)
+    v_time_delta_sec        NUMBER;
+    v_current_player_time   NUMBER;
+    v_next_player_time      NUMBER;
+    
 BEGIN
-
+    -- Блокируем игру для обновления
     SELECT * INTO v_game FROM games WHERE game_id = p_game_id FOR UPDATE;
-
+    
+    -- Инициализация карты
     SELECT r.board_size INTO v_board_size 
     FROM game_rules r 
     WHERE r.rule_id = v_game.rule_id;
     
     p_init_board_map(v_board_size);
 
+    -- Получаем текущую позицию доски: из последнего хода или начальная позиция
     v_decoded_board := f_get_current_board_position(p_game_id, v_game.rule_id);
 
-    IF v_game.time_limit_game_sec IS NOT NULL THEN
-        DECLARE
-            v_elapsed_sec NUMBER := (SYSDATE - v_game.start_time) * 86400;
-        BEGIN
-            IF v_elapsed_sec >= v_game.time_limit_game_sec THEN
-                p_finish_game(
-                    p_game_id      => p_game_id,
-                    p_status       => 'T',
-                    p_winner_color => CASE WHEN v_game.current_turn = 'W' THEN 'B' ELSE 'W' END,
-                    p_audit_event  => 'GAME_TIMEOUT'
-                );
-                p_status_message := 'Игра завершена по таймауту (превышен лимит времени на партию: ' || v_game.time_limit_game_sec || ' сек).';
-                RETURN;
-            END IF;
-        END;
-    END IF;
-
+    -- Определение цвета текущего игрока
     IF v_game.ai_difficulty IS NOT NULL THEN
         v_player_color := v_game.current_turn;
     ELSE
@@ -1312,7 +1687,67 @@ BEGIN
         END IF;
     END IF;
 
+    -- Проверка времени игрока (шахматные часы)
+    IF v_game.time_limit_game_sec IS NOT NULL THEN
+        DECLARE
+            v_player_time_remaining NUMBER;
+            v_last_move_time        DATE;
+            v_current_time          DATE := SYSDATE;
+        BEGIN
+            -- Определяем оставшееся время текущего игрока
+            IF v_player_color = 'W' THEN
+                v_player_time_remaining := v_game.time_white_remaining_sec;
+            ELSE
+                v_player_time_remaining := v_game.time_black_remaining_sec;
+            END IF;
+            
+            -- Если время не инициализировано, это ошибка (должно быть инициализировано в join_game)
+            IF v_player_time_remaining IS NULL THEN
+                v_error_msg := 'Время игрока не инициализировано.';
+                p_audit_log(p_player_id, p_game_id, v_error_msg);
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                ROLLBACK;
+                RETURN;
+            END IF;
+            
+            -- Получаем время последнего хода или start_time
+            BEGIN
+                SELECT MAX(move_timestamp) INTO v_last_move_time
+                FROM game_moves
+                WHERE game_id = p_game_id;
+                
+                IF v_last_move_time IS NULL THEN
+                    v_last_move_time := v_game.start_time;
+                END IF;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    v_last_move_time := v_game.start_time;
+            END;
+            
+            -- Считаем дельту времени (сколько времени потратил игрок на этот ход)
+            v_time_delta_sec := (v_current_time - v_last_move_time) * 86400;
+            
+            -- Вычитаем дельту из банка игрока
+            v_current_player_time := v_player_time_remaining - v_time_delta_sec;
+            
+            -- Проверяем, не истекло ли время
+            IF v_current_player_time <= 0 THEN
+                p_finish_game(
+                    p_game_id      => p_game_id,
+                    p_status       => 'T',
+                    p_winner_color => CASE WHEN v_player_color = 'W' THEN 'B' ELSE 'W' END,
+                    p_audit_event  => 'GAME_TIMEOUT'
+                );
+                p_status_message := 'Игра завершена по таймауту. У ' || 
+                                   CASE WHEN v_player_color = 'W' THEN 'белых' ELSE 'черных' END || 
+                                   ' закончилось время.';
+                RETURN;
+            END IF;
+        END;
+    END IF;
+
     v_all_legal_moves := find_all_player_moves(v_decoded_board, v_player_color, v_game.rule_id);
+
 
     IF v_all_legal_moves.COUNT = 0 THEN
         p_finish_game(
@@ -1326,6 +1761,8 @@ BEGIN
         p_status_message := 'Ходов нет. Вы проиграли!';
         RETURN;
     END IF;
+    
+
 
     FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
         DECLARE
@@ -1339,21 +1776,16 @@ BEGIN
         END;
     END LOOP;
 
+
     IF NOT v_is_move_valid THEN
         IF v_all_legal_moves(1).is_capture = 'Y' THEN
             DECLARE
-                v_notation_str VARCHAR2(4000);
+                v_notation_str VARCHAR2(100);
             BEGIN
                 v_error_msg := 'Неверный ход. Взятие обязательно! Доступные варианты: ';
                 FOR i IN 1 .. v_all_legal_moves.COUNT LOOP
                     v_notation_str := f_move_to_notation(v_all_legal_moves(i), v_board_size);
-                    
-                    IF LENGTH(v_error_msg || v_notation_str || ' ') <= 2000 THEN
-                        v_error_msg := v_error_msg || v_notation_str || ' ';
-                    ELSE
-                        v_error_msg := v_error_msg || '...';
-                        EXIT;
-                    END IF;
+                    v_error_msg := v_error_msg || v_notation_str || ' ';
                 END LOOP;
                 v_error_msg := RTRIM(v_error_msg);
             END;
@@ -1373,10 +1805,12 @@ BEGIN
         RETURN;
     END IF;
 
+
     v_new_board_decoded := apply_move_to_board(v_decoded_board, v_chosen_move, v_player_color);
 
     v_new_board_encoded := encode_board(v_new_board_decoded);
     SELECT COUNT(*) + 1 INTO v_move_count FROM game_moves WHERE game_id = p_game_id;
+
 
     UPDATE games
     SET current_turn          = CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
@@ -1385,10 +1819,91 @@ BEGIN
         draw_offered_at       = NULL
     WHERE game_id = p_game_id;
 
+
     INSERT INTO game_moves (game_id, move_number, move_notation, is_capture, board_position)
     VALUES (p_game_id, v_move_count, p_move_notation, v_chosen_move.is_capture, v_new_board_encoded);
-
-    IF v_game.time_limit_move_sec IS NOT NULL THEN
+    
+    -- Обновление времени игроков и переброс Job (шахматные часы)
+    IF v_game.time_limit_game_sec IS NOT NULL THEN
+        DECLARE
+            v_next_turn_color       CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
+            v_job_name              VARCHAR2(128) := 'MOVE_TIMEOUT_JOB_' || p_game_id;
+        BEGIN
+            -- Обновляем время игроков в базе (используем уже рассчитанное v_current_player_time)
+            UPDATE games
+            SET time_white_remaining_sec = CASE WHEN v_player_color = 'W' 
+                                                THEN v_current_player_time 
+                                                ELSE time_white_remaining_sec 
+                                           END,
+                time_black_remaining_sec = CASE WHEN v_player_color = 'B' 
+                                                THEN v_current_player_time 
+                                                ELSE time_black_remaining_sec 
+                                           END
+            WHERE game_id = p_game_id;
+            
+            -- Получаем обновленное время следующего игрока
+            SELECT CASE WHEN v_next_turn_color = 'W' 
+                       THEN time_white_remaining_sec 
+                       ELSE time_black_remaining_sec 
+                  END
+            INTO v_next_player_time
+            FROM games
+            WHERE game_id = p_game_id;
+            
+            -- Перебрасываем Job на оставшееся время следующего игрока
+            BEGIN
+                DBMS_SCHEDULER.SET_ATTRIBUTE(
+                    name      => v_job_name,
+                    attribute => 'start_date',
+                    value     => SYSTIMESTAMP + (GREATEST(1, v_next_player_time) / 86400)
+                );
+            EXCEPTION
+                WHEN OTHERS THEN
+                    -- Если Job не существует, создаем его
+                    DBMS_SCHEDULER.CREATE_JOB(
+                        job_name   => v_job_name,
+                        job_type   => 'PLSQL_BLOCK',
+                        job_action => 'DECLARE
+                                v_game games%ROWTYPE;
+                                v_loser_color CHAR(1);
+                            BEGIN
+                                BEGIN
+                                    SELECT * INTO v_game FROM games WHERE game_id = ' || p_game_id || ' FOR UPDATE;
+                                EXCEPTION
+                                    WHEN NO_DATA_FOUND THEN
+                                        RETURN;
+                                END;
+                                
+                                IF v_game.status != ''A'' THEN
+                                    RETURN;
+                                END IF;
+                                
+                                v_loser_color := v_game.current_turn;
+                                
+                                UPDATE games
+                                SET status = ''T'',
+                                    end_time = SYSDATE,
+                                    winner_player_color = CASE v_loser_color WHEN ''W'' THEN ''B'' ELSE ''W'' END
+                                WHERE game_id = ' || p_game_id || ';
+                                
+                                UPDATE spectators SET left_at = SYSDATE 
+                                WHERE game_id = ' || p_game_id || ' AND left_at IS NULL;
+                                
+                                game_logic.p_update_ratings(' || p_game_id || ');
+                                game_logic.p_audit_log(NULL, ' || p_game_id || ', ''GAME_TIMEOUT'');
+                                COMMIT;
+                            EXCEPTION
+                                WHEN OTHERS THEN NULL;
+                            END;',
+                        start_date => SYSTIMESTAMP + (GREATEST(1, v_next_player_time) / 86400),
+                        enabled    => TRUE,
+                        auto_drop  => TRUE,
+                        comments   => 'Game timeout job for game ' || p_game_id
+                    );
+            END;
+        END;
+    ELSIF v_game.time_limit_move_sec IS NOT NULL THEN
+        -- Старая логика для time_limit_move_sec (оставляем для обратной совместимости)
         DECLARE
             v_job_name VARCHAR2(128) := 'MOVE_TIMEOUT_JOB_' || p_game_id;
         BEGIN
@@ -1409,6 +1924,7 @@ BEGIN
         p_status_message := 'Ход(#' || v_move_count || '): ' || p_move_notation || ' принят.';
     END IF;
 
+
     DECLARE
         v_next_turn_color       CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
         v_next_player_moves     t_move_list;
@@ -1421,6 +1937,7 @@ BEGIN
         ELSE
             v_opponent_pieces_exist := INSTR(v_new_board_decoded, c_black_man) > 0 OR INSTR(v_new_board_decoded, c_black_king) > 0;
         END IF;
+        
 
         IF v_game.puzzle_id IS NOT NULL THEN
             DECLARE
@@ -1429,95 +1946,52 @@ BEGIN
                 v_puzzle_solution VARCHAR2(2000);
                 v_current_move_count NUMBER;
                 v_encoded_current_board VARCHAR2(100);
+                v_solution_msg VARCHAR2(2000);
             BEGIN
                 SELECT end_board_state, moves_to_solve, solution
                 INTO v_puzzle_end_board, v_puzzle_moves_to_solve, v_puzzle_solution
                 FROM puzzles
                 WHERE puzzle_id = v_game.puzzle_id;
                 
-                SELECT COUNT(*) INTO v_current_move_count FROM game_moves WHERE game_id = p_game_id;
+                -- Используем v_move_count (уже содержит номер текущего хода, который был вставлен)
+                v_current_move_count := v_move_count;
                 v_encoded_current_board := encode_board(v_new_board_decoded);
-
-                IF v_puzzle_moves_to_solve IS NOT NULL AND v_current_move_count = v_puzzle_moves_to_solve THEN
-                    IF v_puzzle_end_board IS NULL THEN
-
-                        IF NOT v_opponent_pieces_exist THEN
-
-                            DECLARE
-                                v_solution_msg VARCHAR2(2000);
-                            BEGIN
-                                v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' ход(ов): ' || NVL(v_puzzle_solution, 'не указано');
-                                
-                                p_finish_game(
-                                    p_game_id       => p_game_id,
-                                    p_status        => 'V',
-                                    p_winner_color  => v_player_color,
-                                    p_puzzle_status => 's',
-                                    p_audit_event   => 'PUZZLE_SOLVED',
-                                    p_player_id     => p_player_id
-                                );
-                                p_status_message := p_status_message || ' Победа! У противника не осталось фигур.' || c_nl || v_solution_msg;
-                                RETURN;
-                            END;
-                        ELSE
-
-                            p_finish_game(
-                                p_game_id       => p_game_id,
-                                p_status        => 'V',
-                                p_winner_color  => CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
-                                p_puzzle_status => 'f',
-                                p_audit_event   => 'PUZZLE_FAILED',
-                                p_player_id     => p_player_id
-                            );
-                            p_status_message := 'Попробуйте еще раз! Конечная позиция должна быть: ' || NVL(decode_board(v_puzzle_end_board), 'уничтожение всех фигур противника');
-                            RETURN;
-                        END IF;
-                    ELSE
-
-                        IF v_encoded_current_board = v_puzzle_end_board THEN
-
-                            DECLARE
-                                v_solution_msg VARCHAR2(2000);
-                            BEGIN
-                                v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' ход(ов): ' || NVL(v_puzzle_solution, 'не указано');
-                                
-                                p_finish_game(
-                                    p_game_id       => p_game_id,
-                                    p_status        => 'D',
-                                    p_puzzle_status => 's',
-                                    p_audit_event   => 'PUZZLE_SOLVED_DRAW',
-                                    p_player_id     => p_player_id
-                                );
-                                p_status_message := p_status_message || ' Ничья! Достигнута целевая позиция.' || c_nl || v_solution_msg;
-                                RETURN;
-                            END;
-                        ELSE
-
-                            p_finish_game(
-                                p_game_id       => p_game_id,
-                                p_status        => 'V',
-                                p_winner_color  => CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END,
-                                p_puzzle_status => 'f',
-                                p_audit_event   => 'PUZZLE_FAILED',
-                                p_player_id     => p_player_id
-                            );
-                            p_status_message := 'Попробуйте еще раз! Конечная позиция должна быть: ' || decode_board(v_puzzle_end_board);
-                            RETURN;
-                        END IF;
-                    END IF;
-                END IF;
-
+                
+                -- Проверяем успешное решение задачи
                 IF v_puzzle_end_board IS NULL THEN
-
+                    -- Победа: проверяем уничтожение противника
                     IF NOT v_opponent_pieces_exist THEN
-                        DECLARE
-                            v_solution_msg VARCHAR2(2000);
-                        BEGIN
-
+                        -- Формируем сообщение о решении (только для пазлов на победу)
+                        IF v_puzzle_moves_to_solve IS NOT NULL AND v_current_move_count > v_puzzle_moves_to_solve THEN
+                            v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' хода(ов): ' || NVL(v_puzzle_solution, 'не указано');
+                        ELSE
+                            v_solution_msg := 'Поздравляем! Вы решили задачу за ' || v_current_move_count || ' хода(ов)!';
+                        END IF;
+                        
+                        p_finish_game(
+                            p_game_id       => p_game_id,
+                            p_status        => 'V',
+                            p_winner_color  => v_player_color,
+                            p_puzzle_status => 's',
+                            p_audit_event   => 'PUZZLE_SOLVED',
+                            p_player_id     => p_player_id
+                        );
+                        p_status_message := p_status_message || ' Победа! У противника не осталось фигур.' || c_nl || v_solution_msg;
+                        RETURN;
+                    END IF;
+                    
+                    -- Победа: проверяем блокировку противника (нет ходов)
+                    DECLARE
+                        v_next_turn_color_puzzle CHAR(1) := CASE v_player_color WHEN 'W' THEN 'B' ELSE 'W' END;
+                        v_next_player_moves_puzzle t_move_list;
+                    BEGIN
+                        v_next_player_moves_puzzle := find_all_player_moves(v_new_board_decoded, v_next_turn_color_puzzle, v_game.rule_id);
+                        IF v_next_player_moves_puzzle.COUNT = 0 THEN
+                            -- Формируем сообщение о решении (только для пазлов на победу)
                             IF v_puzzle_moves_to_solve IS NOT NULL AND v_current_move_count > v_puzzle_moves_to_solve THEN
-                                v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' ход(ов): ' || NVL(v_puzzle_solution, 'не указано');
+                                v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' хода(ов): ' || NVL(v_puzzle_solution, 'не указано');
                             ELSE
-                                v_solution_msg := 'Поздравляем! Вы решили задачу за ' || v_current_move_count || ' ход(ов)!';
+                                v_solution_msg := 'Поздравляем! Вы решили задачу за ' || v_current_move_count || ' хода(ов)!';
                             END IF;
                             
                             p_finish_game(
@@ -1528,23 +2002,15 @@ BEGIN
                                 p_audit_event   => 'PUZZLE_SOLVED',
                                 p_player_id     => p_player_id
                             );
-                            p_status_message := p_status_message || ' Победа! У противника не осталось фигур.' || c_nl || v_solution_msg;
+                            p_status_message := p_status_message || ' Победа! Противник заблокирован.' || c_nl || v_solution_msg;
                             RETURN;
-                        END;
-                    END IF;
+                        END IF;
+                    END;
                 ELSE
-
-                    IF v_encoded_current_board = v_puzzle_end_board THEN
-                        DECLARE
-                            v_solution_msg VARCHAR2(2000);
-                        BEGIN
-
-                            IF v_puzzle_moves_to_solve IS NOT NULL AND v_current_move_count > v_puzzle_moves_to_solve THEN
-                                v_solution_msg := 'Вы решили задачу за ' || v_current_move_count || ' ход(ов), но более оптимальное решение за ' || v_puzzle_moves_to_solve || ' ход(ов): ' || NVL(v_puzzle_solution, 'не указано');
-                            ELSE
-                                v_solution_msg := 'Поздравляем! Вы решили задачу за ' || v_current_move_count || ' ход(ов)!';
-                            END IF;
-                            
+                    -- Ничья: проверяем достижение позиции end_board_state только при достижении moves_to_solve
+                    IF v_puzzle_moves_to_solve IS NOT NULL THEN
+                        IF v_encoded_current_board = v_puzzle_end_board THEN
+                            -- Задача решена
                             p_finish_game(
                                 p_game_id       => p_game_id,
                                 p_status        => 'D',
@@ -1552,9 +2018,20 @@ BEGIN
                                 p_audit_event   => 'PUZZLE_SOLVED_DRAW',
                                 p_player_id     => p_player_id
                             );
-                            p_status_message := p_status_message || ' Ничья! Достигнута целевая позиция.' || c_nl || v_solution_msg;
+                            p_status_message := p_status_message || ' Ничья! Достигнута целевая позиция. Задача решена!';
                             RETURN;
-                        END;
+                        ELSE
+                            -- Задача не решена - достигнуто нужное количество ходов, но позиция не совпадает
+                            p_finish_game(
+                                p_game_id       => p_game_id,
+                                p_status        => 'D',
+                                p_puzzle_status => 'f',
+                                p_audit_event   => 'PUZZLE_FAILED_DRAW',
+                                p_player_id     => p_player_id
+                            );
+                            p_status_message := p_status_message || ' Ничья! Достигнуто ' || v_puzzle_moves_to_solve || ' ход(ов), но целевая позиция не достигнута. Задача не решена.';
+                            RETURN;
+                        END IF;
                     END IF;
                 END IF;
             END;
@@ -1585,26 +2062,30 @@ BEGIN
             RETURN;
         END IF;
 
+        -- Проверка "Ничья по N ходов без взятия"
         IF v_game.draw_moves_limit IS NOT NULL THEN
             DECLARE
                 v_moves_without_capture PLS_INTEGER := 0;
                 v_last_capture_move PLS_INTEGER := 0;
             BEGIN
-
+                -- Находим номер последнего хода с взятием
                 SELECT NVL(MAX(move_number), 0) INTO v_last_capture_move
                 FROM game_moves
                 WHERE game_id = p_game_id AND is_capture = 'Y';
-
+                
+                -- Считаем ходы без взятия после последнего взятия (включая текущий ход)
                 SELECT COUNT(*) INTO v_moves_without_capture
                 FROM game_moves
                 WHERE game_id = p_game_id
                   AND move_number > v_last_capture_move
                   AND is_capture = 'N';
-
+                
+                -- Добавляем текущий ход если он без взятия
                 IF v_chosen_move.is_capture = 'N' THEN
                     v_moves_without_capture := v_moves_without_capture + 1;
                 END IF;
-
+                
+                -- Проверяем лимит (draw_moves_limit - это количество полуходов без взятия)
                 IF v_moves_without_capture >= v_game.draw_moves_limit THEN
                     p_finish_game(
                         p_game_id      => p_game_id,
@@ -1618,7 +2099,10 @@ BEGIN
         END IF;
 
         IF v_game.enable_pos_repetition_draw = 'Y' THEN
-
+            -- Проверяем повтор позиции с учетом очереди хода
+            -- Очередь хода ПОСЛЕ хода вычисляется по move_number:
+            -- нечетные ходы (1,3,5...) -> после хода очередь черных (B)
+            -- четные ходы (2,4,6...) -> после хода очередь белых (W)
             DECLARE
                 v_next_turn_after_move CHAR(1) := CASE WHEN MOD(v_move_count, 2) = 1 THEN 'B' ELSE 'W' END;
             BEGIN
@@ -1643,6 +2127,20 @@ BEGIN
     
     COMMIT;
 END p_process_move;
+-- @procedure create_game
+-- @brief Creates a new game (PvP, PvE, or puzzle).
+-- @dependencies:
+--   - players (table)
+--   - games (table)
+--   - puzzles (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
+--   - encode_board (function)
+--   - get_initial_position (function)
+--   - get_ai_move (function)
+--   - p_process_move (procedure)
+--   - print_active_board (procedure)
 
 PROCEDURE create_game(
     p_opponent_username   IN VARCHAR2 DEFAULT NULL,
@@ -1671,6 +2169,7 @@ PROCEDURE create_game(
     v_status_message      VARCHAR2(1000);
     v_my_active_game_id   NUMBER;
     v_error_msg           VARCHAR2(2000);
+    v_puzzle_id_to_use    NUMBER; -- Локальная переменная для puzzle_id (может быть из p_puzzle_id или daily_puzzles)
 BEGIN
     v_current_player_id := get_or_create_player_id(v_current_username);
     UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_current_player_id;
@@ -1682,23 +2181,24 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
-
-    IF p_time_limit_move_sec IS NOT NULL AND p_time_limit_move_sec <= 0 THEN
-        v_error_msg := 'Лимит времени на ход должен быть положительным числом.';
+    
+    -- Валидация параметров
+    IF p_time_limit_move_sec IS NOT NULL AND p_time_limit_move_sec <= 30 THEN
+        v_error_msg := 'Лимит времени на ход должен быть не менее 30 секунд.';
         p_audit_log(v_current_player_id, NULL, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
     
-    IF p_time_limit_game_sec IS NOT NULL AND p_time_limit_game_sec <= 0 THEN
-        v_error_msg := 'Лимит времени на партию должен быть положительным числом.';
+    IF p_time_limit_game_sec IS NOT NULL AND p_time_limit_game_sec <= 600 THEN
+        v_error_msg := 'Лимит времени на партию должен быть не менее 600 секунд (10 минут).';
         p_audit_log(v_current_player_id, NULL, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
     
-    IF p_draw_moves_limit IS NOT NULL AND p_draw_moves_limit <= 0 THEN
-        v_error_msg := 'Лимит ходов без взятий должен быть положительным числом.';
+    IF p_draw_moves_limit IS NOT NULL AND p_draw_moves_limit <= 5 THEN
+        v_error_msg := 'Лимит ходов без взятий должен быть не менее 5.';
         p_audit_log(v_current_player_id, NULL, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
@@ -1727,14 +2227,16 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
-
+    
+    -- Запрет на создание игры с ИИ с таймаутами
     IF p_ai_difficulty IS NOT NULL AND (p_time_limit_move_sec IS NOT NULL OR p_time_limit_game_sec IS NOT NULL) THEN
         v_error_msg := 'Игры против ИИ не могут иметь таймауты (time_limit_move_sec или time_limit_game_sec).';
         p_audit_log(v_current_player_id, NULL, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
-
+    
+    -- Запрет на создание задачи с несовместимыми параметрами
     IF p_puzzle_id IS NOT NULL THEN
         IF p_time_limit_move_sec IS NOT NULL OR p_time_limit_game_sec IS NOT NULL OR 
            p_draw_moves_limit IS NOT NULL OR p_enable_pos_rep_draw != 'N' OR
@@ -1745,16 +2247,81 @@ BEGIN
             RETURN;
         END IF;
     END IF;
+    
+    -- Обработка задачи дня (p_daily = 'Y')
+    IF p_daily = 'Y' THEN
+        IF p_puzzle_id IS NOT NULL THEN
+            v_error_msg := 'Нельзя одновременно передавать p_daily и p_puzzle_id.';
+            p_audit_log(v_current_player_id, NULL, v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
+        END IF;
+        
+        -- Получаем puzzle_id задачи дня для сегодняшней даты
+        -- Если задачи дня нет, создаем её автоматически
+        DECLARE
+            v_today     DATE := TRUNC(SYSDATE);
+            v_count     PLS_INTEGER;
+            v_new_puzzle_id puzzles.puzzle_id%TYPE;
+        BEGIN
+            -- Проверяем, есть ли уже задача дня на сегодня
+            SELECT COUNT(*) INTO v_count FROM daily_puzzles WHERE puzzle_date = v_today;
+            
+            IF v_count = 0 THEN
+                -- Задачи дня нет, создаем её
+                BEGIN
+                    -- Пытаемся выбрать задачу, которая не использовалась в последние 30 дней
+                    SELECT puzzle_id INTO v_new_puzzle_id
+                    FROM (
+                        SELECT p.puzzle_id
+                        FROM puzzles p
+                        LEFT JOIN daily_puzzles dp ON p.puzzle_id = dp.puzzle_id AND dp.puzzle_date >= (v_today - 30)
+                        WHERE p.created_by_player_id IS NULL
+                        AND dp.puzzle_id IS NULL             
+                        ORDER BY DBMS_RANDOM.VALUE
+                    ) WHERE ROWNUM = 1;
+                    
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        -- Если нет задач, которые не использовались 30 дней, выбираем любую серверную
+                        BEGIN
+                            SELECT puzzle_id INTO v_new_puzzle_id
+                            FROM (
+                                SELECT puzzle_id FROM puzzles 
+                                WHERE created_by_player_id IS NULL
+                                ORDER BY DBMS_RANDOM.VALUE
+                            ) WHERE ROWNUM = 1;
+                        END;
+                END;
+                
+                -- Вставляем задачу дня
+                INSERT INTO daily_puzzles (puzzle_date, puzzle_id) VALUES (v_today, v_new_puzzle_id);
+                v_puzzle_id_to_use := v_new_puzzle_id;
+                DBMS_OUTPUT.PUT_LINE('Daily Puzzle на сегодня успешно создан (ID: ' || v_new_puzzle_id || ').');
+            ELSE
+                -- Задача дня уже существует, получаем её ID
+                SELECT puzzle_id INTO v_puzzle_id_to_use
+                FROM daily_puzzles
+                WHERE puzzle_date = v_today
+                AND ROWNUM = 1;
+            END IF;
+        END;
+    ELSE
+        -- Используем переданный p_puzzle_id, если он есть
+        v_puzzle_id_to_use := p_puzzle_id;
+    END IF;
 
-    IF p_puzzle_id IS NOT NULL THEN
+    -- 1. Режим ЗАДАЧИ (Puzzle)
+    IF v_puzzle_id_to_use IS NOT NULL THEN
         DECLARE
             v_puzzle puzzles%ROWTYPE;
         BEGIN
-            SELECT * INTO v_puzzle FROM puzzles WHERE puzzle_id = p_puzzle_id;
+            SELECT * INTO v_puzzle FROM puzzles WHERE puzzle_id = v_puzzle_id_to_use;
             v_initial_position := v_puzzle.board_position;
             v_encoded_position := encode_board(v_initial_position);
             v_status := 'A';
-
+            
+            -- В задаче игрок всегда играет за сторону, чей ход (turn_to_move)
             IF v_puzzle.turn_to_move = 'W' THEN
                 v_white_player_id := v_current_player_id;
                 v_black_player_id := NULL;
@@ -1765,9 +2332,19 @@ BEGIN
                 v_creator_color   := 'B';
             END IF;
 
+            -- В задачах AI всегда играет против игрока
+            -- Для системных задач (created_by_player_id IS NULL) всегда используем сложность 'M'
+            -- Для пользовательских задач используем difficulty_level из пазла
             DECLARE
-                v_ai_difficulty_for_puzzle CHAR(1) := CASE WHEN v_puzzle.moves_to_solve IS NULL THEN v_puzzle.difficulty_level ELSE NULL END;
+                v_ai_difficulty_for_puzzle CHAR(1);
             BEGIN
+                -- Определяем сложность AI: для системных задач всегда 'M', для пользовательских - из пазла
+                IF v_puzzle.created_by_player_id IS NULL THEN
+                    v_ai_difficulty_for_puzzle := 'M'; -- Системные задачи всегда против AI сложности M
+                ELSE
+                    v_ai_difficulty_for_puzzle := v_puzzle.difficulty_level; -- Пользовательские задачи используют сложность из пазла
+                END IF;
+                
                 INSERT INTO games (
                     rule_id, player_white_id, player_black_id, 
                     creator_player_color,
@@ -1779,23 +2356,24 @@ BEGIN
                     v_puzzle.rule_id, v_white_player_id, v_black_player_id, 
                     v_creator_color,
                     v_status, v_puzzle.turn_to_move,
-                    p_puzzle_id, p_daily, 'p',
+                    v_puzzle_id_to_use, p_daily, 'p',
                     v_ai_difficulty_for_puzzle
                 )
                 RETURNING game_id INTO v_game_id;
             END;
             
-            v_status_message := 'Вы начали задачу ID ' || p_puzzle_id || '. (ID сессии: ' || v_game_id || ').';
+            v_status_message := 'Вы начали задачу ID ' || v_puzzle_id_to_use || '. (ID сессии: ' || v_game_id || ').';
             p_audit_log(v_current_player_id, v_game_id, 'START_PUZZLE');
         
         EXCEPTION
             WHEN NO_DATA_FOUND THEN
-                v_error_msg := 'Задача с ID ' || p_puzzle_id || ' не найдена.';
+                v_error_msg := 'Задача с ID ' || v_puzzle_id_to_use || ' не найдена.';
                 p_audit_log(v_current_player_id, NULL, v_error_msg);
                 DBMS_OUTPUT.PUT_LINE(v_error_msg);
                 RETURN;
         END;
-
+        
+    -- 2. Режим ИГРЫ (PvP / PvE)
     ELSIF p_puzzle_id IS NULL THEN
     
         DECLARE
@@ -1815,9 +2393,10 @@ BEGIN
         END IF;
         v_encoded_position := encode_board(v_initial_position);
 
+        -- 2.1. PvE (Игра с ИИ)
         IF p_ai_difficulty IS NOT NULL THEN
             v_status := 'A';
-
+            -- Если игрок выбрал белых, слот черных NULL (для ИИ), и наоборот
             IF v_white_player_id IS NULL THEN v_white_player_id := NULL; ELSE v_black_player_id := NULL; END IF;
 
             INSERT INTO games (
@@ -1835,6 +2414,7 @@ BEGIN
             v_status_message := 'Игра против ИИ создана (ID: ' || v_game_id || '). Вы играете за ' || CASE WHEN v_white_player_id = v_current_player_id THEN 'белых (W)' ELSE 'черных (B)' END || '.';
             p_audit_log(v_current_player_id, v_game_id, 'CREATE_PVE_GAME');
 
+            -- Если ИИ играет за белых (игрок выбрал черных или так выпало), ИИ делает первый ход
             IF v_white_player_id IS NULL THEN
                 v_ai_move := get_ai_move(v_encoded_position, 'W', p_rule_id, p_ai_difficulty);
                 IF v_ai_move IS NOT NULL THEN
@@ -1842,7 +2422,8 @@ BEGIN
                     v_status_message := v_status_message || ' ИИ начинает с хода: ' || v_ai_move;
                 END IF;
             END IF;
-
+        
+        -- 2.2. PvP (Игра с человеком)
         ELSIF p_opponent_username IS NOT NULL THEN
             IF v_current_username = UPPER(p_opponent_username) THEN 
                 v_error_msg := 'Нельзя вызвать самого себя.';
@@ -1864,7 +2445,7 @@ BEGIN
             END;
 
             IF v_white_player_id IS NULL THEN v_white_player_id := v_opponent_player_id; ELSE v_black_player_id := v_opponent_player_id; END IF;
-            v_status := 'C';
+            v_status := 'C'; -- Challenged
 
             INSERT INTO games (
                 creator_player_color, rule_id, player_white_id, player_black_id, status, current_turn, 
@@ -1880,7 +2461,8 @@ BEGIN
 
             v_status_message := 'Вызов игроку ' || p_opponent_username || ' брошен. Game ID: ' || v_game_id || '. Ожидайте принятия.';
             p_audit_log(v_current_player_id, v_game_id, 'CREATE_CHALLENGE');
-
+            
+        -- 2.3. Открытая игра (Open Game)
         ELSE
             v_status := 'O';
             INSERT INTO games (
@@ -1903,8 +2485,9 @@ BEGIN
 
     COMMIT;
     DBMS_OUTPUT.PUT_LINE(v_status_message);
-
-    IF (p_ai_difficulty IS NOT NULL AND v_white_player_id IS NULL) OR (p_puzzle_id IS NOT NULL) THEN
+    
+    -- Если игра активна сразу (PvE / Puzzle), показываем доску
+    IF (p_ai_difficulty IS NOT NULL AND v_white_player_id IS NULL) OR (v_puzzle_id_to_use IS NOT NULL) THEN
         print_active_board(
             p_game_id => v_game_id,
             p_username => NULL,
@@ -1918,6 +2501,14 @@ EXCEPTION
         p_audit_log(v_current_player_id, NULL, 'КРИТИЧЕСКАЯ ОШИБКА в create_game: ' || SQLERRM);
         DBMS_OUTPUT.PUT_LINE('Критическая ошибка при создании игры: ' || SQLERRM);
 END create_game;
+-- @procedure join_game
+-- @brief Allows a player to join an open or challenged game.
+-- @dependencies:
+--   - games (table)
+--   - players (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
 
 PROCEDURE join_game(p_game_id IN NUMBER) IS
     v_game             games%ROWTYPE;
@@ -1938,36 +2529,54 @@ BEGIN
             RETURN;
     END;
 
-    IF v_game.status = 'C' THEN
-        DECLARE
-            v_creator_id players.player_id%TYPE;
-        BEGIN
-            IF v_game.creator_player_color = 'W' THEN
-                v_creator_id := v_game.player_white_id;
-            ELSE
-                v_creator_id := v_game.player_black_id;
-            END IF;
-
-            IF NOT (v_player_id IN (v_game.player_white_id, v_game.player_black_id) AND v_player_id != v_creator_id) THEN
-                v_error_msg := 'Доступ запрещен. Этот вызов (ID: ' || p_game_id || ') предназначен не вам.';
-                p_audit_log(v_player_id, p_game_id, v_error_msg);
-                DBMS_OUTPUT.PUT_LINE(v_error_msg);
-                ROLLBACK; 
-                RETURN;
-            END IF;
-
-        END;
-
-    ELSIF v_game.status = 'O' THEN
-
-        IF v_player_id = v_game.player_white_id OR v_player_id = v_game.player_black_id THEN
-            v_error_msg := 'Нельзя присоединиться к собственной открытой игре (ID: ' || p_game_id || ').';
+    -- 1. Проверка статуса игры: должна быть 'O' (Open) или 'C' (Challenged)
+    IF v_game.status NOT IN ('O', 'C') THEN
+        v_error_msg := 'Нельзя присоединиться к этой игре (ID: ' || p_game_id || ', статус: '|| v_game.status || ').';
+        p_audit_log(v_player_id, p_game_id, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        ROLLBACK;
+        RETURN;
+    END IF;
+    
+    -- 2. Проверка: нельзя присоединиться к своей же игре (определяем создателя по creator_player_color)
+    DECLARE
+        v_creator_id players.player_id%TYPE;
+    BEGIN
+        -- Определяем создателя игры
+        IF v_game.creator_player_color = 'W' THEN
+            v_creator_id := v_game.player_white_id;
+        ELSE
+            v_creator_id := v_game.player_black_id;
+        END IF;
+        
+        -- Если игрок - создатель, нельзя присоединиться
+        IF v_player_id = v_creator_id THEN
+            v_error_msg := 'Нельзя присоединиться к собственной игре (ID: ' || p_game_id || ').';
             p_audit_log(v_player_id, p_game_id, v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             ROLLBACK;
             RETURN;
         END IF;
-
+        
+        -- Для вызова (статус 'C'): проверяем, что игрок находится в слоте оппонента (вызванным)
+        -- Если оба слота заполнены (player_white_id и player_black_id оба не NULL), это вызов
+        IF v_game.status = 'C' THEN
+            IF v_game.player_white_id IS NOT NULL AND v_game.player_black_id IS NOT NULL THEN
+                -- Это вызов: проверяем, что игрок находится в слоте оппонента
+                IF v_player_id NOT IN (v_game.player_white_id, v_game.player_black_id) THEN
+                    v_error_msg := 'Доступ запрещен. Этот вызов (ID: ' || p_game_id || ') предназначен не вам.';
+                    p_audit_log(v_player_id, p_game_id, v_error_msg);
+                    DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                    ROLLBACK; 
+                    RETURN;
+                END IF;
+            END IF;
+        END IF;
+    END;
+    
+    -- 4. Обновление статуса игры
+    IF v_game.status = 'O' THEN
+        -- Для открытой игры проверяем, не занят ли игрок в другой игре
         v_active_game_id := get_active_game(v_player_id);
         IF v_active_game_id IS NOT NULL AND v_active_game_id != p_game_id THEN
             v_error_msg := 'Вы уже участвуете в активной игре. ID вашей игры: ' || v_active_game_id;
@@ -1976,40 +2585,44 @@ BEGIN
             ROLLBACK;
             RETURN;
         END IF;
-    ELSE
-        v_error_msg := 'Нельзя присоединиться к этой игре (ID: ' || p_game_id || ', статус: '|| v_game.status || ').';
-        p_audit_log(v_player_id, p_game_id, v_error_msg);
-        DBMS_OUTPUT.PUT_LINE(v_error_msg);
-        ROLLBACK;
-        RETURN;
-    END IF;
-
-    IF v_game.status = 'O' THEN
+        
+        -- Обновление для открытой игры
         UPDATE games
         SET player_white_id = NVL(v_game.player_white_id, v_player_id),
             player_black_id = NVL(v_game.player_black_id, v_player_id),
             status          = 'A',
-            start_time      = SYSDATE
+            start_time      = SYSDATE,
+            time_white_remaining_sec = time_limit_game_sec,
+            time_black_remaining_sec = time_limit_game_sec
         WHERE game_id = p_game_id;
-    ELSE
+    ELSE -- 'C'
+        -- Обновление для вызова
         UPDATE games
-        SET status     = 'A',
-            start_time = SYSDATE
+        SET status                  = 'A',
+            start_time              = SYSDATE,
+            time_white_remaining_sec = time_limit_game_sec,
+            time_black_remaining_sec = time_limit_game_sec
         WHERE game_id = p_game_id;
     END IF;
-
+    
+    -- Создаем джоб таймаута игры если есть лимит времени на партию
     BEGIN
         DECLARE
-            v_time_limit NUMBER;
-            v_job_name VARCHAR2(128);
+            v_time_limit_game NUMBER;
+            v_job_name        VARCHAR2(128);
+            v_current_turn    CHAR(1);
+            v_time_remaining  NUMBER;
         BEGIN
-            SELECT time_limit_move_sec INTO v_time_limit
+            SELECT time_limit_game_sec, current_turn,
+                   CASE current_turn WHEN 'W' THEN time_white_remaining_sec ELSE time_black_remaining_sec END
+            INTO v_time_limit_game, v_current_turn, v_time_remaining
             FROM games
             WHERE game_id = p_game_id;
             
-            IF v_time_limit IS NOT NULL THEN
+            IF v_time_limit_game IS NOT NULL AND v_time_remaining IS NOT NULL THEN
                 v_job_name := 'MOVE_TIMEOUT_JOB_' || p_game_id;
-
+                
+                -- Создаем новый джоб для проверки времени игрока
                 DBMS_SCHEDULER.CREATE_JOB(
                     job_name   => v_job_name,
                     job_type   => 'PLSQL_BLOCK',
@@ -2023,11 +2636,11 @@ BEGIN
                                 WHEN NO_DATA_FOUND THEN
                                     RETURN;
                             END;
-
+                            
                             IF v_game.status != ''A'' THEN
                                 RETURN;
                             END IF;
-
+                            
                             v_loser_color := v_game.current_turn;
                             
                             UPDATE games
@@ -2040,15 +2653,15 @@ BEGIN
                             WHERE game_id = ' || p_game_id || ' AND left_at IS NULL;
                             
                             game_logic.p_update_ratings(' || p_game_id || ');
-                            game_logic.p_audit_log(NULL, ' || p_game_id || ', ''MOVE_TIMEOUT'');
+                            game_logic.p_audit_log(NULL, ' || p_game_id || ', ''GAME_TIMEOUT'');
                             COMMIT;
                         EXCEPTION
                             WHEN OTHERS THEN NULL;
                         END;',
-                    start_date => SYSTIMESTAMP + (v_time_limit / 86400),
+                    start_date => SYSTIMESTAMP + (GREATEST(1, v_time_remaining) / 86400),
                     enabled    => TRUE,
                     auto_drop  => TRUE,
-                    comments   => 'Move timeout job for game ' || p_game_id
+                    comments   => 'Game timeout job for game ' || p_game_id
                 );
             END IF;
         EXCEPTION
@@ -2057,7 +2670,22 @@ BEGIN
     END;
     
     p_audit_log(v_player_id, p_game_id, 'JOIN_GAME');
-    DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || '.');
+    
+    -- Выводим информацию о матче, если игра является частью матча
+    IF v_game.match_id IS NOT NULL THEN
+        DECLARE
+            v_match matches%ROWTYPE;
+        BEGIN
+            SELECT * INTO v_match FROM matches WHERE match_id = v_game.match_id;
+            DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || ' (часть матча ID ' || v_game.match_id || ', Best of ' || v_match.games_to_win || ').');
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || '.');
+        END;
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('Вы успешно присоединились к игре ID ' || p_game_id || '.');
+    END IF;
+    
     COMMIT;
 
 EXCEPTION
@@ -2067,6 +2695,17 @@ EXCEPTION
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         ROLLBACK;
 END join_game;
+-- @procedure resign_game
+-- @brief Allows a player to resign from an active game.
+-- @dependencies:
+--   - games (table)
+--   - players (table)
+--   - spectators (table)
+--   - matches (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
+--   - p_update_ratings (procedure)
 
 PROCEDURE resign_game(p_resign_match IN CHAR DEFAULT 'N') IS
     v_game        games%ROWTYPE;
@@ -2075,7 +2714,9 @@ PROCEDURE resign_game(p_resign_match IN CHAR DEFAULT 'N') IS
     v_error_msg   VARCHAR2(2000);
 BEGIN
     v_player_id := get_or_create_player_id(user);
-
+    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
+        v_game_id   := get_active_game(v_player_id);
+    -- Проверка: Нельзя сдаться, если ты зритель
     DECLARE
         v_spectating_game_id NUMBER;
     BEGIN
@@ -2098,9 +2739,6 @@ BEGIN
             RETURN;
         END IF;
     END;
-    
-    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
-    v_game_id   := get_active_game(v_player_id);
 
     IF v_game_id IS NULL THEN
         v_error_msg := 'У вас нет активной партии, чтобы сдаться.';
@@ -2119,6 +2757,7 @@ BEGIN
         RETURN;
     END IF;
 
+    -- 1. Сдача в режиме ПАЗЛА
     IF v_game.puzzle_id IS NOT NULL THEN
         p_finish_game(
             p_game_id       => v_game_id,
@@ -2128,7 +2767,8 @@ BEGIN
             p_player_id     => v_player_id
         );
         DBMS_OUTPUT.PUT_LINE('[OK] Вы вышли из попытки решения задачи (ID сессии: ' || v_game_id || ').');
-
+        
+    -- 2. Сдача в режиме ИГРЫ
     ELSE
         DECLARE
             v_winner_id       players.player_id%TYPE;
@@ -2142,7 +2782,8 @@ BEGIN
                 v_winner_id := v_game.player_white_id;
                 v_winner_color := 'W';
             END IF;
-
+            
+            -- Сдача во всем МАТЧЕ
             IF UPPER(p_resign_match) = 'Y' AND v_game.match_id IS NOT NULL THEN
                 UPDATE matches
                 SET status = 'C',
@@ -2176,10 +2817,22 @@ EXCEPTION
         ROLLBACK;
         RAISE;
 END resign_game;
+-- @procedure watch_game_replay
+-- @brief Allows a player to watch a replay of a finished game.
+-- @dependencies:
+--   - players (table)
+--   - games (table)
+--   - game_moves (table)
+--   - v_game_protocol (view)
+--   - get_or_create_player_id (function)
+--   - p_audit_log (procedure)
+--   - f_get_board_as_clob (function)
+--   - decode_board (function)
 
 PROCEDURE watch_game_replay(
     p_game_id       IN NUMBER,
-    p_moves_to_show IN NUMBER DEFAULT 1
+    p_moves_to_show IN NUMBER DEFAULT 1,
+    p_restart       IN CHAR   DEFAULT 'N'
 ) IS
     v_player_id      players.player_id%TYPE;
     v_seq_name       VARCHAR2(64);
@@ -2197,8 +2850,8 @@ PROCEDURE watch_game_replay(
     
     CURSOR c_game_moves (cp_game_id NUMBER, cp_move_number NUMBER) IS
         SELECT
-            username,
-            player_color,
+            move_player_username AS username,
+            move_player_color AS player_color,
             move_notation,
             board_position
         FROM v_game_protocol
@@ -2211,9 +2864,28 @@ BEGIN
     v_seq_name  := 'REPLAY_SEQ_' || p_game_id || '_' || v_player_id;
     v_job_name  := 'DROP_REPLAY_SEQ_' || p_game_id || '_' || v_player_id;
 
+    -- 1. Проверка или инициализация сессии
     SELECT COUNT(*) INTO v_session_exists 
     FROM user_sequences 
     WHERE sequence_name = v_seq_name;
+
+    -- Если p_restart = 'Y', удаляем существующую сессию и начинаем сначала
+    IF UPPER(p_restart) = 'Y' AND v_session_exists > 0 THEN
+        DBMS_OUTPUT.PUT_LINE('--[ Перезапуск просмотра с начала для игры ' || p_game_id || ' ]--');
+        -- Удаляем старый job
+        BEGIN 
+            DBMS_SCHEDULER.DROP_JOB(v_job_name, force => TRUE); 
+        EXCEPTION 
+            WHEN OTHERS THEN NULL; 
+        END;
+        -- Удаляем существующую последовательность
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP SEQUENCE ' || v_seq_name;
+        EXCEPTION
+            WHEN OTHERS THEN NULL;
+        END;
+        v_session_exists := 0; -- Помечаем, что сессии нет, чтобы создать новую
+    END IF;
 
     IF v_session_exists = 0 THEN
         DBMS_OUTPUT.PUT_LINE('--[ Создание новой сессии просмотра для игры ' || p_game_id || ' ]--');
@@ -2242,18 +2914,21 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             RETURN;
         END IF;
-
+        
+        -- Удаляем старый джоб очистки, если он завис
         BEGIN DBMS_SCHEDULER.DROP_JOB(v_job_name, force => TRUE); EXCEPTION WHEN OTHERS THEN NULL; END;
 
+        -- Создаем последовательность для навигации
         EXECUTE IMMEDIATE 'CREATE SEQUENCE ' || v_seq_name || 
                           ' START WITH 1 INCREMENT BY 1 MINVALUE 1 MAXVALUE ' || 
                           v_max_moves || ' NOCYCLE NOCACHE';
-
+        
+        -- Создаем джоб для удаления последовательности через 30 мин (Garbage Collection)
         DBMS_SCHEDULER.create_job(
             job_name   => v_job_name,
             job_type   => 'PLSQL_BLOCK',
             job_action => 'BEGIN EXECUTE IMMEDIATE ''DROP SEQUENCE ' || v_seq_name || '''; END;',
-            start_date => SYSTIMESTAMP + INTERVAL '1' HOUR,
+            start_date => SYSTIMESTAMP + INTERVAL '24' HOUR,
             enabled    => TRUE,
             auto_drop  => TRUE,
             comments   => 'Drop replay sequence for game ' || p_game_id || ' player ' || v_player_id
@@ -2261,18 +2936,20 @@ BEGIN
         COMMIT;
         
     END IF;
-
+    
+    -- Если сессия уже была, загружаем данные игры для финализации
     IF v_game_rec.game_id IS NULL THEN
          SELECT * INTO v_game_rec FROM games WHERE game_id = p_game_id;
     END IF;
 
+    -- 2. Вывод ходов
     FOR i IN 1 .. p_moves_to_show LOOP
         BEGIN
             BEGIN
                 EXECUTE IMMEDIATE 'SELECT ' || v_seq_name || '.NEXTVAL FROM DUAL' INTO v_move_num;
             EXCEPTION
                 WHEN OTHERS THEN
-                    IF SQLCODE = -8004 THEN
+                    IF SQLCODE = -8004 THEN -- MAXVALUE exceeded
                         v_replay_finished := TRUE;
                     ELSE
                         v_error_msg := 'Ошибка сессии просмотра (ID: ' || p_game_id || '). ' || SQLERRM;
@@ -2283,7 +2960,7 @@ BEGIN
             END;
 
             IF v_replay_finished THEN
-
+                -- Формирование финального сообщения
                 BEGIN
                     IF v_game_rec.status = 'D' THEN
                         v_final_message := 'Ничья.';
@@ -2332,17 +3009,40 @@ BEGIN
                 EXIT;
             END IF;
 
-            FOR move_rec IN c_game_moves(p_game_id, v_move_num) LOOP
-                v_color_str := CASE move_rec.player_color WHEN 'W' THEN '(Белые)' ELSE '(Черные)' END;
+            -- Печать хода
+            DECLARE
+                v_move_username players.username%TYPE;
+                v_move_color CHAR(1);
+                v_move_notation VARCHAR2(100);
+                v_move_board_position VARCHAR2(100);
+            BEGIN
+                SELECT 
+                    move_player_username,
+                    move_player_color,
+                    move_notation,
+                    board_position
+                INTO
+                    v_move_username,
+                    v_move_color,
+                    v_move_notation,
+                    v_move_board_position
+                FROM v_game_protocol
+                WHERE game_id = p_game_id AND move_number = v_move_num
+                AND ROWNUM = 1;
+                
+                v_color_str := CASE v_move_color WHEN 'W' THEN '(Белые)' ELSE '(Черные)' END;
                 DBMS_OUTPUT.PUT_LINE('---');
                 DBMS_OUTPUT.PUT_LINE(
                     'Ход ' || v_move_num || ' ' || 
-                    RPAD(NVL(move_rec.username, 'AI'), 20) || ' ' ||
+                    RPAD(NVL(v_move_username, 'AI'), 20) || ' ' ||
                     RPAD(v_color_str, 10) || ' : ' || 
-                    move_rec.move_notation
+                    v_move_notation
                 );
-                DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(decode_board(move_rec.board_position)));
-            END LOOP;
+                DBMS_OUTPUT.PUT_LINE(f_get_board_as_clob(decode_board(v_move_board_position)));
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    DBMS_OUTPUT.PUT_LINE('Ход ' || v_move_num || ' не найден.');
+            END;
 
         END;
     END LOOP;
@@ -2352,27 +3052,55 @@ EXCEPTION
         p_audit_log(v_player_id, p_game_id, SUBSTR(v_error_msg, 1, 2000));
         RAISE;
 END watch_game_replay;
+-- @procedure stop_spectating
+-- @brief Allows a player to stop spectating a game.
+-- @dependencies:
+--   - spectators (table)
+--   - get_or_create_player_id (function)
 
 PROCEDURE stop_spectating IS
     v_player_id players.player_id%TYPE;
-    v_count     PLS_INTEGER;
+    v_game_id   games.game_id%TYPE;
 BEGIN
     v_player_id := get_or_create_player_id(USER);
     
-    UPDATE spectators
-    SET left_at = SYSDATE
-    WHERE player_id = v_player_id
-      AND left_at IS NULL;
-    
-    COMMIT;
-    
-    IF SQL%ROWCOUNT > 0 THEN
-        DBMS_OUTPUT.PUT_LINE('Вы вышли из режима просмотра.');
-    ELSE
-        DBMS_OUTPUT.PUT_LINE('Вы не находились в режиме просмотра.');
-    END IF;
+    -- Проверяем, есть ли активная сессия просмотра
+    BEGIN
+        SELECT game_id
+        INTO v_game_id
+        FROM spectators
+        WHERE player_id = v_player_id
+          AND left_at IS NULL
+        AND ROWNUM = 1;
+        
+        -- Если найдена активная сессия, завершаем её
+        UPDATE spectators
+        SET left_at = SYSDATE
+        WHERE player_id = v_player_id
+          AND left_at IS NULL;
+        
+        COMMIT;
+        DBMS_OUTPUT.PUT_LINE('Вы вышли из режима просмотра (ID игры = ' || v_game_id || ').');
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            DBMS_OUTPUT.PUT_LINE('Вы не находитесь в режиме просмотра.');
+    END;
     
 END stop_spectating;
+-- @procedure print_active_board
+-- @brief Prints the active board of a game, with optional highlighting and waiting for the player's turn.
+-- @dependencies:
+--   - games (table)
+--   - players (table)
+--   - spectators (table)
+--   - game_moves (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
+--   - decode_board (function)
+--   - find_all_player_moves (function)
+--   - f_get_board_as_clob (function)
+--   - t_map_indices, t_move_list (types)
 
 PROCEDURE print_active_board(
     p_game_id       IN NUMBER   DEFAULT NULL,
@@ -2394,7 +3122,8 @@ PROCEDURE print_active_board(
     v_loop_start_time  DATE;
     v_timeout_sec      NUMBER;
     v_wait_message     VARCHAR2(200);
-
+    
+    -- Для логики отрисовки
     v_board_size       PLS_INTEGER;
 
 BEGIN
@@ -2435,7 +3164,8 @@ BEGIN
             RETURN;
         END IF;
     END IF;
-
+    
+    -- Проверяем существование игры
     BEGIN
         SELECT * INTO v_game FROM games WHERE game_id = v_target_game_id;
     EXCEPTION
@@ -2445,7 +3175,8 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
             RETURN;
     END;
-
+    
+    -- Проверяем, есть ли уже активная сессия просмотра ДРУГОЙ игры
     DECLARE
         v_existing_spectator_game_id NUMBER;
     BEGIN
@@ -2453,40 +3184,53 @@ BEGIN
         FROM spectators
         WHERE player_id = v_viewer_player_id
           AND left_at IS NULL
-          AND game_id = v_target_game_id
+          AND game_id != v_target_game_id
           AND ROWNUM = 1;
         
         IF v_existing_spectator_game_id IS NOT NULL THEN
-            DBMS_OUTPUT.PUT_LINE('--[ У вас уже есть активная сессия просмотра (ID: ' || v_target_game_id || ') ]--');
-            DBMS_OUTPUT.PUT_LINE('--[ Для отмены вызовите: game_logic.stop_spectating; ]--');
+            DBMS_OUTPUT.PUT_LINE('--[ У вас уже есть активная сессия просмотра другой игры (ID: ' || v_existing_spectator_game_id || ') ]--');
         END IF;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-            NULL;
+            NULL; -- Нет активной сессии другой игры, продолжаем
     END;
-
+    
+    -- Завершаем другие просмотры
     UPDATE spectators
     SET left_at = SYSDATE
     WHERE player_id = v_viewer_player_id
       AND left_at IS NULL
       AND game_id != v_target_game_id;
-
+    
+    -- Вход зрителя
     IF v_viewer_player_id NOT IN (v_game.player_white_id, v_game.player_black_id)
        AND v_game.status IN ('A', 'O', 'C')
     THEN
-        MERGE INTO spectators s
-        USING (SELECT v_viewer_player_id AS player_id, v_target_game_id AS game_id FROM DUAL) d
-        ON (s.player_id = d.player_id AND s.game_id = d.game_id AND s.left_at IS NULL)
-        WHEN NOT MATCHED THEN
-            INSERT (player_id, game_id, joined_at)
-            VALUES (d.player_id, d.game_id, SYSDATE);
-        
-        p_audit_log(v_viewer_player_id, v_target_game_id, 'SPECTATOR_JOIN');
-        DBMS_OUTPUT.PUT_LINE('--[ Вы вошли в режим просмотра (ID: ' || v_target_game_id || ') ]--');
+        -- Проверяем, есть ли уже активная сессия, и вставляем только если её нет
+        DECLARE
+            v_existing_count NUMBER;
+        BEGIN
+            SELECT COUNT(*) INTO v_existing_count
+            FROM spectators
+            WHERE player_id = v_viewer_player_id
+              AND game_id = v_target_game_id
+              AND left_at IS NULL;
+            
+            IF v_existing_count = 0 THEN
+                -- Новой сессии нет - вставляем и выводим сообщение
+                INSERT INTO spectators (player_id, game_id, joined_at)
+                VALUES (v_viewer_player_id, v_target_game_id, SYSDATE);
+                
+                p_audit_log(v_viewer_player_id, v_target_game_id, 'SPECTATOR_JOIN');
+                DBMS_OUTPUT.PUT_LINE('--[ Вы вошли в режим просмотра (ID: ' || v_target_game_id || ') ]--');
+                DBMS_OUTPUT.PUT_LINE('--[ Для отмены вызовите: game_logic.stop_spectating; ]--');
+            END IF;
+        END;
     END IF;
     
     COMMIT;
 
+    -- Определение цвета игрока (если это участник)
     DECLARE
         v_active_player_id  players.player_id%TYPE;
         v_highlight_indices t_map_indices;
@@ -2501,28 +3245,107 @@ BEGIN
             v_my_color := NULL; 
         END IF;
 
-        IF UPPER(p_wait_for_turn) = 'Y' AND v_game.status = 'A' THEN
-
-            IF v_my_color IS NOT NULL AND v_game.current_turn = v_my_color THEN
-
-                NULL;
-            ELSE
-                DECLARE
-                    v_initial_turn CHAR(1) := v_game.current_turn;
-                    v_initial_move_count NUMBER;
-                BEGIN
+        -- Логика ожидания подключения для открытых/вызванных игр
+        DECLARE
+            v_waited_for_connection BOOLEAN := FALSE;
+        BEGIN
+            IF v_game.status IN ('O', 'C') THEN
+                IF UPPER(p_wait_for_turn) = 'Y' THEN
+                    -- Ждем, пока кто-то подключится
+                    v_waited_for_connection := TRUE;
+                    DECLARE
+                        v_initial_white_id games.player_white_id%TYPE := v_game.player_white_id;
+                        v_initial_black_id games.player_black_id%TYPE := v_game.player_black_id;
+                        v_connected_player_id players.player_id%TYPE;
+                        v_connected_username players.username%TYPE;
+                        v_connected_color CHAR(1);
+                    BEGIN
+                        v_loop_start_time := SYSDATE;
+                        v_timeout_sec := 300; -- 5 минут тайм-аут
+                        
+                        -- Ждем, пока кто-то подключится (изменятся player_white_id или player_black_id)
+                        WHILE v_game.status IN ('O', 'C')
+                        AND SYSDATE < v_loop_start_time + (v_timeout_sec / 86400)
+                        LOOP
+                            SELECT * INTO v_game FROM games WHERE game_id = v_target_game_id;
+                            
+                            -- Проверяем, подключился ли кто-то
+                            IF (v_game.player_white_id IS NOT NULL AND v_game.player_white_id != v_initial_white_id) OR
+                               (v_game.player_black_id IS NOT NULL AND v_game.player_black_id != v_initial_black_id)
+                            THEN
+                                -- Определяем, кто подключился
+                                IF v_game.player_white_id IS NOT NULL AND v_game.player_white_id != v_initial_white_id THEN
+                                    v_connected_player_id := v_game.player_white_id;
+                                    v_connected_color := 'W';
+                                ELSIF v_game.player_black_id IS NOT NULL AND v_game.player_black_id != v_initial_black_id THEN
+                                    v_connected_player_id := v_game.player_black_id;
+                                    v_connected_color := 'B';
+                                END IF;
+                                
+                                -- Получаем имя подключившегося игрока
+                                BEGIN
+                                    SELECT username INTO v_connected_username
+                                    FROM players
+                                    WHERE player_id = v_connected_player_id;
+                                EXCEPTION
+                                    WHEN NO_DATA_FOUND THEN
+                                        v_connected_username := 'Неизвестный игрок';
+                                END;
+                                
+                                -- Выводим сообщение о подключении
+                                DBMS_OUTPUT.PUT_LINE('Игрок ' || v_connected_username || ' подключился к игре (цвет: ' || 
+                                                     CASE v_connected_color WHEN 'W' THEN 'белые' ELSE 'черные' END || ').');
+                                
+                                -- Обновляем v_game для получения актуального состояния
+                                SELECT * INTO v_game FROM games WHERE game_id = v_target_game_id;
+                                
+                                -- Обновляем v_my_color, так как пользователь может быть подключившимся игроком
+                                IF v_game.player_white_id = v_viewer_player_id THEN
+                                    v_my_color := 'W';
+                                ELSIF v_game.player_black_id = v_viewer_player_id THEN
+                                    v_my_color := 'B';
+                                END IF;
+                                
+                                EXIT;
+                            END IF;
+                            
+                            dbms_session.sleep(3);
+                        END LOOP;
+                        
+                        -- Если игра все еще не началась, выводим сообщение о тайм-ауте
+                        IF v_game.status IN ('O', 'C') THEN
+                            DBMS_OUTPUT.PUT_LINE('Тайм-аут ожидания подключения (5 минут).');
+                            RETURN; -- Выходим, не показывая доску
+                        END IF;
+                        
+                        -- Обновляем v_game еще раз на случай, если игра перешла в статус 'A'
+                        SELECT * INTO v_game FROM games WHERE game_id = v_target_game_id;
+                    END;
+                ELSE
+                    -- Не ждем, просто выводим сообщение
+                    DBMS_OUTPUT.PUT_LINE('К игре еще никто не подключился.');
+                    RETURN; -- Выходим, не показывая доску
+                END IF;
+            END IF;
+            
+            -- Логика ожидания хода (для участников и зрителей активных игр)
+            -- НЕ входим в этот цикл, если только что вышли из цикла ожидания подключения
+            IF UPPER(p_wait_for_turn) = 'Y' AND v_game.status = 'A' AND NOT v_waited_for_connection THEN
+                -- Для участников: если сейчас его ход, не ждем, просто показываем доску
+                IF v_my_color IS NOT NULL AND v_game.current_turn = v_my_color THEN
+                    -- Не ждем, просто продолжаем показ доски
+                    NULL;
+                ELSE
+                    DECLARE
+                        v_initial_turn CHAR(1) := v_game.current_turn;
+                        v_initial_move_count NUMBER;
+                    BEGIN
                     SELECT COUNT(*) INTO v_initial_move_count FROM game_moves WHERE game_id = v_target_game_id;
                     
                     v_loop_start_time := SYSDATE;
                     v_timeout_sec := NVL(v_game.time_limit_move_sec, 300); 
-
-                    DBMS_OUTPUT.PUT_LINE('---');
-                    IF v_my_color IS NOT NULL THEN
-                        DBMS_OUTPUT.PUT_LINE('Ожидание вашего хода... (Тайм-аут ожидания: 5 минут)');
-                    ELSE
-                        DBMS_OUTPUT.PUT_LINE('Ожидание следующего хода... (Тайм-аут ожидания: 5 минут)');
-                    END IF;
-
+                    
+                    -- Для участников: ждем своего хода, для зрителей: ждем любого изменения
                     WHILE v_game.status = 'A' 
                     AND SYSDATE < v_loop_start_time + (v_timeout_sec / 86400) 
                     LOOP
@@ -2530,12 +3353,13 @@ BEGIN
                             v_current_move_count NUMBER;
                         BEGIN
                             SELECT COUNT(*) INTO v_current_move_count FROM game_moves WHERE game_id = v_target_game_id;
-
+                            
+                            -- Для участников: проверяем, наш ли ход
                             IF v_my_color IS NOT NULL THEN
                                 IF v_game.current_turn = v_my_color THEN
                                     EXIT;
                                 END IF;
-
+                            -- Для зрителей: проверяем, был ли сделан новый ход
                             ELSIF v_current_move_count > v_initial_move_count OR v_game.current_turn != v_initial_turn THEN
                                 EXIT;
                             END IF;
@@ -2545,30 +3369,56 @@ BEGIN
                         SELECT * INTO v_game FROM games WHERE game_id = v_target_game_id;
                     END LOOP;
                     
-                    IF v_my_color IS NOT NULL AND v_game.current_turn = v_my_color THEN
-                        v_wait_message := 'ВАШ ХОД!';
-                    ELSIF v_game.status != 'A' THEN
-                        v_wait_message := 'Игра завершилась во время ожидания (Статус: ' || v_game.status || ').';
-                    ELSE 
-                        v_wait_message := 'Тайм-аут ожидания. Ход не сделан.';
+                    -- Определяем причину выхода из цикла ожидания
+                    IF v_my_color IS NOT NULL THEN
+                        -- Для участников
+                        IF v_game.current_turn = v_my_color THEN
+                            v_wait_message := 'ВАШ ХОД!';
+                        ELSIF v_game.status != 'A' THEN
+                            v_wait_message := 'Игра завершилась во время ожидания (Статус: ' || v_game.status || ').';
+                        ELSE 
+                            v_wait_message := 'Тайм-аут ожидания. Ход не сделан.';
+                        END IF;
+                    ELSE
+                        -- Для зрителей: показываем сообщение о тайм-ауте только если действительно произошел тайм-аут
+                        DECLARE
+                            v_current_move_count NUMBER;
+                            v_was_move_made BOOLEAN := FALSE;
+                        BEGIN
+                            SELECT COUNT(*) INTO v_current_move_count FROM game_moves WHERE game_id = v_target_game_id;
+                            v_was_move_made := (v_current_move_count > v_initial_move_count) OR (v_game.current_turn != v_initial_turn);
+                            
+                            IF v_game.status != 'A' THEN
+                                v_wait_message := 'Игра завершилась во время ожидания (Статус: ' || v_game.status || ').';
+                            ELSIF NOT v_was_move_made AND v_game.status = 'A' THEN
+                                -- Только если не было нового хода и игра еще активна - значит тайм-аут
+                                v_wait_message := 'Тайм-аут ожидания. Ход не сделан.';
+                            END IF;
+                            -- Если был сделан ход, v_wait_message остается NULL (не показываем сообщение)
+                        END;
                     END IF;
                 END;
+                END IF;
             END IF;
-        END IF;
-
+        END;
+        
+        -- Получаем текущую позицию доски: из последнего хода или начальная позиция
         v_decoded_board := f_get_current_board_position(v_target_game_id, v_game.rule_id);
-
+        
+        -- Если игра закончилась пока ждали, выводим доску и информацию о победителе
         IF v_game.status NOT IN ('A', 'O', 'C') THEN
-
+            -- Инициализируем карту для отрисовки
             v_board_size := SQRT(LENGTH(v_decoded_board));
             p_init_board_map(v_board_size);
-
+            
+            -- Выводим доску
             v_printable_board := f_get_board_as_clob(v_decoded_board);
             DBMS_OUTPUT.PUT_LINE('==================================================');
             DBMS_OUTPUT.PUT_LINE('ИГРА ЗАВЕРШЕНА');
             DBMS_OUTPUT.PUT_LINE('==================================================');
             DBMS_OUTPUT.PUT_LINE(v_printable_board);
-
+            
+            -- Выводим информацию о победителе
             DECLARE
                 v_winner_id players.player_id%TYPE;
                 v_loser_id  players.player_id%TYPE;
@@ -2635,7 +3485,10 @@ BEGIN
                 END IF;
             END;
             
-            DBMS_OUTPUT.PUT_LINE('-- Используйте watch_game_replay(' || v_target_game_id || ') для просмотра полной партии.');
+            -- Показываем сообщение про replay только для обычных игр, не для пазлов
+            IF v_game.puzzle_id IS NULL THEN
+                DBMS_OUTPUT.PUT_LINE('-- Используйте watch_game_replay(' || v_target_game_id || ') для просмотра полной партии.');
+            END IF;
             
             UPDATE spectators SET left_at = SYSDATE 
             WHERE player_id = v_viewer_player_id AND game_id = v_target_game_id AND left_at IS NULL;
@@ -2643,12 +3496,14 @@ BEGIN
             
             RETURN;
         END IF;
-
+        
+        -- [ВАЖНО] Инициализируем карту для корректной работы подсветки ходов
         v_board_size := SQRT(LENGTH(v_decoded_board));
         p_init_board_map(v_board_size);
 
         v_active_player_id := CASE v_game.current_turn WHEN 'W' THEN v_game.player_white_id ELSE v_game.player_black_id END;
-
+        
+        -- Подсветка возможных ходов (только для активного игрока)
         IF v_game.status = 'A' AND v_viewer_player_id = v_active_player_id THEN
             v_legal_moves := find_all_player_moves(v_decoded_board, v_game.current_turn, v_game.rule_id);
             IF v_legal_moves.COUNT > 0 AND v_legal_moves(1).is_capture = 'Y' THEN
@@ -2665,44 +3520,155 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE(v_wait_message);
         END IF;
 
-        DECLARE
-            v_white_player_name players.username%TYPE;
-            v_black_player_name players.username%TYPE;
-            v_players_info VARCHAR2(500) := '';
-        BEGIN
-            IF v_game.player_white_id IS NOT NULL THEN
-                BEGIN
-                    SELECT username INTO v_white_player_name FROM players WHERE player_id = v_game.player_white_id;
-                EXCEPTION
-                    WHEN NO_DATA_FOUND THEN
-                        v_white_player_name := 'AI (difficulty_level: ' || NVL(v_game.ai_difficulty, 'N') || ')';
-                END;
-            ELSE
-                v_white_player_name := 'AI (difficulty_level: ' || NVL(v_game.ai_difficulty, 'N') || ')';
-            END IF;
-            
-            IF v_game.player_black_id IS NOT NULL THEN
-                BEGIN
-                    SELECT username INTO v_black_player_name FROM players WHERE player_id = v_game.player_black_id;
-                EXCEPTION
-                    WHEN NO_DATA_FOUND THEN
-                        v_black_player_name := 'AI (difficulty_level: ' || NVL(v_game.ai_difficulty, 'N') || ')';
-                END;
-            ELSE
-                v_black_player_name := 'AI (difficulty_level: ' || NVL(v_game.ai_difficulty, 'N') || ')';
-            END IF;
-            
-            v_players_info := 'Белые: ' || v_white_player_name || ' | Черные: ' || v_black_player_name;
-            DBMS_OUTPUT.PUT_LINE(v_players_info);
-        END;
-        
+        -- Вывод информации о противниках только для активных игр (статус 'A')
         IF v_game.status = 'A' THEN
+            DECLARE
+                v_white_player_name players.username%TYPE;
+                v_black_player_name players.username%TYPE;
+                v_players_info VARCHAR2(500) := '';
+                v_ai_difficulty_to_show CHAR(1);
+            BEGIN
+                -- Для задач получаем difficulty_level из таблицы puzzles
+                IF v_game.puzzle_id IS NOT NULL THEN
+                    BEGIN
+                        SELECT difficulty_level INTO v_ai_difficulty_to_show
+                        FROM puzzles
+                        WHERE puzzle_id = v_game.puzzle_id;
+                    EXCEPTION
+                        WHEN NO_DATA_FOUND THEN
+                            v_ai_difficulty_to_show := v_game.ai_difficulty;
+                    END;
+                ELSE
+                    v_ai_difficulty_to_show := v_game.ai_difficulty;
+                END IF;
+                
+                IF v_game.player_white_id IS NOT NULL THEN
+                    BEGIN
+                        SELECT username INTO v_white_player_name FROM players WHERE player_id = v_game.player_white_id;
+                    EXCEPTION
+                        WHEN NO_DATA_FOUND THEN
+                            v_white_player_name := 'AI (difficulty_level: ' || NVL(v_ai_difficulty_to_show, 'N') || ')';
+                    END;
+                ELSE
+                    v_white_player_name := 'AI (difficulty_level: ' || NVL(v_ai_difficulty_to_show, 'N') || ')';
+                END IF;
+                
+                IF v_game.player_black_id IS NOT NULL THEN
+                    BEGIN
+                        SELECT username INTO v_black_player_name FROM players WHERE player_id = v_game.player_black_id;
+                    EXCEPTION
+                        WHEN NO_DATA_FOUND THEN
+                            v_black_player_name := 'AI (difficulty_level: ' || NVL(v_ai_difficulty_to_show, 'N') || ')';
+                    END;
+                ELSE
+                    v_black_player_name := 'AI (difficulty_level: ' || NVL(v_ai_difficulty_to_show, 'N') || ')';
+                END IF;
+                
+                v_players_info := 'Белые: ' || v_white_player_name || ' | Черные: ' || v_black_player_name;
+                DBMS_OUTPUT.PUT_LINE(v_players_info);
+                
+                -- Отображение информации о матче (если игра является частью матча)
+                IF v_game.match_id IS NOT NULL THEN
+                    DECLARE
+                        v_match matches%ROWTYPE;
+                        v_player1_id players.player_id%TYPE;
+                        v_player2_id players.player_id%TYPE;
+                        v_player1_wins NUMBER := 0;
+                        v_player2_wins NUMBER := 0;
+                        v_player1_name players.username%TYPE;
+                        v_player2_name players.username%TYPE;
+                        v_match_info VARCHAR2(500);
+                    BEGIN
+                        SELECT * INTO v_match FROM matches WHERE match_id = v_game.match_id;
+                        
+                        -- Получаем игроков из первой игры матча
+                        BEGIN
+                            SELECT player_white_id, player_black_id
+                            INTO v_player1_id, v_player2_id
+                            FROM (
+                                SELECT player_white_id, player_black_id
+                                FROM games
+                                WHERE match_id = v_game.match_id
+                                ORDER BY game_id ASC
+                            )
+                            WHERE ROWNUM = 1;
+                        EXCEPTION
+                            WHEN NO_DATA_FOUND THEN
+                                NULL;
+                        END;
+                        
+                        -- Подсчитываем победы
+                        IF v_player1_id IS NOT NULL AND v_player2_id IS NOT NULL THEN
+                            FOR r IN (
+                                SELECT winner_player_color, status
+                                FROM games
+                                WHERE match_id = v_game.match_id
+                                  AND status IN ('V', 'D', 'T', 'R')
+                            ) LOOP
+                                IF r.status = 'V' THEN
+                                    IF r.winner_player_color = 'W' THEN
+                                        v_player1_wins := v_player1_wins + 1;
+                                    ELSIF r.winner_player_color = 'B' THEN
+                                        v_player2_wins := v_player2_wins + 1;
+                                    END IF;
+                                END IF;
+                            END LOOP;
+                            
+                            -- Получаем имена игроков
+                            BEGIN
+                                SELECT username INTO v_player1_name FROM players WHERE player_id = v_player1_id;
+                            EXCEPTION
+                                WHEN NO_DATA_FOUND THEN
+                                    v_player1_name := 'Игрок 1';
+                            END;
+                            
+                            BEGIN
+                                SELECT username INTO v_player2_name FROM players WHERE player_id = v_player2_id;
+                            EXCEPTION
+                                WHEN NO_DATA_FOUND THEN
+                                    v_player2_name := 'Игрок 2';
+                            END;
+                            
+                            -- Формируем информацию о матче
+                            v_match_info := 'Матч (ID: ' || v_game.match_id || ', Best of ' || v_match.games_to_win || 
+                                          ') | Счет: ' || v_player1_name || ' ' || v_player1_wins || ':' || v_player2_wins || ' ' || v_player2_name ||
+                                          ' | Нужно для победы: ' || (TRUNC(v_match.games_to_win / 2) + 1) || ' игры';
+                            
+                            DBMS_OUTPUT.PUT_LINE(v_match_info);
+                        END IF;
+                    EXCEPTION
+                        WHEN NO_DATA_FOUND THEN
+                            NULL; -- Матч не найден, игнорируем
+                    END;
+                END IF;
+            END;
             SELECT COUNT(*) INTO v_move_count FROM game_moves WHERE game_id = v_target_game_id;
             IF v_active_player_id IS NOT NULL THEN
                 SELECT p.username INTO v_player_username FROM players p WHERE p.player_id = v_active_player_id;
             END IF;
-            v_status_header := 'Ход(#' || (v_move_count + 1) || ') игрока: ' || NVL(v_player_username, 'AI (Server)') || ' (' || v_game.current_turn || ')';
-
+            
+            -- Для задач добавляем "Задача №" в статус
+            IF v_game.puzzle_id IS NOT NULL THEN
+                DECLARE
+                    v_puzzle_difficulty CHAR(1);
+                BEGIN
+                    SELECT difficulty_level INTO v_puzzle_difficulty
+                    FROM puzzles
+                    WHERE puzzle_id = v_game.puzzle_id;
+                    
+                    v_status_header := 'Задача №' || v_game.puzzle_id || ' (Сложность: ' || 
+                                      CASE v_puzzle_difficulty WHEN 'E' THEN 'Легкая' WHEN 'M' THEN 'Средняя' WHEN 'H' THEN 'Сложная' ELSE v_puzzle_difficulty END || 
+                                      ') | Ход(#' || (v_move_count + 1) || ') игрока: ' || 
+                                      NVL(v_player_username, 'AI (Server)') || ' (' || v_game.current_turn || ')';
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        v_status_header := 'Ход(#' || (v_move_count + 1) || ') игрока: ' || NVL(v_player_username, 'AI (Server)') || ' (' || v_game.current_turn || ')';
+                END;
+            ELSE
+                v_status_header := 'Ход(#' || (v_move_count + 1) || ') игрока: ' || NVL(v_player_username, 'AI (Server)') || ' (' || v_game.current_turn || ')';
+            END IF;
+            
+            -- Вывод информации о предложении ничьей (если есть)
             IF v_game.draw_offer_status = 'O' AND v_game.draw_offered_by_color IS NOT NULL THEN
                 IF v_my_color IS NOT NULL AND v_game.draw_offered_by_color != v_my_color THEN
                     v_status_header := v_status_header || ' | ВАМ ПРЕДЛОЖЕНА НИЧЬЯ (примите: A)';
@@ -2712,30 +3678,26 @@ BEGIN
                     v_status_header := v_status_header || ' | Предложение ничьей от ' || CASE v_game.draw_offered_by_color WHEN 'W' THEN 'белых' ELSE 'черных' END;
                 END IF;
             END IF;
-
+            
+            -- Вывод информации о времени (оптимизированное вычисление)
             DECLARE
                 v_time_info VARCHAR2(500) := '';
                 v_current_time DATE := SYSDATE;
-                v_elapsed_sec NUMBER;
-                v_remaining_sec NUMBER;
-                v_end_time DATE;
                 v_last_move_time DATE;
                 v_move_elapsed_sec NUMBER;
                 v_move_remaining_sec NUMBER;
                 v_move_end_time DATE;
+                v_white_time_remaining NUMBER;
+                v_black_time_remaining NUMBER;
+                v_white_end_time DATE;
+                v_black_end_time DATE;
             BEGIN
-
-                IF v_game.time_limit_game_sec IS NOT NULL THEN
-                    v_elapsed_sec := (v_current_time - v_game.start_time) * 86400;
-                    v_remaining_sec := GREATEST(0, v_game.time_limit_game_sec - v_elapsed_sec);
-                    v_end_time := v_game.start_time + (v_game.time_limit_game_sec / 86400);
+                -- Шахматные часы: время каждого игрока отдельно
+                IF v_game.time_limit_game_sec IS NOT NULL AND 
+                   v_game.time_white_remaining_sec IS NOT NULL AND 
+                   v_game.time_black_remaining_sec IS NOT NULL THEN
                     
-                    v_time_info := v_time_info || 'Время на партию: осталось ' || 
-                                   ROUND(v_remaining_sec) || ' сек (закончится ' || 
-                                   TO_CHAR(v_end_time, 'DD.MM.YYYY HH24:MI:SS') || ')';
-                END IF;
-
-                IF v_game.time_limit_move_sec IS NOT NULL THEN
+                    -- Получаем время последнего хода для расчета текущего времени игрока
                     BEGIN
                         SELECT MAX(move_timestamp) INTO v_last_move_time
                         FROM game_moves
@@ -2745,31 +3707,85 @@ BEGIN
                             v_last_move_time := v_game.start_time;
                     END;
                     
-                    v_move_elapsed_sec := (v_current_time - v_last_move_time) * 86400;
-                    v_move_remaining_sec := GREATEST(0, v_game.time_limit_move_sec - v_move_elapsed_sec);
-                    v_move_end_time := v_last_move_time + (v_game.time_limit_move_sec / 86400);
-                    
-                    IF v_time_info IS NOT NULL THEN
-                        v_time_info := v_time_info || ' | ';
+                    -- Рассчитываем текущее оставшееся время для каждого игрока
+                    -- Для текущего игрока вычитаем время с последнего хода
+                    IF v_game.current_turn = 'W' THEN
+                        v_move_elapsed_sec := (v_current_time - v_last_move_time) * 86400;
+                        v_white_time_remaining := GREATEST(0, v_game.time_white_remaining_sec - v_move_elapsed_sec);
+                        v_black_time_remaining := v_game.time_black_remaining_sec;
+                    ELSE
+                        v_move_elapsed_sec := (v_current_time - v_last_move_time) * 86400;
+                        v_white_time_remaining := v_game.time_white_remaining_sec;
+                        v_black_time_remaining := GREATEST(0, v_game.time_black_remaining_sec - v_move_elapsed_sec);
                     END IF;
-                    v_time_info := v_time_info || 'Время на ход: осталось ' || 
-                                  ROUND(v_move_remaining_sec) || ' сек (закончится ' || 
-                                  TO_CHAR(v_move_end_time, 'DD.MM.YYYY HH24:MI:SS') || ')';
+                    
+                    -- Рассчитываем время окончания для каждого игрока
+                    v_white_end_time := v_current_time + (v_white_time_remaining / 86400);
+                    v_black_end_time := v_current_time + (v_black_time_remaining / 86400);
+                    
+                    -- Выводим время белых
+                    DBMS_OUTPUT.PUT_LINE('Время белых: осталось ' || 
+                                       ROUND(v_white_time_remaining) || ' сек (закончится ' || 
+                                       TO_CHAR(v_white_end_time, 'DD.MM.YYYY HH24:MI:SS') || ')' || c_nl);
+                    
+                    -- Выводим время черных
+                    DBMS_OUTPUT.PUT_LINE('Время черных: осталось ' || 
+                                       ROUND(v_black_time_remaining) || ' сек (закончится ' || 
+                                       TO_CHAR(v_black_end_time, 'DD.MM.YYYY HH24:MI:SS') || ')' || c_nl);
                 END IF;
                 
-                IF v_time_info IS NOT NULL THEN
-                    DBMS_OUTPUT.PUT_LINE(v_time_info || c_nl);
+                -- Лимит времени на ход (для обратной совместимости, если используется time_limit_move_sec)
+                IF v_game.time_limit_move_sec IS NOT NULL AND v_game.time_limit_game_sec IS NULL THEN
+                    BEGIN
+                        SELECT MAX(move_timestamp) INTO v_last_move_time
+                        FROM game_moves
+                        WHERE game_id = v_target_game_id;
+                    EXCEPTION
+                        WHEN NO_DATA_FOUND THEN
+                            IF v_game.status = 'A' THEN
+                                v_last_move_time := v_game.start_time;
+                            ELSE
+                                v_last_move_time := NULL;
+                            END IF;
+                    END;
+                    
+                    IF v_last_move_time IS NOT NULL AND v_game.status = 'A' THEN
+                        v_move_elapsed_sec := (v_current_time - v_last_move_time) * 86400;
+                        v_move_remaining_sec := GREATEST(0, v_game.time_limit_move_sec - v_move_elapsed_sec);
+                        v_move_end_time := v_last_move_time + (v_game.time_limit_move_sec / 86400);
+                        
+                        DBMS_OUTPUT.PUT_LINE('Время на ход: осталось ' || 
+                                          ROUND(v_move_remaining_sec) || ' сек (закончится ' || 
+                                          TO_CHAR(v_move_end_time, 'DD.MM.YYYY HH24:MI:SS') || ')' || c_nl);
+                    END IF;
                 END IF;
             END;
-        ELSE 
-            v_status_header := 'Состояние доски: ' || v_game.status || '. Ожидание игрока.';
         END IF;
-        DBMS_OUTPUT.PUT_LINE(v_status_header || c_nl);
+        
+        -- Выводим статус только для активных игр (не для открытых игр 'O')
+        IF v_game.status = 'A' THEN
+            DBMS_OUTPUT.PUT_LINE(v_status_header || c_nl);
+        ELSIF v_game.status != 'O' THEN
+            -- Для других статусов (не 'A' и не 'O') выводим статус
+            v_status_header := 'Состояние доски: ' || v_game.status || '. Ожидание игрока.';
+            DBMS_OUTPUT.PUT_LINE(v_status_header || c_nl);
+        END IF;
 
         v_printable_board := f_get_board_as_clob(v_decoded_board, v_highlight_indices);
         DBMS_OUTPUT.PUT_LINE(v_printable_board);
     END;
 END print_active_board;
+-- @procedure make_move
+-- @brief Makes a move in the current game.
+-- @dependencies:
+--   - players (table)
+--   - games (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
+--   - p_process_move (procedure)
+--   - print_active_board (procedure)
+--   - get_ai_move (function)
 
 PROCEDURE make_move(p_move_notation IN VARCHAR2) IS
     v_game_id   NUMBER;
@@ -2791,6 +3807,7 @@ BEGIN
         RETURN;
     END IF;
 
+    -- Блокируем строку для обновления (улучшение конкурентности)
     SELECT * INTO v_game FROM games WHERE game_id = v_game_id FOR UPDATE;
 
     IF v_game.status != 'A' THEN
@@ -2808,15 +3825,27 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
-
-    p_process_move(v_game_id, p_move_notation, v_player_id, v_human_msg);
-
+    
+    -- Ход человека
+    p_process_move(v_game_id, TRIM(p_move_notation), v_player_id, v_human_msg);
+    
+    -- Если ошибка, выходим (сообщение уже напечатано в p_process_move)
     IF INSTR(LOWER(v_human_msg), 'неверный ход') > 0 OR INSTR(LOWER(v_human_msg), 'нелегальный ход') > 0 THEN
         RETURN;
     END IF;
-
+    
+    -- Выводим сообщение о статусе хода (включая сообщения о решении задач)
+    IF v_human_msg IS NOT NULL THEN
+        DBMS_OUTPUT.PUT_LINE(v_human_msg);
+    END IF;
+    
+    -- Проверяем, не завершилась ли игра после хода
+    SELECT status INTO v_game.status FROM games WHERE game_id = v_game_id;
+    
+    -- Показываем доску после хода человека (или финальную доску, если игра завершена)
     print_active_board(p_game_id => v_game_id);
-
+    
+    -- Ход ИИ (если нужно)
     DECLARE
         v_next_game_state games%ROWTYPE;
         v_ai_move         VARCHAR2(50);
@@ -2824,17 +3853,19 @@ BEGIN
     BEGIN
         SELECT * INTO v_next_game_state FROM games WHERE game_id = v_game_id;
 
+        -- ИИ ходит, если игра активна и сейчас его очередь (слот игрока NULL)
         IF v_next_game_state.status = 'A' AND v_next_game_state.ai_difficulty IS NOT NULL AND
            ((v_next_game_state.current_turn = 'W' AND v_next_game_state.player_white_id IS NULL) OR
             (v_next_game_state.current_turn = 'B' AND v_next_game_state.player_black_id IS NULL))
         THEN
-
+            -- Получаем текущую позицию доски: из последнего хода или начальная позиция
             v_ai_board_pos := f_get_current_board_position(v_game_id, v_next_game_state.rule_id);
-
+            -- Кодируем позицию для передачи в get_ai_move (если она еще не закодирована)
             IF INSTR(v_ai_board_pos, c_empty_field) > 0 THEN
                 v_ai_board_pos := encode_board(v_ai_board_pos);
             END IF;
-
+            
+            -- Используем ai_difficulty из игры (для пазлов с moves_to_solve IS NULL используется difficulty_level из пазла)
             DECLARE
                 v_ai_difficulty CHAR(1) := v_next_game_state.ai_difficulty;
             BEGIN
@@ -2859,6 +3890,14 @@ EXCEPTION
         ROLLBACK;
         RAISE;
 END make_move;
+-- @procedure cancel_game
+-- @brief Cancels an open or challenged game.
+-- @dependencies:
+--   - games (table)
+--   - players (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
 
 PROCEDURE cancel_game IS
     v_game_id   NUMBER;
@@ -2867,8 +3906,8 @@ PROCEDURE cancel_game IS
     v_error_msg VARCHAR2(2000);
 BEGIN
     v_player_id := get_or_create_player_id(user);
-    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
-
+    
+    -- Проверка на зрителя
     DECLARE
         v_spectating_game_id NUMBER := NULL;
     BEGIN
@@ -2892,6 +3931,7 @@ BEGIN
         END IF;
     END;
 
+    UPDATE players SET last_activity_at = SYSDATE WHERE player_id = v_player_id;
     v_game_id := get_active_game(v_player_id);
     
     IF v_game_id IS NULL THEN
@@ -2910,7 +3950,8 @@ BEGIN
         ROLLBACK;
         RETURN;
     END IF;
-
+    
+    -- Если это часть матча, отменяем и матч
     IF v_game.match_id IS NOT NULL THEN
         DELETE FROM matches WHERE match_id = v_game.match_id;
         p_audit_log(v_player_id, v_game_id, 'MATCH_CANCEL');
@@ -2928,6 +3969,16 @@ EXCEPTION
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         ROLLBACK;
 END cancel_game;
+-- @procedure draw
+-- @brief Manages draw offers (offer, accept, decline).
+-- @dependencies:
+--   - games (table)
+--   - players (table)
+--   - spectators (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
+--   - p_update_ratings (procedure)
 
 PROCEDURE draw(p_action IN CHAR) IS
     v_player_id players.player_id%TYPE;
@@ -2938,7 +3989,8 @@ PROCEDURE draw(p_action IN CHAR) IS
     v_action    CHAR(1) := UPPER(p_action);
 BEGIN
     v_player_id := get_or_create_player_id(USER);
-
+    
+    -- Проверка на зрителя
     DECLARE
         v_spectating_game_id NUMBER := NULL;
     BEGIN
@@ -2994,6 +4046,7 @@ BEGIN
         v_my_color := 'B';
     END IF;
 
+    -- OFFER
     IF v_action = 'O' THEN
         IF v_game.draw_offer_status = 'O' THEN
             IF v_game.draw_offered_by_color = v_my_color THEN
@@ -3003,7 +4056,7 @@ BEGIN
                 ROLLBACK;
                 RETURN;
             ELSE
-
+                -- Оппонент уже предложил ничью, игрок тоже предложил - автоматически принимаем
                 p_finish_game(
                     p_game_id      => v_game_id,
                     p_status       => 'D',
@@ -3027,6 +4080,7 @@ BEGIN
         p_audit_log(v_player_id, v_game_id, p_event_msg => 'DRAW_OFFER');
         DBMS_OUTPUT.PUT_LINE('Вы предложили ничью. Ожидайте ответа оппонента.');
 
+    -- ACCEPT
     ELSIF v_action = 'A' THEN
         IF v_game.draw_offer_status IS NULL OR v_game.draw_offer_status != 'O' THEN
             v_error_msg := 'Нет активного предложения о ничьей, чтобы его принять.';
@@ -3050,12 +4104,13 @@ BEGIN
             p_audit_event  => 'DRAW_ACCEPT',
             p_player_id    => v_player_id
         );
-
+        -- Обновляем статус предложения ничьей отдельно, так как это специфично для draw
         UPDATE games
         SET draw_offer_status = 'S'
         WHERE game_id = v_game_id; 
         DBMS_OUTPUT.PUT_LINE('Ничья по соглашению сторон.');
 
+    -- CANCEL (только отзыв своего предложения)
     ELSIF v_action = 'C' THEN
         IF v_game.draw_offer_status IS NULL OR v_game.draw_offer_status != 'O' THEN
             v_error_msg := 'Нет активного предложения о ничьей, чтобы его отменить.';
@@ -3097,6 +4152,16 @@ EXCEPTION
         ROLLBACK;
         RAISE;
 END draw;
+-- @procedure create_match
+-- @brief Creates a new match (a series of games).
+-- @dependencies:
+--   - players (table)
+--   - matches (table)
+--   - games (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
+--   - create_game (procedure)
 
 PROCEDURE create_match(
     p_opponent_username   IN VARCHAR2,
@@ -3131,10 +4196,11 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
-
+    
+    -- Create the first game of the match
     create_game(
         p_opponent_username   => p_opponent_username,
-        p_ai_difficulty       => NULL,
+        p_ai_difficulty       => NULL, -- Matches are PvP only
         p_player_color        => p_player_color,
         p_rule_id             => p_rule_id,
         p_time_limit_move_sec => p_time_limit_move_sec,
@@ -3146,11 +4212,14 @@ BEGIN
     );
     
     v_game_id := get_active_game(v_current_player_id);
-
+    
+    -- If game creation failed (e.g., validation error in create_game), exit
     IF v_game_id IS NULL THEN
         RETURN;
     END IF;
 
+    -- Create Match Record
+    -- We split this into SELECT then INSERT to allow RETURNING clause
     DECLARE
         v_fetched_rule_id games.rule_id%TYPE;
         v_fetched_status  games.status%TYPE;
@@ -3173,6 +4242,7 @@ BEGIN
         RETURNING match_id INTO v_match_id;
     END;
 
+    -- Link Game to Match
     UPDATE games
     SET match_id = v_match_id
     WHERE game_id = v_game_id;
@@ -3194,6 +4264,16 @@ EXCEPTION
         p_audit_log(v_current_player_id, NULL, 'КРИТИЧЕСКАЯ ОШИБКА в create_match: ' || SQLERRM);
         RAISE;
 END create_match;
+-- @procedure join_match
+-- @brief Allows a player to join an open or challenged match.
+-- @dependencies:
+--   - players (table)
+--   - matches (table)
+--   - games (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
+--   - join_game (procedure)
 
 PROCEDURE join_match(p_match_id IN NUMBER) IS
     v_player_id players.player_id%TYPE;
@@ -3210,11 +4290,21 @@ BEGIN
         RETURN;
     END IF;
     
-    SELECT * INTO v_match 
-    FROM matches 
-    WHERE match_id = p_match_id 
-    FOR UPDATE;
+    -- Проверка существования матча
+    BEGIN
+        SELECT * INTO v_match 
+        FROM matches 
+        WHERE match_id = p_match_id 
+        FOR UPDATE;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            v_error_msg := 'Матч с ID ' || p_match_id || ' не найден.';
+            p_audit_log(v_player_id, p_match_id, p_event_msg => v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
+    END;
 
+    -- Проверка существования ожидающей игры для матча
     BEGIN
         SELECT * INTO v_game 
         FROM games 
@@ -3236,9 +4326,11 @@ BEGIN
         ROLLBACK;
         RETURN;
     END IF;
-
+    
+    -- Вызов join_game (она внутри сделает COMMIT при успехе)
     join_game(v_game.game_id);
-
+    
+    -- Проверяем, прошла ли операция успешно
     DECLARE
         v_game_status CHAR(1);
     BEGIN
@@ -3255,7 +4347,7 @@ BEGIN
             p_audit_log(v_player_id, v_game.game_id, 'MATCH_JOINED');
             COMMIT;
         ELSE
-
+            -- Если join_game не перевел игру в Active (ошибка), откатываем блокировку матча
             ROLLBACK;
         END IF;
     END;
@@ -3265,6 +4357,16 @@ EXCEPTION
         ROLLBACK;
         RAISE;
 END join_match;
+-- @procedure create_puzzle
+-- @brief Creates a new puzzle.
+-- @dependencies:
+--   - players (table)
+--   - puzzles (table)
+--   - game_rules (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
+--   - encode_board (function)
 
 PROCEDURE create_puzzle(
     p_board_position   IN CLOB,
@@ -3316,24 +4418,26 @@ BEGIN
 
     BEGIN
         v_clob_len := DBMS_LOB.getlength(p_board_position);
-
+        
+        -- Парсинг CLOB построчно
         WHILE v_offset <= v_clob_len LOOP
             v_line_break := DBMS_LOB.instr(p_board_position, c_nl, v_offset);
             
             IF v_line_break = 0 THEN
-
+                -- Читаем до конца (amount = len - offset + 1)
                 v_line := DBMS_LOB.substr(p_board_position, v_clob_len - v_offset + 1, v_offset);
                 v_offset := v_clob_len + 1;
             ELSE
-
+                -- Читаем до переноса (amount = break - offset)
                 v_line := DBMS_LOB.substr(p_board_position, v_line_break - v_offset, v_offset);
                 v_offset := v_line_break + 1;
             END IF;
-
+            
+            -- Очистка от пробелов/табуляций/переносов (включая возможный \r)
             v_line := REGEXP_REPLACE(v_line, '[[:space:]]', '');
             
             IF LENGTH(v_line) > 0 THEN
-
+                -- Защита от переполнения (если кто-то сунет гигантский CLOB)
                 IF LENGTH(v_single_line_board) + LENGTH(v_line) > 200 THEN
                      v_error_msg := 'Ошибка: Размер доски превышает допустимый предел.';
                      p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
@@ -3375,6 +4479,7 @@ BEGIN
             RETURN;
         END IF;
 
+        -- Валидация позиции: проверка, что все фигуры находятся на темных клетках
         p_init_board_map(v_board_size);
         
         FOR i IN 1 .. LENGTH(v_single_line_board) LOOP
@@ -3385,7 +4490,7 @@ BEGIN
                 v_col PLS_INTEGER;
                 v_is_dark_square BOOLEAN;
             BEGIN
-
+                -- Проверяем только фигуры (не пустые клетки)
                 IF v_piece IN ('w', 'W', 'b', 'B') THEN
                     IF NOT g_map_by_idx.EXISTS(i) THEN
                         v_error_msg := 'Ошибка: Недопустимый индекс позиции: ' || i;
@@ -3397,7 +4502,8 @@ BEGIN
                     v_field := g_map_by_idx(i);
                     v_row := v_field.row_num;
                     v_col := v_field.col_num;
-
+                    
+                    -- Темная клетка: (row + col) % 2 == 1
                     v_is_dark_square := (MOD(v_row + v_col, 2) = 1);
                     
                     IF NOT v_is_dark_square THEN
@@ -3412,6 +4518,7 @@ BEGIN
             END;
         END LOOP;
 
+        -- Определяем rule_id по размеру доски (64 = 8x8, 100 = 10x10)
         SELECT rule_id INTO v_rule_id
         FROM game_rules
         WHERE board_size = v_board_size
@@ -3453,6 +4560,12 @@ BEGIN
     END;
 
 END create_puzzle;
+-- @procedure show_puzzles
+-- @brief Shows a list of available puzzles.
+-- @dependencies:
+--   - puzzles (table)
+--   - players (table)
+--   - get_or_create_player_id (function)
 
 PROCEDURE show_puzzles(
     p_difficulty IN CHAR DEFAULT NULL, 
@@ -3477,16 +4590,22 @@ PROCEDURE show_puzzles(
             puz.turn_to_move,
             puz.end_board_state,
             puz.solution
-        FROM puzzles puz
-        LEFT JOIN players pl ON puz.created_by_player_id = pl.player_id
-        WHERE 
-            (p_puzzle_id IS NOT NULL AND puz.puzzle_id = p_puzzle_id)
-            OR 
-            (p_puzzle_id IS NULL AND (p_difficulty IS NULL OR puz.difficulty_level = p_difficulty))
+        FROM puzzles puz, players pl
+        WHERE puz.created_by_player_id = pl.player_id(+)
+          AND ((p_puzzle_id IS NOT NULL AND puz.puzzle_id = p_puzzle_id)
+               OR 
+               (p_puzzle_id IS NULL AND (p_difficulty IS NULL OR puz.difficulty_level = p_difficulty)))
         ORDER BY puz.puzzle_id;
 BEGIN
     v_player_id := get_or_create_player_id(USER);
+    
+    -- Проверка корректности сложности
+    IF p_difficulty IS NOT NULL AND p_difficulty NOT IN ('E', 'M', 'H') THEN
+        DBMS_OUTPUT.PUT_LINE('Ошибка: Сложность должна быть ''E'' (Easy), ''M'' (Medium) или ''H'' (Hard).');
+        RETURN;
+    END IF;
 
+    -- ВАРИАНТ 1: Поиск конкретной задачи (Красивый вывод)
     IF p_puzzle_id IS NOT NULL THEN
         DECLARE
             r c_puzzles%ROWTYPE;
@@ -3495,7 +4614,8 @@ BEGIN
             FETCH c_puzzles INTO r;
             IF c_puzzles%FOUND THEN
                 v_goal_str := CASE WHEN r.end_board_state IS NULL THEN 'Победа' ELSE 'Ничья' END;
-
+                
+                -- Проверяем, были ли попытки решить эту задачу
                 DECLARE
                     v_attempt_count NUMBER;
                 BEGIN
@@ -3513,13 +4633,14 @@ BEGIN
                     DBMS_OUTPUT.PUT_LINE('Автор:     ' || r.creator_username);
                 END IF;
                 DBMS_OUTPUT.PUT_LINE('Сложность: ' || r.difficulty_level);
-                DBMS_OUTPUT.PUT_LINE('Цель:      ' || v_goal_str || ' за ' || NVL(TO_CHAR(r.moves_to_solve), '?') || ' ход(ов)');
+                DBMS_OUTPUT.PUT_LINE('Цель:      ' || v_goal_str || ' на ходе: ' || NVL(TO_CHAR(r.moves_to_solve), '?'));
                 DBMS_OUTPUT.PUT_LINE('Ваш ход:   ' || CASE r.turn_to_move WHEN 'W' THEN 'Белые' ELSE 'Черные' END);
                 DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
                 
                 v_visual_board := f_get_board_as_clob(r.board_position);
                 DBMS_OUTPUT.PUT_LINE(v_visual_board);
-
+                
+                -- Вывод решения (только если были попытки и запрошено)
                 IF p_solution = 'Y' THEN
                     IF v_has_attempts THEN
                         IF r.solution IS NOT NULL THEN
@@ -3544,6 +4665,7 @@ BEGIN
         RETURN;
     END IF;
 
+    -- ВАРИАНТ 2: Общий список (Табличный вывод)
     DBMS_OUTPUT.PUT_LINE('--- Список Доступных Задач ---');
     IF p_difficulty IS NOT NULL THEN
         DBMS_OUTPUT.PUT_LINE(' (Фильтр по Сложности: ' || p_difficulty || ')');
@@ -3552,28 +4674,33 @@ BEGIN
     END IF;
     
     DBMS_OUTPUT.PUT_LINE(
-        RPAD('ID', 6) || 
+        RPAD('ID', 4) || 
         RPAD('Слож.', 6) || 
-        RPAD('Ходов', 6) || 
-        RPAD('Цель', 7) || 
-        RPAD('Автор', 15) || 
-        RPAD('Ход', 4) || 
+        RPAD('Ходов', 7) || 
+        RPAD('Цель', 8) || 
+        RPAD('Ход', 5) || 
         'Позиция (RLE)'
     );
-    DBMS_OUTPUT.PUT_LINE(RPAD('-', 6, '-') || ' ' || RPAD('-', 6, '-') || ' ' || RPAD('-', 6, '-') || ' ' || RPAD('-', 7, '-') || ' ' || RPAD('-', 15, '-') || ' ' || RPAD('-', 4, '-') || ' ' || RPAD('-', 20, '-'));
+    DBMS_OUTPUT.PUT_LINE(
+        RPAD('-', 3, '-') || ' ' || 
+        RPAD('-', 5, '-') || ' ' || 
+        RPAD('-', 6, '-') || ' ' || 
+        RPAD('-', 7, '-') || ' ' || 
+        RPAD('-', 4, '-') || ' ' || 
+        RPAD('-', 25, '-')
+    );
 
     FOR r IN c_puzzles LOOP
         v_found := TRUE;
         v_goal_str := CASE WHEN r.end_board_state IS NULL THEN 'Победа' ELSE 'Ничья' END;
         
         DBMS_OUTPUT.PUT_LINE(
-            RPAD(r.puzzle_id, 6) || 
-            RPAD(r.difficulty_level, 6) || 
-            RPAD(NVL(TO_CHAR(r.moves_to_solve), '?'), 6) || 
-            RPAD(SUBSTR(v_goal_str, 1, 6), 7) ||
-            RPAD(SUBSTR(r.creator_username, 1, 14), 15) || 
-            RPAD(r.turn_to_move, 4) || 
-            SUBSTR(r.board_position, 1, 25) || (CASE WHEN LENGTH(r.board_position) > 25 THEN '...' ELSE '' END)
+            RPAD(TO_CHAR(r.puzzle_id), 3) || ' ' || 
+            RPAD(r.difficulty_level, 5) || ' ' || 
+            RPAD(NVL(TO_CHAR(r.moves_to_solve), '?'), 6) || ' ' || 
+            RPAD(SUBSTR(v_goal_str, 1, 6), 7) || ' ' ||
+            RPAD(r.turn_to_move, 4) || ' ' || 
+            r.board_position
         );
     END LOOP;
     
@@ -3581,6 +4708,12 @@ EXCEPTION
     WHEN OTHERS THEN
         DBMS_OUTPUT.PUT_LINE('Ошибка при показе задач: ' || SQLERRM);
 END show_puzzles;
+-- @procedure show_my_puzzles
+-- @brief Shows a list of puzzles created by the current user.
+-- @dependencies:
+--   - puzzles (table)
+--   - get_or_create_player_id (function)
+--   - f_get_board_as_clob (function)
 
 PROCEDURE show_my_puzzles(p_difficulty IN CHAR DEFAULT NULL) IS
     v_player_id players.player_id%TYPE;
@@ -3600,7 +4733,7 @@ PROCEDURE show_my_puzzles(p_difficulty IN CHAR DEFAULT NULL) IS
         WHERE 
             puz.created_by_player_id = v_player_id
             AND (p_difficulty IS NULL OR puz.difficulty_level = p_difficulty)
-        ORDER BY puz.puzzle_id DESC;
+        ORDER BY puz.puzzle_id DESC; -- Новые сверху
 BEGIN
     v_player_id := get_or_create_player_id(USER);
     
@@ -3618,11 +4751,12 @@ BEGIN
 
         DBMS_OUTPUT.PUT_LINE('ID: ' || r.puzzle_id || ' | Сложность: ' || r.difficulty_level || ' | Цель: ' || v_goal_str || ' за ' || NVL(TO_CHAR(r.moves_to_solve), '?') || ' ход(ов)');
         DBMS_OUTPUT.PUT_LINE('Первый ход: ' || CASE r.turn_to_move WHEN 'W' THEN 'Белые' ELSE 'Черные' END);
-
+        
+        -- Визуализация
         v_visual_board := f_get_board_as_clob(r.board_position);
         DBMS_OUTPUT.PUT_LINE(v_visual_board);
-        DBMS_OUTPUT.PUT_LINE('__________________________________________________');
-        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('__________________________________________________'); -- Разделитель
+        DBMS_OUTPUT.PUT_LINE(''); -- Пустая строка для отступа
     END LOOP;
     
     IF NOT v_found THEN
@@ -3630,6 +4764,17 @@ BEGIN
             CASE WHEN p_difficulty IS NOT NULL THEN ' с заданной сложностью' ELSE '' END || '. ...');
     END IF;
 END show_my_puzzles;
+-- @procedure delete_my_puzzle
+-- @brief Deletes a puzzle created by the current user.
+-- @dependencies:
+--   - puzzles (table)
+--   - get_or_create_player_id (function)
+--   - get_active_game (function)
+--   - p_audit_log (procedure)
+
+-- @procedure delete_my_puzzle
+-- @brief Deletes a puzzle created by the current user.
+-- [БЕЗ ИЗМЕНЕНИЙ]
 
 PROCEDURE delete_my_puzzle(p_puzzle_id IN NUMBER) IS
     v_player_id players.player_id%TYPE;
@@ -3653,7 +4798,7 @@ BEGIN
 
     BEGIN
         IF p_puzzle_id = 0 THEN
-
+            -- Удаляем все задачи пользователя
             DELETE FROM puzzles
             WHERE created_by_player_id = v_player_id;
             v_deleted_count := SQL%ROWCOUNT;
@@ -3668,7 +4813,7 @@ BEGIN
                 COMMIT;
             END IF;
         ELSE
-
+            -- Удаляем конкретную задачу
             DELETE FROM puzzles
             WHERE puzzle_id = p_puzzle_id
               AND created_by_player_id = v_player_id;
@@ -3692,11 +4837,21 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
     END;
 END delete_my_puzzle;
+-- @procedure show_daily_puzzle
+-- @brief Shows the daily puzzle.
+-- @dependencies:
+--   - daily_puzzles (table)
+--   - puzzles (table)
+--   - get_or_create_player_id (function)
+--   - p_audit_log (procedure)
+--   - rec_daily_puzzle_info (type)
+--   - f_get_board_as_clob (function)
 
 PROCEDURE show_daily_puzzle IS
     v_today       DATE := TRUNC(SYSDATE);
     v_player_id   players.player_id%TYPE;
-
+    
+    -- Локальные переменные
     v_puzzle_id      puzzles.puzzle_id%TYPE;
     v_difficulty     puzzles.difficulty_level%TYPE;
     v_moves_solve    puzzles.moves_to_solve%TYPE;
@@ -3739,13 +4894,14 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('Задача:    ' || v_goal_str || ' за ' || NVL(TO_CHAR(v_moves_solve), 'N/A') || ' ход(ов)');
         DBMS_OUTPUT.PUT_LINE('Ваш ход:   ' || CASE v_turn WHEN 'W' THEN 'Белые (W)' ELSE 'Черные (B)' END);
         DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
-
+        
+        -- Рисуем доску
         v_visual_board := f_get_board_as_clob(v_board_pos);
         DBMS_OUTPUT.PUT_LINE(v_visual_board);
         
         DBMS_OUTPUT.PUT_LINE('--------------------------------------------------');
-
-        DBMS_OUTPUT.PUT_LINE('Для решения: BEGIN game_logic.create_game(p_puzzle_id => ' || v_puzzle_id || '); END;');
+        -- Подсказка для SQL Developer
+        DBMS_OUTPUT.PUT_LINE('Для решения: BEGIN game_logic.create_game(p_daily => ''Y''); END;');
 
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
@@ -3753,15 +4909,19 @@ BEGIN
             p_audit_log(NULL, NULL, p_event_msg => 'DAILY_PUZZLE_NOT_FOUND');
     END;
 END show_daily_puzzle;
+-- @procedure info
+-- @brief Displays help information about the game_logic package.
+-- @dependencies:
+--   - (none)
 
-PROCEDURE info(p_proc_name IN VARCHAR2 DEFAULT NULL) IS
-    v_proc_name VARCHAR2(30) := UPPER(TRIM(p_proc_name));
-    v_show_all BOOLEAN := (v_proc_name IS NULL OR v_proc_name = 'ALL');
-    v_show_full BOOLEAN := (v_proc_name = 'ALL');
+PROCEDURE info(p_query IN VARCHAR2 DEFAULT NULL) IS
+    v_query VARCHAR2(30) := UPPER(TRIM(p_query));
+    v_show_all BOOLEAN := (v_query IS NULL OR v_query = 'ALL');
+    v_show_full BOOLEAN := (v_query = 'ALL');
     v_found BOOLEAN := FALSE;
 BEGIN
-
-    IF v_proc_name IS NULL OR v_proc_name = '' THEN
+    -- Если параметр не передан, показываем список процедур
+    IF v_query IS NULL OR v_query = '' THEN
         DBMS_OUTPUT.PUT_LINE('================================================================');
         DBMS_OUTPUT.PUT_LINE('           Добро пожаловать в "Шашки на Oracle" (v1.2)');
         DBMS_OUTPUT.PUT_LINE('================================================================');
@@ -3769,8 +4929,9 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('Все команды выполняются в блоках PL/SQL: BEGIN ... END;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('ПОДСКАЗКА: Для просмотра информации по конкретной процедуре передайте параметр:');
-        DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_proc_name => ''CREATE_GAME''); END;');
-        DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_proc_name => ''ALL''); END;
+        DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_query => ''CREATE_GAME''); END;');
+        DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_query => ''ALL''); END;  -- Полная справка');
+        DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.info(p_query => ''VIEWS''); END;  -- Информация о представлениях');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('Доступные процедуры: CREATE_GAME, JOIN_GAME, MAKE_MOVE, PRINT_ACTIVE_BOARD,');
         DBMS_OUTPUT.PUT_LINE('  RESIGN_GAME, CANCEL_GAME, DRAW, CREATE_MATCH, JOIN_MATCH,');
@@ -3779,11 +4940,57 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE(c_nl);
         RETURN;
     END IF;
-
-    IF v_show_all OR v_proc_name = 'CREATE_GAME' THEN
+    
+    -- Секция VIEWS
+    IF v_query = 'VIEWS' THEN
         v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('CREATE_GAME - Создает новую игру: PvP (против игрока), PvE (против ИИ) или Puzzle (задача).');
-        IF v_show_full THEN
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ПРЕДСТАВЛЕНИЯ (VIEWS) ДЛЯ СТАТИСТИКИ');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ПРЕДСТАВЛЕНИЯ БЕЗ ПАРАМЕТРОВ:');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Открытые игры:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_open_games;');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Активные игры (со статусом партии):');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_active_games;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_active_games WHERE game_id = 123;  -- статус конкретной игры');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('ПРЕДСТАВЛЕНИЯ С ФИЛЬТРАМИ:');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Протокол партии (все ходы со статусом):');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_game_protocol WHERE game_id = 123 ORDER BY move_number;');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Завершенные игры:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_games;');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- История игрока (все партии всех игроков):');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE player_name = USER;  -- моя история');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE rule_id = 1;  -- русские шашки (1=русские, 2=международные)');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE start_time >= DATE ''2025-01-01'' AND end_time <= DATE ''2025-01-31'';  -- за период');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Рейтинги/топ (все игроки, все сезоны):');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_ratings;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_ratings WHERE season_id = 5;  -- конкретный сезон');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_ratings WHERE rule_id = 1;  -- русские шашки');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- Результаты Daily Puzzles (только для тех, кто решал):');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_daily_puzzle_results;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_daily_puzzle_results WHERE player_name = USER;  -- мои результаты');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        RETURN;
+    END IF;
+    
+    -- Секция 1: CREATE_GAME
+    IF v_show_all OR v_query = 'CREATE_GAME' THEN
+        v_found := TRUE;
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('CREATE_GAME');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Создает новую игру: PvP (против игрока), PvE (против ИИ) или Puzzle (задача).');
+        IF v_show_full OR v_query = 'CREATE_GAME' THEN
+            DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
             DBMS_OUTPUT.PUT_LINE('  p_opponent_username   - Имя оппонента для прямого вызова (PvP). NULL = открытая игра.');
@@ -3798,179 +5005,324 @@ BEGIN
             DBMS_OUTPUT.PUT_LINE('  p_daily               - ''Y'' если это задача дня. По умолчанию ''N''.');
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  -- Игра против ИИ (Easy):');
             DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.create_game(p_ai_difficulty => ''E''); END;');
+            DBMS_OUTPUT.PUT_LINE('  -- Решение задачи:');
             DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.create_game(p_puzzle_id => 10); END;');
+            DBMS_OUTPUT.PUT_LINE('  -- PvP игра с таймаутами:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.create_game(p_opponent_username => ''BOB'', p_time_limit_move_sec => 60); END;');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
-
-    IF v_show_all OR v_proc_name = 'JOIN_GAME' THEN
+    
+    -- Секция 2: JOIN_GAME
+    IF v_show_all OR v_query = 'JOIN_GAME' THEN
         v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('JOIN_GAME - Присоединяет вас к открытой игре или принимает прямой вызов.');
-        IF v_show_full THEN
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('JOIN_GAME');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Присоединяет вас к открытой игре или принимает прямой вызов.');
+        IF v_show_full OR v_query = 'JOIN_GAME' THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_game_id - ID игры для присоединения.');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.join_game(p_game_id => 123); END;');
-        END IF;
-        IF NOT v_show_all THEN RETURN; END IF;
-    END IF;
-
-    IF v_show_all OR v_proc_name = 'MAKE_MOVE' THEN
-        v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('MAKE_MOVE - Выполняет ход в текущей активной игре.');
-        IF v_show_full THEN
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_game_id - ID игры для присоединения (обязателен).');
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_move_notation - Нотация хода (например, ''a3-b4'' или ''c3:e5'').');
             DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
-            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3-d4''); END;
-            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3:e5''); END;
-        END IF;
-        IF NOT v_show_all THEN RETURN; END IF;
-    END IF;
-
-    IF v_show_all OR v_proc_name = 'PRINT_ACTIVE_BOARD' THEN
-        v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('PRINT_ACTIVE_BOARD - Выводит текущее состояние доски активной игры.');
-        IF v_show_full THEN
-            DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_game_id, p_username, p_wait_for_turn');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.print_active_board; END;');
-        END IF;
-        IF NOT v_show_all THEN RETURN; END IF;
-    END IF;
-
-    IF v_show_all OR v_proc_name = 'RESIGN_GAME' THEN
-        v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('RESIGN_GAME - Сдаться в текущей активной игре.');
-        IF v_show_full THEN
-            DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_resign_match (''Y'' для сдачи во всем матче)');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.resign_game; END;');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.join_game(p_game_id => 123); END;');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    IF v_show_all OR v_proc_name = 'CANCEL_GAME' THEN
+    -- Секция 3: MAKE_MOVE
+    IF v_show_all OR v_query = 'MAKE_MOVE' THEN
         v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('CANCEL_GAME - Отменяет открытую игру или вызов.');
-        IF v_show_full THEN
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('MAKE_MOVE');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Выполняет ход в текущей активной игре.');
+        IF v_show_full OR v_query = 'MAKE_MOVE' THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.cancel_game; END;');
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_move_notation - Нотация хода (обязательна).');
+            DBMS_OUTPUT.PUT_LINE('    Формат: ''a3-b4'' для тихого хода, ''c3:e5'' для взятия.');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3-d4''); END;  -- Тихий ход');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.make_move(''c3:e5''); END;  -- Взятие');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    IF v_show_all OR v_proc_name = 'DRAW' THEN
+    -- Секция 4: PRINT_ACTIVE_BOARD
+    IF v_show_all OR v_query = 'PRINT_ACTIVE_BOARD' THEN
         v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('DRAW - Управление предложениями ничьей (только для PvP игр).');
-        IF v_show_full THEN
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('PRINT_ACTIVE_BOARD');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Выводит текущее состояние доски активной игры.');
+        DBMS_OUTPUT.PUT_LINE('  - Для активных игр (статус ''A''): показывает доску с информацией об игроках и текущем ходе.');
+        DBMS_OUTPUT.PUT_LINE('  - Для открытых игр (статус ''O'' или ''C''):');
+        DBMS_OUTPUT.PUT_LINE('    * Без wait_for_turn: выводит сообщение "К игре еще никто не подключился".');
+        DBMS_OUTPUT.PUT_LINE('    * С wait_for_turn=''Y'': ждет подключения игрока, затем показывает доску.');
+        IF v_show_full OR v_query = 'PRINT_ACTIVE_BOARD' THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_action (''O'' - предложить, ''A'' - принять, ''C'' - отменить/отклонить)');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.draw(''O''); END;');
-        END IF;
-        IF NOT v_show_all THEN RETURN; END IF;
-    END IF;
-
-    IF v_show_all OR v_proc_name = 'CREATE_MATCH' THEN
-        v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('CREATE_MATCH - Создает матч (серию игр до N побед).');
-        IF v_show_full THEN
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_game_id       - ID игры (опционально). Если не указан, используется ваша активная игра.');
+            DBMS_OUTPUT.PUT_LINE('  p_username      - Имя пользователя для поиска его активной игры (опционально).');
+            DBMS_OUTPUT.PUT_LINE('  p_wait_for_turn - ''Y'' для ожидания хода/подключения, ''N'' для немедленного вывода (по умолчанию ''N'').');
+            DBMS_OUTPUT.PUT_LINE('                    Для активных игр: ждет вашего хода.');
+            DBMS_OUTPUT.PUT_LINE('                    Для открытых игр: ждет подключения другого игрока.');
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_opponent_username, p_games_to_win, p_player_color, p_rule_id и др.');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.create_match(p_opponent_username => ''ALICE'', p_games_to_win => 3); END;');
-        END IF;
-        IF NOT v_show_all THEN RETURN; END IF;
-    END IF;
-    
-    IF v_show_all OR v_proc_name = 'JOIN_MATCH' THEN
-        v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('JOIN_MATCH - Присоединяется к матчу.');
-        IF v_show_full THEN
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  -- Просмотр активной игры:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.print_active_board; END;');
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_match_id');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.join_match(p_match_id => 555); END;');
-        END IF;
-        IF NOT v_show_all THEN RETURN; END IF;
-    END IF;
-
-    IF v_show_all OR v_proc_name = 'SHOW_DAILY_PUZZLE' THEN
-        v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('SHOW_DAILY_PUZZLE - Показывает ежедневную задачу.');
-        IF v_show_full THEN
+            DBMS_OUTPUT.PUT_LINE('  -- Ожидание вашего хода (для активных игр):');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.print_active_board(p_wait_for_turn => ''Y''); END;');
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.show_daily_puzzle; END;');
+            DBMS_OUTPUT.PUT_LINE('  -- Проверка открытой игры (без ожидания):');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.print_active_board; END;');
+            DBMS_OUTPUT.PUT_LINE('  -- Выведет: "К игре еще никто не подключился."');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('  -- Ожидание подключения к открытой игре:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.print_active_board(p_wait_for_turn => ''Y''); END;');
+            DBMS_OUTPUT.PUT_LINE('  -- Будет ждать, пока кто-то подключится, затем покажет доску.');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    IF v_show_all OR v_proc_name = 'SHOW_PUZZLES' THEN
+    -- Секция 5: УПРАВЛЕНИЕ ИГРОЙ
+    IF v_show_all OR v_query = 'RESIGN_GAME' THEN
         v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('SHOW_PUZZLES - Показывает список доступных задач.');
-        IF v_show_full THEN
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('RESIGN_GAME');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Сдаться в текущей активной игре.');
+        IF v_show_full OR v_query = 'RESIGN_GAME' THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_difficulty, p_puzzle_id, p_solution (по умолчанию ''N'')');
-            DBMS_OUTPUT.PUT_LINE('  p_solution: ''Y'' - показать решение (только для одной задачи по ID и только если были попытки)');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.show_puzzles; END;');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.show_puzzles(p_puzzle_id => 1, p_solution => ''Y''); END;');
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_resign_match - ''Y'' для сдачи во всем матче, ''N'' или NULL для сдачи только в текущей игре.');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.resign_game; END;');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.resign_game(p_resign_match => ''Y''); END;');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    IF v_show_all OR v_proc_name = 'SHOW_MY_PUZZLES' THEN
+    IF v_show_all OR v_query = 'CANCEL_GAME' THEN
         v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('SHOW_MY_PUZZLES - Показывает задачи, созданные вами.');
-        IF v_show_full THEN
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('CANCEL_GAME');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Отменяет открытую игру или вызов.');
+        IF v_show_full OR v_query = 'CANCEL_GAME' THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_difficulty');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.show_my_puzzles; END;');
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: Нет параметров.');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.cancel_game; END;');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    IF v_show_all OR v_proc_name = 'CREATE_PUZZLE' THEN
+    IF v_show_all OR v_query = 'DRAW' THEN
         v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('CREATE_PUZZLE - Создает новую задачу из произвольной позиции.');
-        IF v_show_full THEN
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('DRAW');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Управление предложениями ничьей (только для PvP игр).');
+        IF v_show_full OR v_query = 'DRAW' THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_board_position (CLOB), p_turn_to_move, p_moves_to_solve, p_difficulty_level');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.create_puzzle(p_board_position => ..., p_turn_to_move => ''W''); END;');
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_action - Действие: ''O'' (предложить), ''A'' (принять), ''C'' (отменить свое предложение).');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.draw(''O''); END;  -- Предложить ничью');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.draw(''A''); END;  -- Принять ничью');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.draw(''C''); END;  -- Отменить свое предложение');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    IF v_show_all OR v_proc_name = 'DELETE_MY_PUZZLE' THEN
+    -- Секция 6: МАТЧИ
+    IF v_show_all OR v_query = 'CREATE_MATCH' THEN
         v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('DELETE_MY_PUZZLE - Удаляет задачу, созданную вами.');
-        IF v_show_full THEN
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('CREATE_MATCH');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Создает матч (серию игр до N побед).');
+        IF v_show_full OR v_query = 'CREATE_MATCH' THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_puzzle_id (обязателен, 0 = удалить все свои задачи)');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.delete_my_puzzle(15); END;');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.delete_my_puzzle(0); END;
-        END IF;
-        IF NOT v_show_all THEN RETURN; END IF;
-    END IF;
-
-    IF v_show_all OR v_proc_name = 'STOP_SPECTATING' THEN
-        v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('STOP_SPECTATING - Выход из режима просмотра игры.');
-        IF v_show_full THEN
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_opponent_username   - Имя оппонента для прямого вызова (обязателен).');
+            DBMS_OUTPUT.PUT_LINE('  p_games_to_win        - Количество игр для победы в матче (обязателен, должен быть нечетным).');
+            DBMS_OUTPUT.PUT_LINE('  p_player_color        - Ваш цвет: ''W'' (Белые), ''B'' (Черные). NULL = случайно.');
+            DBMS_OUTPUT.PUT_LINE('  p_rule_id             - Правила: 1 (Русские 8x8), 2 (Международные 10x10). По умолчанию 1.');
+            DBMS_OUTPUT.PUT_LINE('  p_time_limit_move_sec - Лимит времени на ход в секундах. NULL = без лимита.');
+            DBMS_OUTPUT.PUT_LINE('  p_time_limit_game_sec - Лимит времени на всю партию в секундах. NULL = без лимита.');
+            DBMS_OUTPUT.PUT_LINE('  p_draw_moves_limit    - Лимит полуходов без взятий для ничьей. NULL = без лимита.');
+            DBMS_OUTPUT.PUT_LINE('  p_enable_pos_rep_draw - Включить ничью по повтору позиции: ''Y''/''N''. По умолчанию ''N''.');
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.stop_spectating; END;');
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.create_match(p_opponent_username => ''ALICE'', p_games_to_win => 3); END;');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.create_match(p_opponent_username => ''BOB'', p_games_to_win => 5, p_rule_id => 2); END;');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
     
-    IF v_show_all OR v_proc_name = 'WATCH_GAME_REPLAY' THEN
+    IF v_show_all OR v_query = 'JOIN_MATCH' THEN
         v_found := TRUE;
-        DBMS_OUTPUT.PUT_LINE('WATCH_GAME_REPLAY - Просматривает ходы завершенной игры пошагово.');
-        IF v_show_full THEN
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('JOIN_MATCH');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Присоединяется к матчу.');
+        IF v_show_full OR v_query = 'JOIN_MATCH' THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
-            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: p_game_id, p_moves_to_show');
-            DBMS_OUTPUT.PUT_LINE('ПРИМЕР: BEGIN game_logic.watch_game_replay(p_game_id => 77, p_moves_to_show => 3); END;');
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_match_id - ID матча для присоединения (обязателен).');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.join_match(p_match_id => 555); END;');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
-
+    
+    -- Секция 7: ЗАДАЧИ И ГОЛОВОЛОМКИ
+    IF v_show_all OR v_query = 'SHOW_DAILY_PUZZLE' THEN
+        v_found := TRUE;
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('SHOW_DAILY_PUZZLE');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Показывает ежедневную задачу.');
+        IF v_show_full OR v_query = 'SHOW_DAILY_PUZZLE' THEN
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: Нет параметров.');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_daily_puzzle; END;');
+        END IF;
+        IF NOT v_show_all THEN RETURN; END IF;
+    END IF;
+    
+    IF v_show_all OR v_query = 'SHOW_PUZZLES' THEN
+        v_found := TRUE;
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('SHOW_PUZZLES');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Показывает список доступных задач.');
+        IF v_show_full OR v_query = 'SHOW_PUZZLES' THEN
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_difficulty - Фильтр по сложности: ''E'' (Easy), ''M'' (Medium), ''H'' (Hard). NULL = все.');
+            DBMS_OUTPUT.PUT_LINE('  p_puzzle_id  - ID конкретной задачи для детального просмотра. NULL = список всех.');
+            DBMS_OUTPUT.PUT_LINE('  p_solution   - ''Y'' для показа решения (только для одной задачи по ID и только если были попытки).');
+            DBMS_OUTPUT.PUT_LINE('                  По умолчанию ''N''.');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_puzzles; END;');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_puzzles(p_difficulty => ''M''); END;');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_puzzles(p_puzzle_id => 1, p_solution => ''Y''); END;');
+        END IF;
+        IF NOT v_show_all THEN RETURN; END IF;
+    END IF;
+    
+    IF v_show_all OR v_query = 'SHOW_MY_PUZZLES' THEN
+        v_found := TRUE;
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('SHOW_MY_PUZZLES');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Показывает задачи, созданные вами.');
+        IF v_show_full OR v_query = 'SHOW_MY_PUZZLES' THEN
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_difficulty - Фильтр по сложности: ''E'' (Easy), ''M'' (Medium), ''H'' (Hard). NULL = все.');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_my_puzzles; END;');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.show_my_puzzles(p_difficulty => ''H''); END;');
+        END IF;
+        IF NOT v_show_all THEN RETURN; END IF;
+    END IF;
+    
+    IF v_show_all OR v_query = 'CREATE_PUZZLE' THEN
+        v_found := TRUE;
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('CREATE_PUZZLE');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Создает новую задачу из произвольной позиции.');
+        IF v_show_full OR v_query = 'CREATE_PUZZLE' THEN
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_board_position   - Позиция доски в формате CLOB (обязателен).');
+            DBMS_OUTPUT.PUT_LINE('  p_turn_to_move     - Чей ход: ''W'' (Белые) или ''B'' (Черные) (обязателен).');
+            DBMS_OUTPUT.PUT_LINE('  p_moves_to_solve   - Оптимальное количество ходов для решения. NULL = игра с ИИ.');
+            DBMS_OUTPUT.PUT_LINE('  p_difficulty_level - Сложность: ''E'' (Easy), ''M'' (Medium), ''H'' (Hard). По умолчанию ''M''.');
+            DBMS_OUTPUT.PUT_LINE('  p_solution         - Решение задачи в виде последовательности ходов (опционально).');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.create_puzzle(p_board_position => EMPTY_CLOB(), p_turn_to_move => ''W''); END;');
+        END IF;
+        IF NOT v_show_all THEN RETURN; END IF;
+    END IF;
+    
+    IF v_show_all OR v_query = 'DELETE_MY_PUZZLE' THEN
+        v_found := TRUE;
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('DELETE_MY_PUZZLE');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Удаляет задачу, созданную вами.');
+        IF v_show_full OR v_query = 'DELETE_MY_PUZZLE' THEN
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_puzzle_id - ID задачи для удаления (обязателен). Используйте 0 для удаления всех своих задач.');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.delete_my_puzzle(15); END;');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.delete_my_puzzle(0); END; -- удалить все свои задачи');
+        END IF;
+        IF NOT v_show_all THEN RETURN; END IF;
+    END IF;
+    
+    -- Секция 8: РЕЖИМ ЗРИТЕЛЯ И ПРОСМОТР РЕПЛЕЕВ
+    IF v_show_all OR v_query = 'STOP_SPECTATING' THEN
+        v_found := TRUE;
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('STOP_SPECTATING');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Выход из режима просмотра игры.');
+        IF v_show_full OR v_query = 'STOP_SPECTATING' THEN
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ: Нет параметров.');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.stop_spectating; END;');
+        END IF;
+        IF NOT v_show_all THEN RETURN; END IF;
+    END IF;
+    
+    IF v_show_all OR v_query = 'WATCH_GAME_REPLAY' THEN
+        v_found := TRUE;
+        DBMS_OUTPUT.PUT_LINE(c_nl || '================================================================');
+        DBMS_OUTPUT.PUT_LINE('WATCH_GAME_REPLAY');
+        DBMS_OUTPUT.PUT_LINE('================================================================');
+        DBMS_OUTPUT.PUT_LINE('ОПИСАНИЕ: Просматривает ходы завершенной игры пошагово.');
+        IF v_show_full OR v_query = 'WATCH_GAME_REPLAY' THEN
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  p_game_id       - ID завершенной игры (обязателен).');
+            DBMS_OUTPUT.PUT_LINE('  p_moves_to_show - Количество ходов для показа за один вызов. По умолчанию 1.');
+            DBMS_OUTPUT.PUT_LINE('  p_restart       - Начать просмотр с начала (''Y'') или продолжить (''N'', по умолчанию).');
+            DBMS_OUTPUT.PUT_LINE(c_nl);
+            DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.watch_game_replay(p_game_id => 77); END;');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.watch_game_replay(p_game_id => 77, p_moves_to_show => 3); END;');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.watch_game_replay(p_game_id => 77, p_restart => ''Y''); END;');
+        END IF;
+        IF NOT v_show_all THEN RETURN; END IF;
+    END IF;
+    
+    -- Секция 9: ПРАВИЛА ИГРЫ (только при полном выводе)
     IF v_show_full THEN
         DBMS_OUTPUT.PUT_LINE('================================================================');
         DBMS_OUTPUT.PUT_LINE('## 9. ПРАВИЛА ИГРЫ');
@@ -4002,7 +5354,8 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('  - Ничья: по соглашению, по лимиту ходов без взятий, по повтору позиции.');
         DBMS_OUTPUT.PUT_LINE(c_nl);
     END IF;
-
+    
+    -- Секции 10-15: Общая информация (только при полном выводе)
     IF v_show_full THEN
         DBMS_OUTPUT.PUT_LINE('================================================================');
         DBMS_OUTPUT.PUT_LINE('## 10. ПАРАМЕТРЫ ИГРЫ');
@@ -4051,37 +5404,37 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('================================================================');
         DBMS_OUTPUT.PUT_LINE('## 12. ПРЕДСТАВЛЕНИЯ (VIEWS) ДЛЯ СТАТИСТИКИ');
         DBMS_OUTPUT.PUT_LINE('================================================================');
-        DBMS_OUTPUT.PUT_LINE('Используйте SQL запросы для просмотра статистики:');
+        DBMS_OUTPUT.PUT_LINE('ПРЕДСТАВЛЕНИЯ БЕЗ ПАРАМЕТРОВ:');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         DBMS_OUTPUT.PUT_LINE('  -- Открытые игры:');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_open_games;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('  -- Активные игры:');
+        DBMS_OUTPUT.PUT_LINE('  -- Активные игры (со статусом партии):');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_active_games;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_active_games WHERE game_id = 123;  -- статус конкретной игры');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('  -- Статус игры:');
-        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_game_status WHERE game_id = 123;');
+        DBMS_OUTPUT.PUT_LINE('ПРЕДСТАВЛЕНИЯ С ФИЛЬТРАМИ:');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('  -- Протокол игры:');
+        DBMS_OUTPUT.PUT_LINE('  -- Протокол партии (все ходы со статусом):');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_game_protocol WHERE game_id = 123 ORDER BY move_number;');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('  -- История игрока:');
+        DBMS_OUTPUT.PUT_LINE('  -- Завершенные игры:');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_ended_games;');
+        DBMS_OUTPUT.PUT_LINE(c_nl);
+        DBMS_OUTPUT.PUT_LINE('  -- История игрока (все партии всех игроков):');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE player_name = USER;  -- моя история');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE rule_id = 1;  -- русские шашки (1=русские, 2=международные)');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history WHERE start_time >= DATE ''2025-01-01'' AND end_time <= DATE ''2025-01-31'';  -- за период');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('  -- История игрока за период:');
-        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_history_by_period;');
+        DBMS_OUTPUT.PUT_LINE('  -- Рейтинги/топ (все игроки, все сезоны):');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_ratings;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_ratings WHERE season_id = 5;  -- конкретный сезон');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_ratings WHERE rule_id = 1;  -- русские шашки');
         DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('  -- Статистика игрока:');
-        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_player_stats;');
-        DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('  -- Рейтинг по успеху:');
-        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_leaderboard;');
-        DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('  -- Рейтинг по среднему числу ходов:');
-        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_leaderboard_by_avg_moves;');
-        DBMS_OUTPUT.PUT_LINE(c_nl);
-        DBMS_OUTPUT.PUT_LINE('  -- Результаты Daily Puzzles:');
+        DBMS_OUTPUT.PUT_LINE('  -- Результаты Daily Puzzles (только для тех, кто решал):');
         DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_daily_puzzle_results;');
+        DBMS_OUTPUT.PUT_LINE('  SELECT * FROM v_daily_puzzle_results WHERE player_name = USER;  -- мои результаты');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         
         DBMS_OUTPUT.PUT_LINE('================================================================');
@@ -4095,6 +5448,9 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('  - Минимальный рейтинг: 0 (не может быть отрицательным).');
         DBMS_OUTPUT.PUT_LINE('  - Сезоны обновляются автоматически каждый месяц (scheduler).');
         DBMS_OUTPUT.PUT_LINE('  - Формат сезона: "Месяц-Год" (например, "Январь-2025").');
+        DBMS_OUTPUT.PUT_LINE('  - При создании нового сезона триггер trg_init_season_ratings автоматически');
+        DBMS_OUTPUT.PUT_LINE('    создает рейтинги для всех игроков по формуле: rating * 0.8 (минимум 500).');
+        DBMS_OUTPUT.PUT_LINE('    Если рейтинг < 500, он остается 500.');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         
         DBMS_OUTPUT.PUT_LINE('================================================================');
@@ -4128,14 +5484,16 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('Удачи в игре!');
         DBMS_OUTPUT.PUT_LINE('================================================================');
     END IF;
-
+    
+    -- Если процедура не найдена, выводим сообщение
     IF NOT v_show_all AND NOT v_found THEN
-        DBMS_OUTPUT.PUT_LINE('Ошибка: Процедура "' || v_proc_name || '" не найдена.');
+        DBMS_OUTPUT.PUT_LINE('Ошибка: Процедура или запрос "' || v_query || '" не найден.');
         DBMS_OUTPUT.PUT_LINE('Доступные процедуры: CREATE_GAME, JOIN_GAME, MAKE_MOVE, PRINT_ACTIVE_BOARD,');
         DBMS_OUTPUT.PUT_LINE('  RESIGN_GAME, CANCEL_GAME, DRAW, CREATE_MATCH, JOIN_MATCH,');
         DBMS_OUTPUT.PUT_LINE('  SHOW_DAILY_PUZZLE, SHOW_PUZZLES, SHOW_MY_PUZZLES, CREATE_PUZZLE,');
         DBMS_OUTPUT.PUT_LINE('  DELETE_MY_PUZZLE, STOP_SPECTATING, WATCH_GAME_REPLAY');
-        DBMS_OUTPUT.PUT_LINE('Для полной справки: BEGIN game_logic.info(p_proc_name => ''ALL''); END;');
+        DBMS_OUTPUT.PUT_LINE('Доступные запросы: ALL (полная справка), VIEWS (информация о представлениях)');
+        DBMS_OUTPUT.PUT_LINE('Для полной справки: BEGIN game_logic.info(p_query => ''ALL''); END;');
     END IF;
     
 EXCEPTION
@@ -4143,6 +5501,125 @@ EXCEPTION
         DBMS_OUTPUT.PUT_LINE('Ошибка при выводе справки: ' || SQLERRM);
 END info;
 
+-- =========================================================================
+-- ПРОЦЕДУРА: p_process_inactive_timeouts
+-- =========================================================================
+-- Обрабатывает неактивные игры, которые неактивны дольше указанного таймаута.
+-- Оценивает позицию доски и определяет победителя по лучшей позиции.
+-- Используется scheduler'ом INACTIVE_SESSIONS_TIMEOUT_JOB.
+-- @param p_timeout_hours - Количество часов неактивности перед таймаутом (по умолчанию 24)
+PROCEDURE p_process_inactive_timeouts(
+    p_timeout_hours IN NUMBER DEFAULT 24
+) IS
+    v_updated_count PLS_INTEGER := 0;
+    v_decoded_board VARCHAR2(100);
+    v_score NUMBER;
+    v_winner_color CHAR(1);
+    c_man_value      CONSTANT NUMBER := 1;  -- Шашка = 1
+    c_king_value     CONSTANT NUMBER := 4;  -- Дамка = 4
+    c_empty_field    CONSTANT CHAR(1) := '+';  -- Пустое поле
 BEGIN
+    -- Завершаем игры со статусом 'A' (Active), которые неактивны дольше таймаута
+    -- Оцениваем позицию и определяем победителя по лучшей позиции
+    FOR r IN (
+        SELECT g.game_id, g.rule_id, g.current_turn
+        FROM games g
+        WHERE g.status = 'A'
+          AND (
+              -- Если есть ходы, проверяем последний ход
+              (EXISTS (SELECT 1 FROM game_moves gm WHERE gm.game_id = g.game_id)
+               AND (SELECT MAX(move_timestamp) FROM game_moves WHERE game_id = g.game_id) < SYSDATE - (p_timeout_hours / 24))
+              OR
+              -- Если ходов нет, проверяем время начала
+              (NOT EXISTS (SELECT 1 FROM game_moves gm WHERE gm.game_id = g.game_id)
+               AND g.start_time < SYSDATE - (p_timeout_hours / 24))
+          )
+    ) LOOP
+        BEGIN
+            -- Получаем текущую позицию доски
+            BEGIN
+                SELECT decode_board(board_position) INTO v_decoded_board
+                FROM game_moves
+                WHERE game_id = r.game_id
+                ORDER BY move_number DESC
+                FETCH FIRST 1 ROW ONLY;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    -- Если ходов нет, используем начальную позицию
+                    v_decoded_board := get_initial_position(r.rule_id);
+            END;
+            
+            -- Оцениваем позицию (положительная = лучше для белых, отрицательная = лучше для черных)
+            -- Соотношение: шашка = 1, дамка = 4 (1 дамка = 4 шашки)
+            DECLARE
+                v_piece          CHAR(1);
+                v_total_squares  NUMBER;
+                v_board_size     NUMBER;
+            BEGIN
+                v_total_squares := LENGTH(v_decoded_board);
+                v_board_size    := SQRT(v_total_squares);
+                p_init_board_map(v_board_size);
+                
+                v_score := 0;
+                FOR i IN 1..v_total_squares LOOP
+                    v_piece := SUBSTR(v_decoded_board, i, 1);
+                    
+                    IF v_piece != c_empty_field THEN
+                        DECLARE
+                            v_piece_value    NUMBER;
+                            v_multiplier     NUMBER;
+                        BEGIN
+                            -- Определяем цвет и множитель
+                            IF v_piece IN ('w', 'W') THEN
+                                v_multiplier := 1; -- Белые - положительные
+                            ELSE
+                                v_multiplier := -1; -- Черные - отрицательные
+                            END IF;
+                            
+                            -- Оценка материала (шашка = 1, дамка = 4)
+                            v_piece_value := CASE WHEN v_piece IN ('W', 'B') THEN c_king_value ELSE c_man_value END;
+                            
+                            v_score := v_score + (v_piece_value * v_multiplier);
+                        END;
+                    END IF;
+                END LOOP;
+            END;
+            
+            -- Определяем победителя по оценке позиции
+            IF v_score > 0 THEN
+                v_winner_color := 'W'; -- Белые в лучшей позиции
+            ELSIF v_score < 0 THEN
+                v_winner_color := 'B'; -- Черные в лучшей позиции
+            ELSE
+                -- Если оценка равна 0 (ничья), побеждает тот, чей сейчас ход (проигравший по таймауту)
+                v_winner_color := CASE WHEN r.current_turn = 'W' THEN 'B' ELSE 'W' END;
+            END IF;
+            
+            -- Завершаем игру используя унифицированную процедуру
+            p_finish_game(
+                p_game_id      => r.game_id,
+                p_status       => 'T', -- Timeout
+                p_winner_color => v_winner_color,
+                p_audit_event  => 'INACTIVE_GAME_TIMEOUT: Score=' || v_score || ', Winner=' || v_winner_color,
+                p_player_id    => NULL
+            );
+            
+            v_updated_count := v_updated_count + 1;
+        EXCEPTION
+            WHEN OTHERS THEN
+                -- Если ошибка при обработке одной игры, продолжаем с другими
+                NULL;
+        END;
+    END LOOP;
+    
+    -- p_finish_game уже делает COMMIT внутри себя для каждой игры
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Логируем ошибку но не падаем
+        NULL;
+END p_process_inactive_timeouts;
+
+--------------------------------------------------------------------------------
+BEGIN -- Package Initialization Block
     NULL;
 END game_logic;

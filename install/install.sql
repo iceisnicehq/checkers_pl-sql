@@ -68,4 +68,3 @@ GRANT SELECT ON v_active_games TO PUBLIC;
 GRANT SELECT ON v_game_protocol TO PUBLIC;
 GRANT SELECT ON v_player_history TO PUBLIC;
 GRANT SELECT ON v_leaderboard TO PUBLIC;
-
