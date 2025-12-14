@@ -74,8 +74,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
     PROCEDURE draw(p_action IN CHAR); 
 
     PROCEDURE create_match(
-        p_opponent_username   IN VARCHAR2,
-        p_games_to_win        IN NUMBER,
+        p_opponent_username   IN VARCHAR2 DEFAULT NULL,
+        p_games_to_win        IN NUMBER   DEFAULT 3,
         p_player_color        IN CHAR     DEFAULT NULL, 
         p_rule_id             IN NUMBER   DEFAULT 1,
         p_time_limit_move_sec IN NUMBER   DEFAULT NULL, 
