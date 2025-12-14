@@ -214,7 +214,7 @@
 - Проверка легальности хода: фигура может двигаться только по правилам.
 
 **Применение хода:**
-- Удаление фигуры со стартой позиции.
+- Удаление фигуры со старой позиции.
 - Удаление срубленных фигур (при взятии).
 - Проверка превращения в дамку:
   - Русские шашки: превращение происходит немедленно при достижении последней горизонтали, даже во время многоходового взятия.
@@ -222,8 +222,7 @@
 - Установка фигуры на новую позицию.
 
 **Обновление состояния игры:**
-- Сохранение хода в таблицу `game_moves`.
-- Обновление позиции доски в таблице `games`.
+- Сохранение хода и позиции доски в таблицу `game_moves` (позиция доски хранится в поле `board_position` каждого хода).
 - Передача хода следующему игроку.
 - Обновление времени игроков (шахматные часы).
 
@@ -233,28 +232,53 @@
 
 Задача: Реализовать проверку всех условий завершения игры.
 
-**Победа:**
-- У противника не осталось фигур.
-- Противник заблокирован (нет легальных ходов).
+2.2.5.1 Победа
 
-**Ничья:**
-- По соглашению сторон (явное предложение и принятие).
-- По лимиту полуходов без взятий (если установлен `draw_moves_limit`).
-- По повтору позиции (если включен `enable_pos_rep_draw`).
-- Для задач с `end_board_state`: достижение целевой позиции.
+Игра завершается победой одного из игроков в следующих случаях:
 
-**Таймаут:**
-- Истечение времени на ход (`time_limit_move_sec`).
-- Истечение времени на партию (`time_limit_game_sec`) - время одного из игроков истекло.
+- **У противника не осталось фигур** – все фигуры противника сняты с доски.
+- **Противник заблокирован** – у противника нет легальных ходов (пат).
+- **Противник сдался** – противник явно сдался через процедуру `resign_game` (статус 'R').
+- **Таймаут противника на ход** – истекло время на ход противника (`time_limit_move_sec`), если установлен лимит (статус 'T').
+- **Таймаут противника на партию** – истекло время на партию противника (`time_limit_game_sec`), если установлен лимит (статус 'T').
+- **Неактивность игры** – в партии не совершалось никаких действий 24 часа. Автоматически обрабатывается процедурой `p_process_inactive_timeouts`, которая вызывается через scheduler `INACTIVE_SESSIONS_TIMEOUT_JOB` каждый час. Победитель определяется по счету фигур на доске, при равенстве побеждает игрок, чья очередь не наступила (статус 'T').
 
-**Сдача:**
-- Явная сдача игрока через `resign_game`.
-- Сдача во всем матче (если игра является частью матча).
-
-**Обновление после завершения:**
-- Обновление статуса игры ('V', 'D', 'T', 'R').
-- Определение победителя.
+**Обновление после победы:**
+- Установка статуса игры 'V' (Victory) или 'T' (Timeout) или 'R' (Resigned).
+- Определение победителя (`winner_player_color`).
 - Обновление рейтингов игроков (для PvP игр и успешно решенных задач).
+- Закрытие сессий зрителей.
+
+2.2.5.2 Поражение
+
+Игра завершается поражением одного из игроков в следующих случаях:
+
+- **У игрока не осталось фигур** – все фигуры игрока сняты с доски.
+- **Игрок заблокирован** – у игрока нет легальных ходов (пат).
+- **Игрок сдался** – игрок явно сдался через процедуру `resign_game` (статус 'R').
+- **Таймаут игрока на ход** – истекло время на ход игрока (`time_limit_move_sec`), если установлен лимит (статус 'T').
+- **Таймаут игрока на партию** – истекло время на партию игрока (`time_limit_game_sec`), если установлен лимит (статус 'T').
+- **Неактивность игры** – в партии не совершалось никаких действий 24 часа. Автоматически обрабатывается процедурой `p_process_inactive_timeouts`, которая вызывается через scheduler `INACTIVE_SESSIONS_TIMEOUT_JOB` каждый час. Проигравший определяется по счету фигур на доске, при равенстве проигрывает игрок, чья очередь наступила (статус 'T').
+
+**Обновление после поражения:**
+- Установка статуса игры 'V' (Victory) или 'T' (Timeout) или 'R' (Resigned).
+- Определение победителя (противник игрока).
+- Обновление рейтингов игроков (для PvP игр).
+- Закрытие сессий зрителей.
+
+2.2.5.3 Ничья
+
+Игра завершается ничьей в следующих случаях:
+
+- **По соглашению сторон** – оба игрока согласились на ничью через процедуру `draw` (статус 'D').
+- **По лимиту полуходов без взятий** – если установлен `draw_moves_limit` и достигнут лимит полуходов без взятий фигур (статус 'D').
+- **По повтору позиции** – если включен `enable_pos_rep_draw` и позиция повторилась заданное количество раз (статус 'D').
+- **Для задач с `end_board_state`** – достижение целевой позиции, указанной в `end_board_state` задачи (статус 'D').
+
+**Обновление после ничьей:**
+- Установка статуса игры 'D' (Draw).
+- Победитель не определяется (`winner_player_color` остается NULL).
+- Обновление рейтингов игроков (для PvP игр, рейтинг не меняется при ничьей).
 - Закрытие сессий зрителей.
 
 
@@ -680,13 +704,13 @@
 
 5 Методы испытаний
 
-В разделе "Методы испытаний" приведены описания используемых методов испытаний. Методы испытаний расположены в последовательности, соответствующей разделам "Требования к программе" и "Требования к программной документации".
+В разделе «Методы испытаний» приведены описания используемых методов испытаний. Методы испытаний расположены в последовательности, соответствующей разделам «Требования к программе» и «Требования к программной документации».
 
 Раздел состоит из двух основных подразделов:
 
-5.1 Проверка отчуждаемости — содержит полную инструкцию по развертыванию из исходных кодов игры на чистых машинах.
+5.1 Проверка отчуждаемости – содержит полную инструкцию по развертыванию из исходных кодов игры на чистых машинах.
 
-5.2 Проверка соответствия требованиям — описание методов проверки и используемых для них наборов входных данных/действий по каждому пункту, описанному в разделе "Требования к программе".
+5.2 Проверка соответствия требованиям – описание методов проверки и используемых для них наборов входных данных/действий по каждому пункту, описанному в разделе «Требования к программе».
 
 ---
 
@@ -699,18 +723,18 @@
 1. **Создание таблиц базы данных**
 
    Выполнить все SQL скрипты из папки `tables/` в порядке нумерации:
-   - `01_players.sql` — таблица игроков
-   - `02_game_rules.sql` — таблица правил игры (содержит также наполнение правилами)
-   - `03_seasons.sql` — таблица сезонов
-   - `04_player_ratings.sql` — таблица рейтингов игроков
-   - `05_matches.sql` — таблица матчей
-   - `06_puzzles.sql` — таблица задач (содержит также наполнение начальными задачами)
-   - `07_games.sql` — таблица игр
-   - `08_game_moves.sql` — таблица ходов
-   - `09_daily_puzzles.sql` — таблица ежедневных задач
-   - `10_audit_log.sql` — таблица аудита
-   - `11_spectators.sql` — таблица наблюдателей
-   - `12_indexes.sql` — индексы (выполняется после всех таблиц)
+   - `01_players.sql` – таблица игроков
+   - `02_game_rules.sql` – таблица правил игры (содержит также наполнение правилами)
+   - `03_seasons.sql` – таблица сезонов
+   - `04_player_ratings.sql` – таблица рейтингов игроков
+   - `05_matches.sql` – таблица матчей
+   - `06_puzzles.sql` – таблица задач (содержит также наполнение начальными задачами)
+   - `07_games.sql` – таблица игр
+   - `08_game_moves.sql` – таблица ходов
+   - `09_daily_puzzles.sql` – таблица ежедневных задач
+   - `10_audit_log.sql` – таблица аудита
+   - `11_spectators.sql` – таблица наблюдателей
+   - `12_indexes.sql` – индексы (выполняется после всех таблиц)
 
    Выполнить все SQL скрипты из папки `tables/` в порядке нумерации.
 
@@ -731,17 +755,17 @@
 5. **Создание триггеров**
 
    Выполнить все SQL скрипты из папки `triggers/` в порядке нумерации:
-   - `01_trg_init_player_ratings.sql` — триггер инициализации рейтингов при создании игрока
-   - `02_trg_init_season_ratings.sql` — триггер инициализации рейтингов при создании сезона
+   - `01_trg_init_player_ratings.sql` – триггер инициализации рейтингов при создании игрока
+   - `02_trg_init_season_ratings.sql` – триггер инициализации рейтингов при создании сезона
 
    Выполнить все SQL скрипты из папки `triggers/` в порядке нумерации.
 
 6. **Создание автоматических заданий (schedulers)**
 
    Выполнить все SQL скрипты из папки `schedulers/`:
-   - `daily_puzzle_job.sql` — создание ежедневной задачи (запуск каждый день в 1:00)
-   - `monthly_seasons_job.sql` — создание нового сезона (запуск в первый день месяца в 1:00)
-   - `inactive_sessions_timeout.sql` — закрытие неактивных сессий (запуск каждый час)
+   - `daily_puzzle_job.sql` – создание ежедневной задачи (запуск каждый день в 1:00)
+   - `monthly_seasons_job.sql` – создание нового сезона (запуск в первый день месяца в 1:00)
+   - `inactive_sessions_timeout.sql` – закрытие неактивных сессий (запуск каждый час)
 
    Выполнить все SQL скрипты из папки `schedulers/`.
 
@@ -793,7 +817,7 @@ BEGIN game_logic.print_active_board; END;
 
 5.2 Проверка соответствия требованиям
 
-Проверка соответствия требованиям включает описание методов проверки и используемых для них наборов входных данных/действий по каждому пункту, описанному в разделе "Требования к программе".
+Проверка соответствия требованиям включает описание методов проверки и используемых для них наборов входных данных/действий по каждому пункту, описанному в разделе «Требования к программе».
 
 5.2.1 Проверка требования «Создание игры»
 
@@ -806,54 +830,54 @@ BEGIN game_logic.print_active_board; END;
 | 1 | Все параметры по умолчанию (только PvP) | Игра создана, статус 'O' (Open), правила 1, цвет случайный | |
 | 2 | `p_opponent_username => 'PLAYER2'` | Игра создана, статус 'C' (Challenged) | |
 | 3 | `p_opponent_username => NULL` | Игра создана, статус 'O' (Open) | |
-| 4 | `p_opponent_username => USER` | Ошибка "Нельзя создать игру с самим собой" | |
-| 5 | `p_opponent_username => 'NONEXISTENT'` | Ошибка "Оппонент не найден" | |
+| 4 | `p_opponent_username => USER` | Ошибка «Нельзя вызвать самого себя.» | |
+| 5 | `p_opponent_username => 'NONEXISTENT'` | Ошибка «Оппонент не найден» | |
 | 6 | `p_opponent_username => 'PLAYER2', p_rule_id => 1` | Игра создана, статус 'C', правила русские 8×8 | |
 | 7 | `p_opponent_username => 'PLAYER2', p_rule_id => 2` | Игра создана, статус 'C', правила международные 10×10 | |
-| 8 | `p_opponent_username => 'PLAYER2', p_rule_id => 3` | Ошибка "Некорректный rule_id" | |
-| 9 | `p_opponent_username => 'PLAYER2', p_rule_id => 0` | Ошибка "Некорректный rule_id" | |
+| 8 | `p_opponent_username => 'PLAYER2', p_rule_id => 3` | Ошибка «Правила игры с ID=3 не найдены.» | |
+| 9 | `p_opponent_username => 'PLAYER2', p_rule_id => 0` | Ошибка «Правила игры с ID=0 не найдены.» | |
 | 10 | `p_opponent_username => 'PLAYER2', p_rule_id => NULL` | Игра создана, правила 1 (по умолчанию) | |
 | 11 | `p_opponent_username => 'PLAYER2', p_player_color => 'W'` | Игра создана, игрок на белых | |
 | 12 | `p_opponent_username => 'PLAYER2', p_player_color => 'B'` | Игра создана, игрок на черных | |
 | 13 | `p_opponent_username => 'PLAYER2', p_player_color => NULL` | Игра создана, цвет выбран случайно | |
-| 14 | `p_opponent_username => 'PLAYER2', p_player_color => 'X'` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 15 | `p_opponent_username => 'PLAYER2', p_player_color => 'w'` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
+| 14 | `p_opponent_username => 'PLAYER2', p_player_color => 'X'` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
+| 15 | `p_opponent_username => 'PLAYER2', p_player_color => 'w'` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
 | 16 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 30` | Игра создана, лимит на ход 30 сек | |
 | 17 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 31` | Игра создана, лимит на ход 31 сек | |
 | 18 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 60` | Игра создана, лимит на ход 60 сек | |
-| 19 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 29` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 20 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 0` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 21 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => -10` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 22 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 301` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
+| 19 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 29` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 20 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 0` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 21 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => -10` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 22 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 301` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
 | 23 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => NULL` | Игра создана, лимит на ход не установлен | |
 | 24 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 600` | Игра создана, лимит на партию 600 сек | |
 | 25 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 601` | Игра создана, лимит на партию 601 сек | |
 | 26 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 3600` | Игра создана, лимит на партию 3600 сек | |
 | 27 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 7200` | Игра создана, лимит на партию 7200 сек (максимум) | |
-| 28 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 599` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 29 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 7201` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 30 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 0` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
+| 28 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 599` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 29 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 7201` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 30 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 0` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
 | 31 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => NULL` | Игра создана, лимит на партию не установлен | |
 | 32 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600` | Игра создана, оба лимита установлены | |
 | 33 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 5` | Игра создана, лимит полуходов без взятий 5 | |
 | 34 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 6` | Игра создана, лимит полуходов без взятий 6 | |
 | 35 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 15` | Игра создана, лимит полуходов без взятий 15 | |
 | 36 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 20` | Игра создана, лимит полуходов без взятий 20 (максимум) | |
-| 37 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 4` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 38 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 21` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 39 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 0` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
+| 37 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 4` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 38 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 21` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 39 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 0` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
 | 40 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => NULL` | Игра создана, лимит полуходов без взятий не установлен | |
 | 41 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'Y'` | Игра создана, ничья по повтору позиции включена | |
 | 42 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'N'` | Игра создана, ничья по повтору позиции выключена | |
 | 43 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => NULL` | Игра создана, ничья по повтору позиции выключена (по умолчанию 'N') | |
-| 44 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'X'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 40 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'y'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 41 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'YES'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 42 | `p_opponent_username => 'PLAYER2', p_ai_difficulty => 'E'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
-| 43 | `p_opponent_username => 'PLAYER2', p_ai_difficulty => 'M'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
-| 44 | `p_opponent_username => 'PLAYER2', p_ai_difficulty => 'H'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
-| 45 | `p_opponent_username => 'PLAYER2', p_puzzle_id => 1` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
-| 46 | `p_opponent_username => 'PLAYER2', p_daily => 'Y'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
+| 44 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'X'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 40 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'y'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 41 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'YES'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 42 | `p_opponent_username => 'PLAYER2', p_ai_difficulty => 'E'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
+| 43 | `p_opponent_username => 'PLAYER2', p_ai_difficulty => 'M'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
+| 44 | `p_opponent_username => 'PLAYER2', p_ai_difficulty => 'H'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
+| 45 | `p_opponent_username => 'PLAYER2', p_puzzle_id => 1` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
+| 46 | `p_opponent_username => 'PLAYER2', p_daily => 'Y'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
 | 47 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_time_limit_move_sec => 60` | Игра создана со всеми параметрами | |
 | 48 | `p_opponent_username => 'PLAYER2', p_rule_id => 2, p_player_color => 'B', p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y'` | Игра создана со всеми параметрами | |
 | 49 | `p_opponent_username => NULL, p_rule_id => 1` | Игра создана, статус 'O', правила русские | |
@@ -864,88 +888,84 @@ BEGIN game_logic.print_active_board; END;
 | 54 | `p_opponent_username => NULL, p_time_limit_game_sec => 3600` | Игра создана, статус 'O', лимит на партию 3600 сек | |
 | 55 | `p_opponent_username => NULL, p_draw_moves_limit => 15` | Игра создана, статус 'O', лимит полуходов 15 | |
 | 56 | `p_opponent_username => NULL, p_enable_pos_rep_draw => 'Y'` | Игра создана, статус 'O', повтор позиции включен | |
-| 57 | Создание игры при наличии активной игры | Ошибка "Вы уже участвуете в активной игре" | |
-| 58 | `p_opponent_username => ''` (пустая строка) | Ошибка "Оппонент не найден" или игра создана как открытая | |
-| 59 | `p_opponent_username => '   '` (пробелы) | Ошибка "Оппонент не найден" | |
-| 60 | `p_opponent_username => 'PLAYER2', p_rule_id => -1` | Ошибка "Некорректный rule_id" | |
-| 61 | `p_opponent_username => 'PLAYER2', p_rule_id => 999` | Ошибка "Некорректный rule_id" | |
-| 62 | `p_opponent_username => 'PLAYER2', p_rule_id => 1.5` | Ошибка "Некорректный rule_id" или приведение к 1 | |
-| 63 | `p_opponent_username => 'PLAYER2', p_player_color => ''` (пустая строка) | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 64 | `p_opponent_username => 'PLAYER2', p_player_color => ' '` (пробел) | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 65 | `p_opponent_username => 'PLAYER2', p_player_color => 'WW'` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 66 | `p_opponent_username => 'PLAYER2', p_player_color => 'BB'` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 67 | `p_opponent_username => 'PLAYER2', p_player_color => '1'` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 68 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 30.5` | Игра создана, лимит округлен до 30 | |
+| 57 | Создание игры при наличии активной игры | Ошибка «Вы уже участвуете в активной игре» | |
+| 58 | `p_opponent_username => ''` (пустая строка, воспринимается как NULL) | Игра создана, статус 'O' (Open) | |
+| 59 | `p_opponent_username => '   '` (только пробелы, после TRIM становится пустой строкой = NULL) | Игра создана, статус 'O' (Open) | |
+| 60 | `p_opponent_username => 'PLAYER2', p_rule_id => -1` | Ошибка «Правила игры с ID=-1 не найдены.» | |
+| 61 | `p_opponent_username => 'PLAYER2', p_rule_id => 999` | Ошибка «Правила игры с ID=999 не найдены.» | |
+| 63 | `p_opponent_username => 'PLAYER2', p_player_color => ''` (пустая строка, воспринимается как NULL) | Игра создана, цвет выбран случайно | |
+| 64 | `p_opponent_username => 'PLAYER2', p_player_color => ' '` (пробел) | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
+| 65 | `p_opponent_username => 'PLAYER2', p_player_color => 'WW'` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
+| 66 | `p_opponent_username => 'PLAYER2', p_player_color => 'BB'` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
+| 67 | `p_opponent_username => 'PLAYER2', p_player_color => '1'` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
 | 69 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => '60'` (строка) | Ошибка типа данных или приведение к числу | |
 | 70 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 300` | Игра создана, лимит установлен (максимум 5 минут) | |
-| 71 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 301` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 72 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 600.5` | Игра создана, лимит округлен до 600 | |
+| 71 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 301` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
 | 73 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => '3600'` (строка) | Ошибка типа данных или приведение к числу | |
 | 74 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 7200` | Игра создана, лимит установлен (максимум 120 минут) | |
-| 75 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 7201` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 76 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 5.5` | Игра создана, лимит округлен до 5 | |
+| 75 | `p_opponent_username => 'PLAYER2', p_time_limit_game_sec => 7201` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
 | 77 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => '15'` (строка) | Ошибка типа данных или приведение к числу | |
 | 78 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 20` | Игра создана, лимит установлен (максимум 20) | |
-| 79 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 21` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 77 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => ''` (пустая строка) | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 78 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => ' '` (пробел) | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 79 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'YY'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 80 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'NN'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 81 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => '1'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 82 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => '0'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 83 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'true'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 84 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'false'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
+| 79 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 21` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 77 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => ''` (пустая строка, воспринимается как NULL) | Игра создана, ничья по повтору позиции выключена (по умолчанию 'N') | |
+| 78 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => ' '` (пробел) | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 79 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'YY'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 80 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'NN'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 81 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => '1'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 82 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => '0'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 83 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'true'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 84 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'false'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
 | 85 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 30, p_time_limit_move_sec => 60` (дублирование) | Игра создана, используется последнее значение 60 | |
-| 86 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 30, p_time_limit_game_sec => 599` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 87 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 29, p_time_limit_game_sec => 600` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 88 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 29, p_time_limit_game_sec => 599` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 89 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 301, p_time_limit_game_sec => 600` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 90 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 30, p_time_limit_game_sec => 7201` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 91 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 4, p_enable_pos_rep_draw => 'Y'` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 92 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 21, p_enable_pos_rep_draw => 'Y'` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 93 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'X'` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 94 | `p_opponent_username => 'PLAYER2', p_rule_id => 3, p_player_color => 'W'` | Ошибка "Некорректный rule_id" | |
-| 95 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_time_limit_move_sec => 29` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 96 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_time_limit_move_sec => 301` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 97 | `p_opponent_username => 'PLAYER2', p_rule_id => 2, p_time_limit_game_sec => 599` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 98 | `p_opponent_username => 'PLAYER2', p_rule_id => 2, p_time_limit_game_sec => 7201` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 99 | `p_opponent_username => 'PLAYER2', p_player_color => 'W', p_time_limit_move_sec => 29` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 100 | `p_opponent_username => 'PLAYER2', p_player_color => 'W', p_time_limit_move_sec => 301` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 101 | `p_opponent_username => 'PLAYER2', p_player_color => 'B', p_time_limit_game_sec => 599` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 102 | `p_opponent_username => 'PLAYER2', p_player_color => 'B', p_time_limit_game_sec => 7201` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 103 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'X', p_time_limit_move_sec => 60` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 104 | `p_opponent_username => 'PLAYER2', p_rule_id => 0, p_player_color => 'W', p_time_limit_move_sec => 60` | Ошибка "Некорректный rule_id" | |
-| 105 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'X', p_time_limit_move_sec => 60` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 106 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_time_limit_move_sec => 29` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 107 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_time_limit_move_sec => 301` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 108 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_time_limit_game_sec => 599` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 109 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_time_limit_game_sec => 7201` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 110 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_draw_moves_limit => 4` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 111 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_draw_moves_limit => 21` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 112 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_enable_pos_rep_draw => 'X'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 113 | `p_opponent_username => 'PLAYER2', p_rule_id => 3, p_player_color => 'X', p_time_limit_move_sec => 29` | Ошибка "Некорректный rule_id" (первая ошибка) | |
-| 114 | `p_opponent_username => NULL, p_rule_id => 3` | Ошибка "Некорректный rule_id" | |
-| 115 | `p_opponent_username => NULL, p_player_color => 'X'` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 116 | `p_opponent_username => NULL, p_time_limit_move_sec => 29` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 117 | `p_opponent_username => NULL, p_time_limit_move_sec => 301` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 118 | `p_opponent_username => NULL, p_time_limit_game_sec => 599` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 119 | `p_opponent_username => NULL, p_time_limit_game_sec => 7201` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 120 | `p_opponent_username => NULL, p_draw_moves_limit => 4` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 121 | `p_opponent_username => NULL, p_draw_moves_limit => 21` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 122 | `p_opponent_username => NULL, p_enable_pos_rep_draw => 'X'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 123 | `p_opponent_username => NULL, p_rule_id => 1, p_player_color => 'X'` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 124 | `p_opponent_username => NULL, p_rule_id => 1, p_time_limit_move_sec => 29` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 125 | `p_opponent_username => NULL, p_rule_id => 1, p_time_limit_move_sec => 301` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 126 | `p_opponent_username => NULL, p_rule_id => 2, p_time_limit_game_sec => 599` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 127 | `p_opponent_username => NULL, p_rule_id => 2, p_time_limit_game_sec => 7201` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 128 | `p_opponent_username => NULL, p_player_color => 'W', p_draw_moves_limit => 4` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 129 | `p_opponent_username => NULL, p_player_color => 'W', p_draw_moves_limit => 21` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 130 | `p_opponent_username => NULL, p_enable_pos_rep_draw => 'Y', p_time_limit_move_sec => 29` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 131 | `p_opponent_username => NULL, p_enable_pos_rep_draw => 'Y', p_time_limit_move_sec => 301` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 115 | `p_opponent_username => USER, p_rule_id => 1` | Ошибка "Нельзя создать игру с самим собой" | |
-| 116 | `p_opponent_username => USER, p_player_color => 'W'` | Ошибка "Нельзя создать игру с самим собой" | |
-| 117 | `p_opponent_username => 'NONEXISTENT', p_rule_id => 1` | Ошибка "Оппонент не найден" | |
-| 118 | `p_opponent_username => 'NONEXISTENT', p_player_color => 'W'` | Ошибка "Оппонент не найден" | |
+| 86 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 30, p_time_limit_game_sec => 599` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 87 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 29, p_time_limit_game_sec => 600` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 88 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 29, p_time_limit_game_sec => 599` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 89 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 301, p_time_limit_game_sec => 600` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 90 | `p_opponent_username => 'PLAYER2', p_time_limit_move_sec => 30, p_time_limit_game_sec => 7201` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 91 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 4, p_enable_pos_rep_draw => 'Y'` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 92 | `p_opponent_username => 'PLAYER2', p_draw_moves_limit => 21, p_enable_pos_rep_draw => 'Y'` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 93 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'X'` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
+| 94 | `p_opponent_username => 'PLAYER2', p_rule_id => 3, p_player_color => 'W'` | Ошибка «Правила игры с ID=3 не найдены.» | |
+| 95 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_time_limit_move_sec => 29` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 96 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_time_limit_move_sec => 301` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 97 | `p_opponent_username => 'PLAYER2', p_rule_id => 2, p_time_limit_game_sec => 599` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 98 | `p_opponent_username => 'PLAYER2', p_rule_id => 2, p_time_limit_game_sec => 7201` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 99 | `p_opponent_username => 'PLAYER2', p_player_color => 'W', p_time_limit_move_sec => 29` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 100 | `p_opponent_username => 'PLAYER2', p_player_color => 'W', p_time_limit_move_sec => 301` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 101 | `p_opponent_username => 'PLAYER2', p_player_color => 'B', p_time_limit_game_sec => 599` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 102 | `p_opponent_username => 'PLAYER2', p_player_color => 'B', p_time_limit_game_sec => 7201` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 103 | `p_opponent_username => 'PLAYER2', p_enable_pos_rep_draw => 'X', p_time_limit_move_sec => 60` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 104 | `p_opponent_username => 'PLAYER2', p_rule_id => 0, p_player_color => 'W', p_time_limit_move_sec => 60` | Ошибка «Правила игры с ID=0 не найдены.» | |
+| 105 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'X', p_time_limit_move_sec => 60` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
+| 106 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_time_limit_move_sec => 29` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 107 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_time_limit_move_sec => 301` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 108 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_time_limit_game_sec => 599` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 109 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_time_limit_game_sec => 7201` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 110 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_draw_moves_limit => 4` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 111 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_draw_moves_limit => 21` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 112 | `p_opponent_username => 'PLAYER2', p_rule_id => 1, p_player_color => 'W', p_enable_pos_rep_draw => 'X'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 113 | `p_opponent_username => 'PLAYER2', p_rule_id => 3, p_player_color => 'X', p_time_limit_move_sec => 29` | Ошибка «Правила игры с ID=3 не найдены.» (первая ошибка) | |
+| 114 | `p_opponent_username => NULL, p_rule_id => 3` | Ошибка «Правила игры с ID=3 не найдены.» | |
+| 115 | `p_opponent_username => NULL, p_player_color => 'X'` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
+| 116 | `p_opponent_username => NULL, p_time_limit_move_sec => 29` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 117 | `p_opponent_username => NULL, p_time_limit_move_sec => 301` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 118 | `p_opponent_username => NULL, p_time_limit_game_sec => 599` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 119 | `p_opponent_username => NULL, p_time_limit_game_sec => 7201` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 120 | `p_opponent_username => NULL, p_draw_moves_limit => 4` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 121 | `p_opponent_username => NULL, p_draw_moves_limit => 21` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 122 | `p_opponent_username => NULL, p_enable_pos_rep_draw => 'X'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 123 | `p_opponent_username => NULL, p_rule_id => 1, p_player_color => 'X'` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
+| 124 | `p_opponent_username => NULL, p_rule_id => 1, p_time_limit_move_sec => 29` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 125 | `p_opponent_username => NULL, p_rule_id => 1, p_time_limit_move_sec => 301` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 126 | `p_opponent_username => NULL, p_rule_id => 2, p_time_limit_game_sec => 599` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 127 | `p_opponent_username => NULL, p_rule_id => 2, p_time_limit_game_sec => 7201` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 128 | `p_opponent_username => NULL, p_player_color => 'W', p_draw_moves_limit => 4` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 129 | `p_opponent_username => NULL, p_player_color => 'W', p_draw_moves_limit => 21` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 130 | `p_opponent_username => NULL, p_enable_pos_rep_draw => 'Y', p_time_limit_move_sec => 29` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 131 | `p_opponent_username => NULL, p_enable_pos_rep_draw => 'Y', p_time_limit_move_sec => 301` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 115 | `p_opponent_username => USER, p_rule_id => 1` | Ошибка «Нельзя вызвать самого себя.» | |
+| 116 | `p_opponent_username => USER, p_player_color => 'W'` | Ошибка «Нельзя вызвать самого себя.» | |
+| 117 | `p_opponent_username => 'NONEXISTENT', p_rule_id => 1` | Ошибка «Оппонент не найден» | |
+| 118 | `p_opponent_username => 'NONEXISTENT', p_player_color => 'W'` | Ошибка «Оппонент не найден» | |
 
 Таблица 2 – Состав входных параметров и ожидаемых результатов для создания PvE игры
 
@@ -960,68 +980,68 @@ BEGIN game_logic.print_active_board; END;
 | 7 | `p_ai_difficulty => 'M', p_rule_id => 2` | Игра создана, ИИ Medium, правила международные 10×10 | |
 | 8 | `p_ai_difficulty => 'H', p_rule_id => 1` | Игра создана, ИИ Hard, правила русские 8×8 | |
 | 9 | `p_ai_difficulty => 'H', p_rule_id => 2` | Игра создана, ИИ Hard, правила международные 10×10 | |
-| 10 | `p_ai_difficulty => 'E', p_rule_id => 3` | Ошибка "Некорректный rule_id" | |
+| 10 | `p_ai_difficulty => 'E', p_rule_id => 3` | Ошибка «Правила игры с ID=3 не найдены.» | |
 | 11 | `p_ai_difficulty => 'E', p_player_color => 'W'` | Игра создана, ИИ Easy, игрок на белых | |
 | 12 | `p_ai_difficulty => 'E', p_player_color => 'B'` | Игра создана, ИИ Easy, игрок на черных | |
 | 13 | `p_ai_difficulty => 'E', p_player_color => NULL` | Игра создана, ИИ Easy, цвет выбран случайно | |
-| 14 | `p_ai_difficulty => 'E', p_player_color => 'X'` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
+| 14 | `p_ai_difficulty => 'E', p_player_color => 'X'` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
 | 15 | `p_ai_difficulty => 'E', p_enable_pos_rep_draw => 'Y'` | Игра создана, ИИ Easy, повтор позиции включен | |
 | 16 | `p_ai_difficulty => 'E', p_enable_pos_rep_draw => 'N'` | Игра создана, ИИ Easy, повтор позиции выключен | |
 | 17 | `p_ai_difficulty => 'E', p_draw_moves_limit => 15` | Игра создана, ИИ Easy, лимит полуходов 15 | |
 | 18 | `p_ai_difficulty => 'E', p_draw_moves_limit => 5` | Игра создана, ИИ Easy, лимит полуходов 5 | |
-| 19 | `p_ai_difficulty => 'E', p_draw_moves_limit => 4` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 20 | `p_ai_difficulty => 'E', p_draw_moves_limit => 21` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
+| 19 | `p_ai_difficulty => 'E', p_draw_moves_limit => 4` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 20 | `p_ai_difficulty => 'E', p_draw_moves_limit => 21` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
 | 20 | `p_ai_difficulty => 'E', p_draw_moves_limit => NULL` | Игра создана, ИИ Easy, лимит полуходов не установлен | |
-| 21 | `p_ai_difficulty => 'X'` | Ошибка "Некорректная сложность ИИ" | |
-| 22 | `p_ai_difficulty => 'e'` | Ошибка "Некорректная сложность ИИ" | |
-| 23 | `p_ai_difficulty => 'm'` | Ошибка "Некорректная сложность ИИ" | |
-| 24 | `p_ai_difficulty => 'h'` | Ошибка "Некорректная сложность ИИ" | |
-| 25 | `p_ai_difficulty => ''` (пустая строка) | Ошибка "Некорректная сложность ИИ" | |
-| 26 | `p_ai_difficulty => ' '` (пробел) | Ошибка "Некорректная сложность ИИ" | |
-| 27 | `p_ai_difficulty => 'EE'` | Ошибка "Некорректная сложность ИИ" | |
-| 28 | `p_ai_difficulty => '1'` | Ошибка "Некорректная сложность ИИ" | |
-| 29 | `p_ai_difficulty => 'Easy'` | Ошибка "Некорректная сложность ИИ" | |
-| 30 | `p_ai_difficulty => 'E', p_opponent_username => 'PLAYER2'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
+| 21 | `p_ai_difficulty => 'X'` | Ошибка «Некорректная сложность ИИ. Допустимые значения: 'E' (Easy), 'M' (Medium), 'H' (Hard).» | |
+| 22 | `p_ai_difficulty => 'e'` | Ошибка «Некорректная сложность ИИ. Допустимые значения: 'E' (Easy), 'M' (Medium), 'H' (Hard).» | |
+| 23 | `p_ai_difficulty => 'm'` | Ошибка «Некорректная сложность ИИ. Допустимые значения: 'E' (Easy), 'M' (Medium), 'H' (Hard).» | |
+| 24 | `p_ai_difficulty => 'h'` | Ошибка «Некорректная сложность ИИ. Допустимые значения: 'E' (Easy), 'M' (Medium), 'H' (Hard).» | |
+| 25 | `p_ai_difficulty => ''` (пустая строка, воспринимается как NULL) | Игра создана как PvP (по умолчанию) | |
+| 26 | `p_ai_difficulty => ' '` (пробел, воспринимается как NULL) | Игра создана как PvP (по умолчанию) | |
+| 27 | `p_ai_difficulty => 'EE'` | Ошибка «Некорректная сложность ИИ. Допустимые значения: 'E' (Easy), 'M' (Medium), 'H' (Hard).» | |
+| 28 | `p_ai_difficulty => '1'` | Ошибка «Некорректная сложность ИИ. Допустимые значения: 'E' (Easy), 'M' (Medium), 'H' (Hard).» | |
+| 29 | `p_ai_difficulty => 'Easy'` | Ошибка «Некорректная сложность ИИ. Допустимые значения: 'E' (Easy), 'M' (Medium), 'H' (Hard).» | |
+| 30 | `p_ai_difficulty => 'E', p_opponent_username => 'PLAYER2'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
 | 31 | `p_ai_difficulty => 'E', p_opponent_username => NULL` | Игра создана, ИИ Easy, открытая игра (неверно, но проверяется) | |
-| 32 | `p_ai_difficulty => 'E', p_puzzle_id => 1` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
+| 32 | `p_ai_difficulty => 'E', p_puzzle_id => 1` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
 | 33 | `p_ai_difficulty => 'E', p_puzzle_id => NULL` | Игра создана, ИИ Easy | |
-| 34 | `p_ai_difficulty => 'E', p_daily => 'Y'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
+| 34 | `p_ai_difficulty => 'E', p_daily => 'Y'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
 | 35 | `p_ai_difficulty => 'E', p_daily => 'N'` | Игра создана, ИИ Easy | |
-| 36 | `p_ai_difficulty => 'E', p_time_limit_move_sec => 60` | Ошибка "Игры против ИИ не могут иметь таймауты (time_limit_move_sec или time_limit_game_sec)" | |
-| 37 | `p_ai_difficulty => 'E', p_time_limit_move_sec => 30` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
+| 36 | `p_ai_difficulty => 'E', p_time_limit_move_sec => 60` | Ошибка «Игры против ИИ не могут иметь таймауты (time_limit_move_sec или time_limit_game_sec)» | |
+| 37 | `p_ai_difficulty => 'E', p_time_limit_move_sec => 30` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
 | 38 | `p_ai_difficulty => 'E', p_time_limit_move_sec => NULL` | Игра создана, ИИ Easy, лимит на ход не установлен | |
-| 39 | `p_ai_difficulty => 'E', p_time_limit_game_sec => 3600` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 40 | `p_ai_difficulty => 'E', p_time_limit_game_sec => 600` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
+| 39 | `p_ai_difficulty => 'E', p_time_limit_game_sec => 3600` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 40 | `p_ai_difficulty => 'E', p_time_limit_game_sec => 600` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
 | 41 | `p_ai_difficulty => 'E', p_time_limit_game_sec => NULL` | Игра создана, ИИ Easy, лимит на партию не установлен | |
-| 42 | `p_ai_difficulty => 'E', p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 43 | `p_ai_difficulty => 'M', p_opponent_username => 'PLAYER2'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
-| 44 | `p_ai_difficulty => 'M', p_puzzle_id => 1` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
-| 45 | `p_ai_difficulty => 'M', p_time_limit_move_sec => 60` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 46 | `p_ai_difficulty => 'M', p_time_limit_game_sec => 3600` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 47 | `p_ai_difficulty => 'H', p_opponent_username => 'PLAYER2'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
-| 48 | `p_ai_difficulty => 'H', p_puzzle_id => 1` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
-| 49 | `p_ai_difficulty => 'H', p_time_limit_move_sec => 60` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 50 | `p_ai_difficulty => 'H', p_time_limit_game_sec => 3600` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
+| 42 | `p_ai_difficulty => 'E', p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 43 | `p_ai_difficulty => 'M', p_opponent_username => 'PLAYER2'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
+| 44 | `p_ai_difficulty => 'M', p_puzzle_id => 1` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
+| 45 | `p_ai_difficulty => 'M', p_time_limit_move_sec => 60` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 46 | `p_ai_difficulty => 'M', p_time_limit_game_sec => 3600` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 47 | `p_ai_difficulty => 'H', p_opponent_username => 'PLAYER2'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
+| 48 | `p_ai_difficulty => 'H', p_puzzle_id => 1` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
+| 49 | `p_ai_difficulty => 'H', p_time_limit_move_sec => 60` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 50 | `p_ai_difficulty => 'H', p_time_limit_game_sec => 3600` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
 | 51 | `p_ai_difficulty => 'E', p_rule_id => 1, p_player_color => 'W'` | Игра создана, ИИ Easy, правила русские, игрок на белых | |
 | 52 | `p_ai_difficulty => 'E', p_rule_id => 2, p_player_color => 'B'` | Игра создана, ИИ Easy, правила международные, игрок на черных | |
 | 53 | `p_ai_difficulty => 'E', p_rule_id => 1, p_enable_pos_rep_draw => 'Y'` | Игра создана, ИИ Easy, правила русские, повтор позиции включен | |
 | 54 | `p_ai_difficulty => 'E', p_rule_id => 1, p_draw_moves_limit => 15` | Игра создана, ИИ Easy, правила русские, лимит полуходов 15 | |
 | 55 | `p_ai_difficulty => 'E', p_rule_id => 1, p_player_color => 'W', p_enable_pos_rep_draw => 'Y', p_draw_moves_limit => 15` | Игра создана со всеми допустимыми параметрами | |
-| 56 | `p_ai_difficulty => 'E', p_rule_id => 3` | Ошибка "Некорректный rule_id" | |
-| 57 | `p_ai_difficulty => 'E', p_player_color => 'X'` | Ошибка "Цвет игрока должен быть W (белые) или B (черные)" | |
-| 58 | `p_ai_difficulty => 'E', p_enable_pos_rep_draw => 'X'` | Ошибка "Параметр enable_pos_rep_draw должен быть Y или N" | |
-| 59 | `p_ai_difficulty => 'E', p_draw_moves_limit => 4` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 60 | `p_ai_difficulty => 'E', p_draw_moves_limit => 21` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 61 | `p_ai_difficulty => 'E', p_time_limit_move_sec => 301` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 62 | `p_ai_difficulty => 'E', p_time_limit_game_sec => 7201` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 60 | `p_ai_difficulty => 'E', p_rule_id => 1, p_time_limit_move_sec => 60` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 61 | `p_ai_difficulty => 'E', p_rule_id => 1, p_time_limit_game_sec => 3600` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 62 | `p_ai_difficulty => 'E', p_player_color => 'W', p_time_limit_move_sec => 60` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 63 | `p_ai_difficulty => 'E', p_enable_pos_rep_draw => 'Y', p_time_limit_game_sec => 3600` | Ошибка "Игры против ИИ не могут иметь таймауты" | |
-| 64 | `p_ai_difficulty => 'E', p_rule_id => 3, p_player_color => 'X'` | Ошибка "Некорректный rule_id" (первая ошибка) | |
-| 65 | `p_ai_difficulty => 'E', p_rule_id => 1, p_player_color => 'X', p_time_limit_move_sec => 60` | Ошибка "Игры против ИИ не могут иметь таймауты" (первая ошибка) | |
+| 56 | `p_ai_difficulty => 'E', p_rule_id => 3` | Ошибка «Правила игры с ID=3 не найдены.» | |
+| 57 | `p_ai_difficulty => 'E', p_player_color => 'X'` | Ошибка «Цвет игрока должен быть W (белые) или B (черные)» | |
+| 58 | `p_ai_difficulty => 'E', p_enable_pos_rep_draw => 'X'` | Ошибка «Параметр enable_pos_rep_draw должен быть Y или N» | |
+| 59 | `p_ai_difficulty => 'E', p_draw_moves_limit => 4` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 60 | `p_ai_difficulty => 'E', p_draw_moves_limit => 21` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 61 | `p_ai_difficulty => 'E', p_time_limit_move_sec => 301` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 62 | `p_ai_difficulty => 'E', p_time_limit_game_sec => 7201` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 60 | `p_ai_difficulty => 'E', p_rule_id => 1, p_time_limit_move_sec => 60` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 61 | `p_ai_difficulty => 'E', p_rule_id => 1, p_time_limit_game_sec => 3600` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 62 | `p_ai_difficulty => 'E', p_player_color => 'W', p_time_limit_move_sec => 60` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 63 | `p_ai_difficulty => 'E', p_enable_pos_rep_draw => 'Y', p_time_limit_game_sec => 3600` | Ошибка «Игры против ИИ не могут иметь таймауты» | |
+| 64 | `p_ai_difficulty => 'E', p_rule_id => 3, p_player_color => 'X'` | Ошибка «Правила игры с ID=3 не найдены.» (первая ошибка) | |
+| 65 | `p_ai_difficulty => 'E', p_rule_id => 1, p_player_color => 'X', p_time_limit_move_sec => 60` | Ошибка «Игры против ИИ не могут иметь таймауты» (первая ошибка) | |
 | 66 | `p_ai_difficulty => NULL` | Игра создана как PvP (по умолчанию) | |
-| 67 | Создание PvE игры при наличии активной игры | Ошибка "Вы уже участвуете в активной игре" | |
+| 67 | Создание PvE игры при наличии активной игры | Ошибка «Вы уже участвуете в активной игре» | |
 
 Таблица 3 – Состав входных параметров и ожидаемых результатов для создания задачи (Puzzle)
 
@@ -1029,9 +1049,9 @@ BEGIN game_logic.print_active_board; END;
 |--------------|---------------------------|---------------------|----------------------------------------|
 | 1 | `p_puzzle_id => 1` | Игра-задача создана, статус 'A' | |
 | 2 | `p_puzzle_id => 2` | Игра-задача создана, статус 'A' | |
-| 3 | `p_puzzle_id => 999` | Ошибка "Задача не найдена" | |
-| 4 | `p_puzzle_id => 0` | Ошибка "Задача не найдена" | |
-| 5 | `p_puzzle_id => -1` | Ошибка "Задача не найдена" | |
+| 3 | `p_puzzle_id => 999` | Ошибка «Задача не найдена» | |
+| 4 | `p_puzzle_id => 0` | Ошибка «Задача не найдена» | |
+| 5 | `p_puzzle_id => -1` | Ошибка «Задача не найдена» | |
 | 6 | `p_puzzle_id => NULL` | Игра создана как PvP (по умолчанию) | |
 | 7 | `p_puzzle_id => 1, p_rule_id => 1` | Игра-задача создана, правила из задачи | |
 | 8 | `p_puzzle_id => 1, p_rule_id => 2` | Игра-задача создана, правила из задачи (может не совпадать) | |
@@ -1039,77 +1059,77 @@ BEGIN game_logic.print_active_board; END;
 | 10 | `p_daily => 'Y', p_rule_id => 1` | Ежедневная задача создана, правила из задачи | |
 | 11 | `p_daily => 'N'` | Игра создана как PvP (по умолчанию) | |
 | 12 | `p_daily => 'X'` | Ошибка или игра создана как PvP | |
-| 13 | `p_daily => ''` (пустая строка) | Игра создана как PvP | |
+| 13 | `p_daily => ''` (пустая строка, воспринимается как NULL) | Игра создана как PvP | |
 | 14 | `p_daily => 'y'` | Ошибка или игра создана как PvP | |
 | 15 | `p_daily => 'YES'` | Ошибка или игра создана как PvP | |
-| 16 | `p_puzzle_id => 1, p_daily => 'Y'` | Ошибка "Нельзя одновременно передавать p_daily и p_puzzle_id" | |
+| 16 | `p_puzzle_id => 1, p_daily => 'Y'` | Ошибка «Нельзя одновременно передавать p_daily и p_puzzle_id» | |
 | 17 | `p_puzzle_id => 1, p_daily => 'N'` | Игра-задача создана, p_daily игнорируется | |
-| 18 | `p_puzzle_id => 1, p_time_limit_move_sec => 60` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 19 | `p_puzzle_id => 1, p_time_limit_move_sec => 30` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
+| 18 | `p_puzzle_id => 1, p_time_limit_move_sec => 60` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 19 | `p_puzzle_id => 1, p_time_limit_move_sec => 30` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
 | 20 | `p_puzzle_id => 1, p_time_limit_move_sec => NULL` | Игра-задача создана, лимит на ход не установлен | |
-| 21 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 22 | `p_puzzle_id => 1, p_time_limit_game_sec => 600` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
+| 21 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 22 | `p_puzzle_id => 1, p_time_limit_game_sec => 600` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
 | 23 | `p_puzzle_id => 1, p_time_limit_game_sec => NULL` | Игра-задача создана, лимит на партию не установлен | |
-| 24 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600` | Ошибка "Задачи не могут иметь таймауты" | |
-| 25 | `p_puzzle_id => 1, p_draw_moves_limit => 15` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 26 | `p_puzzle_id => 1, p_draw_moves_limit => 5` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
+| 24 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600` | Ошибка «Задачи не могут иметь таймауты» | |
+| 25 | `p_puzzle_id => 1, p_draw_moves_limit => 15` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 26 | `p_puzzle_id => 1, p_draw_moves_limit => 5` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
 | 27 | `p_puzzle_id => 1, p_draw_moves_limit => NULL` | Игра-задача создана, лимит полуходов не установлен | |
-| 28 | `p_puzzle_id => 1, p_enable_pos_rep_draw => 'Y'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
+| 28 | `p_puzzle_id => 1, p_enable_pos_rep_draw => 'Y'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
 | 29 | `p_puzzle_id => 1, p_enable_pos_rep_draw => 'N'` | Игра-задача создана, повтор позиций выключен (по умолчанию) | |
 | 30 | `p_puzzle_id => 1, p_enable_pos_rep_draw => NULL` | Игра-задача создана, повтор позиций выключен (по умолчанию) | |
-| 31 | `p_puzzle_id => 1, p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 32 | `p_puzzle_id => 1, p_player_color => 'B'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
+| 31 | `p_puzzle_id => 1, p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 32 | `p_puzzle_id => 1, p_player_color => 'B'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
 | 33 | `p_puzzle_id => 1, p_player_color => NULL` | Игра-задача создана, цвет из задачи | |
-| 34 | `p_puzzle_id => 1, p_opponent_username => 'PLAYER2'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
+| 34 | `p_puzzle_id => 1, p_opponent_username => 'PLAYER2'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
 | 35 | `p_puzzle_id => 1, p_opponent_username => NULL` | Игра-задача создана | |
-| 36 | `p_puzzle_id => 1, p_ai_difficulty => 'E'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
+| 36 | `p_puzzle_id => 1, p_ai_difficulty => 'E'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
 | 37 | `p_puzzle_id => 1, p_ai_difficulty => NULL` | Игра-задача создана | |
-| 38 | `p_puzzle_id => 1, p_rule_id => 1, p_time_limit_move_sec => 60` | Ошибка "Задачи не могут иметь таймауты" | |
-| 39 | `p_puzzle_id => 1, p_rule_id => 1, p_time_limit_game_sec => 3600` | Ошибка "Задачи не могут иметь таймауты" | |
-| 40 | `p_puzzle_id => 1, p_rule_id => 1, p_draw_moves_limit => 15` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 41 | `p_puzzle_id => 1, p_rule_id => 1, p_enable_pos_rep_draw => 'Y'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 42 | `p_puzzle_id => 1, p_rule_id => 1, p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 43 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600` | Ошибка "Задачи не могут иметь таймауты" | |
-| 44 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_draw_moves_limit => 15` | Ошибка "Задачи не могут иметь таймауты" | |
-| 45 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_enable_pos_rep_draw => 'Y'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 46 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 47 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15` | Ошибка "Задачи не могут иметь таймауты" | |
-| 48 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_enable_pos_rep_draw => 'Y'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 49 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 50 | `p_puzzle_id => 1, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 51 | `p_puzzle_id => 1, p_draw_moves_limit => 15, p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 52 | `p_puzzle_id => 1, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 53 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15` | Ошибка "Задачи не могут иметь таймауты" | |
-| 54 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_enable_pos_rep_draw => 'Y'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 55 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 56 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 57 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_draw_moves_limit => 15, p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 58 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 59 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 60 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 61 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 62 | `p_puzzle_id => 1, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 63 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 64 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 65 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 66 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 67 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 68 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты" | |
-| 69 | `p_daily => 'Y', p_time_limit_move_sec => 60` | Ошибка "Задачи не могут иметь таймауты" | |
-| 70 | `p_daily => 'Y', p_time_limit_game_sec => 3600` | Ошибка "Задачи не могут иметь таймауты" | |
-| 71 | `p_daily => 'Y', p_draw_moves_limit => 15` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 72 | `p_daily => 'Y', p_enable_pos_rep_draw => 'Y'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 73 | `p_daily => 'Y', p_player_color => 'W'` | Ошибка "Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета" | |
-| 74 | `p_daily => 'Y', p_opponent_username => 'PLAYER2'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
-| 75 | `p_daily => 'Y', p_ai_difficulty => 'E'` | Ошибка "Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP" | |
-| 76 | Создание задачи при наличии активной игры | Ошибка "Вы уже участвуете в активной игре" | |
+| 38 | `p_puzzle_id => 1, p_rule_id => 1, p_time_limit_move_sec => 60` | Ошибка «Задачи не могут иметь таймауты» | |
+| 39 | `p_puzzle_id => 1, p_rule_id => 1, p_time_limit_game_sec => 3600` | Ошибка «Задачи не могут иметь таймауты» | |
+| 40 | `p_puzzle_id => 1, p_rule_id => 1, p_draw_moves_limit => 15` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 41 | `p_puzzle_id => 1, p_rule_id => 1, p_enable_pos_rep_draw => 'Y'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 42 | `p_puzzle_id => 1, p_rule_id => 1, p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 43 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600` | Ошибка «Задачи не могут иметь таймауты» | |
+| 44 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_draw_moves_limit => 15` | Ошибка «Задачи не могут иметь таймауты» | |
+| 45 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_enable_pos_rep_draw => 'Y'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 46 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 47 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15` | Ошибка «Задачи не могут иметь таймауты» | |
+| 48 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_enable_pos_rep_draw => 'Y'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 49 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 50 | `p_puzzle_id => 1, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 51 | `p_puzzle_id => 1, p_draw_moves_limit => 15, p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 52 | `p_puzzle_id => 1, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 53 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15` | Ошибка «Задачи не могут иметь таймауты» | |
+| 54 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_enable_pos_rep_draw => 'Y'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 55 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 56 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 57 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_draw_moves_limit => 15, p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 58 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 59 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 60 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 61 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 62 | `p_puzzle_id => 1, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 63 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 64 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 65 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 66 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 67 | `p_puzzle_id => 1, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 68 | `p_puzzle_id => 1, p_time_limit_move_sec => 60, p_time_limit_game_sec => 3600, p_draw_moves_limit => 15, p_enable_pos_rep_draw => 'Y', p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты» | |
+| 69 | `p_daily => 'Y', p_time_limit_move_sec => 60` | Ошибка «Задачи не могут иметь таймауты» | |
+| 70 | `p_daily => 'Y', p_time_limit_game_sec => 3600` | Ошибка «Задачи не могут иметь таймауты» | |
+| 71 | `p_daily => 'Y', p_draw_moves_limit => 15` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 72 | `p_daily => 'Y', p_enable_pos_rep_draw => 'Y'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 73 | `p_daily => 'Y', p_player_color => 'W'` | Ошибка «Задачи не могут иметь таймауты, лимиты ходов, повтор позиций или выбор цвета» | |
+| 74 | `p_daily => 'Y', p_opponent_username => 'PLAYER2'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
+| 75 | `p_daily => 'Y', p_ai_difficulty => 'E'` | Ошибка «Конфликт параметров. Нельзя одновременно создавать Задачу, PVE и PVP» | |
+| 76 | Создание задачи при наличии активной игры | Ошибка «Вы уже участвуете в активной игре» | |
 
 Таблица 4 – Состав входных параметров и ожидаемых результатов для проверки активной игры
 
 | № испы-тания | Условия | Ожидаемый результат | Результат, полученный в ходе испытания |
 |--------------|---------|---------------------|----------------------------------------|
 | 1 | Создание игры при отсутствии активной игры | Игра создана успешно | |
-| 2 | Создание игры при наличии активной игры | Ошибка "Вы уже участвуете в активной игре" | |
+| 2 | Создание игры при наличии активной игры | Ошибка «Вы уже участвуете в активной игре» | |
 
 
 
@@ -1123,20 +1143,20 @@ BEGIN game_logic.print_active_board; END;
 |--------------|---------------------------|---------------------|----------------------------------------|
 | 1 | `p_game_id => 1` (открытая игра, статус 'O') | Игрок присоединился, статус изменен на 'A', игра начата | |
 | 2 | `p_game_id => 1` (вызов, статус 'C', игрок является адресатом) | Игрок принял вызов, статус изменен на 'A', игра начата | |
-| 3 | `p_game_id => 1` (активная игра, статус 'A') | Ошибка "Нельзя присоединиться к этой игре (ID: 1, статус: A)" | |
-| 4 | `p_game_id => 1` (завершенная игра, статус 'V') | Ошибка "Нельзя присоединиться к этой игре (ID: 1, статус: V)" | |
-| 5 | `p_game_id => 1` (завершенная игра, статус 'D') | Ошибка "Нельзя присоединиться к этой игре (ID: 1, статус: D)" | |
-| 6 | `p_game_id => 1` (завершенная игра, статус 'T') | Ошибка "Нельзя присоединиться к этой игре (ID: 1, статус: T)" | |
-| 7 | `p_game_id => 1` (завершенная игра, статус 'R') | Ошибка "Нельзя присоединиться к этой игре (ID: 1, статус: R)" | |
-| 8 | `p_game_id => 1` (своя открытая игра, статус 'O') | Ошибка "Нельзя присоединиться к собственной игре (ID: 1)" | |
-| 9 | `p_game_id => 1` (свой вызов, статус 'C') | Ошибка "Нельзя присоединиться к собственной игре (ID: 1)" | |
-| 10 | `p_game_id => 999` (несуществующая игра) | Ошибка "Игра с ID 999 не найдена" | |
-| 11 | `p_game_id => 0` | Ошибка "Игра с ID 0 не найдена" | |
-| 12 | `p_game_id => -1` | Ошибка "Игра с ID -1 не найдена" | |
-| 13 | `p_game_id => NULL` | Ошибка "Игра с ID не найдена" или ошибка типа данных | |
-| 14 | `p_game_id => 1` (открытая игра, у игрока уже есть активная игра с другим ID) | Ошибка "Вы уже участвуете в активной игре. ID вашей игры: X" | |
+| 3 | `p_game_id => 1` (активная игра, статус 'A') | Ошибка «Нельзя присоединиться к этой игре (ID: 1, статус: A)» | |
+| 4 | `p_game_id => 1` (завершенная игра, статус 'V') | Ошибка «Нельзя присоединиться к этой игре (ID: 1, статус: V)» | |
+| 5 | `p_game_id => 1` (завершенная игра, статус 'D') | Ошибка «Нельзя присоединиться к этой игре (ID: 1, статус: D)» | |
+| 6 | `p_game_id => 1` (завершенная игра, статус 'T') | Ошибка «Нельзя присоединиться к этой игре (ID: 1, статус: T)» | |
+| 7 | `p_game_id => 1` (завершенная игра, статус 'R') | Ошибка «Нельзя присоединиться к этой игре (ID: 1, статус: R)» | |
+| 8 | `p_game_id => 1` (своя открытая игра, статус 'O') | Ошибка «Нельзя присоединиться к собственной игре (ID: 1)» | |
+| 9 | `p_game_id => 1` (свой вызов, статус 'C') | Ошибка «Нельзя присоединиться к собственной игре (ID: 1)» | |
+| 10 | `p_game_id => 999` (несуществующая игра) | Ошибка «Игра с ID 999 не найдена» | |
+| 11 | `p_game_id => 0` | Ошибка «Игра с ID 0 не найдена» | |
+| 12 | `p_game_id => -1` | Ошибка «Игра с ID -1 не найдена» | |
+| 13 | `p_game_id => NULL` | Ошибка «Игра с ID не найдена» или ошибка типа данных | |
+| 14 | `p_game_id => 1` (открытая игра, у игрока уже есть активная игра с другим ID) | Ошибка «Вы уже участвуете в активной игре. ID вашей игры: X» | |
 | 15 | `p_game_id => 1` (открытая игра, у игрока активная игра с тем же ID) | Игрок присоединился, статус изменен на 'A' | |
-| 16 | `p_game_id => 1` (вызов, статус 'C', игрок НЕ является адресатом, оба игрока назначены) | Ошибка "Доступ запрещен. Этот вызов (ID: 1) предназначен не вам" | |
+| 16 | `p_game_id => 1` (вызов, статус 'C', игрок НЕ является адресатом, оба игрока назначены) | Ошибка «Доступ запрещен. Этот вызов (ID: 1) предназначен не вам» | |
 | 17 | `p_game_id => 1` (вызов, статус 'C', игрок является адресатом, оба игрока назначены) | Игрок принял вызов, статус изменен на 'A' | |
 | 18 | `p_game_id => 1` (вызов, статус 'C', только создатель назначен) | Игрок принял вызов, статус изменен на 'A' | |
 | 19 | `p_game_id => 1` (открытая игра, часть матча) | Игрок присоединился, выведено сообщение о матче | |
@@ -1145,7 +1165,6 @@ BEGIN game_logic.print_active_board; END;
 | 22 | `p_game_id => 1` (вызов, с лимитом времени на партию) | Игрок принял вызов, время инициализировано, создан job для таймаута | |
 | 23 | `p_game_id => 1` (открытая игра, без лимита времени) | Игрок присоединился, job для таймаута не создан | |
 | 24 | `p_game_id => 1` (вызов, без лимита времени) | Игрок принял вызов, job для таймаута не создан | |
-| 25 | `p_game_id => 1.5` (дробное число) | Ошибка "Игра с ID не найдена" или приведение к 1 | |
 | 26 | `p_game_id => '1'` (строка) | Ошибка типа данных или приведение к числу | |
 | 27 | `p_game_id => 'abc'` (не число) | Ошибка типа данных | |
 | 28 | `p_game_id => 1` (открытая игра, создатель на белых) | Игрок присоединился на черных, статус 'A' | |
@@ -1167,28 +1186,28 @@ BEGIN game_logic.print_active_board; END;
 | 2 | `p_move_notation => 'c3:e5'` (взятие, валидное) | Ход принят, фигура срублена, очередь перешла к противнику | |
 | 3 | `p_move_notation => 'h4:f6:d8:b6:f2'` (многоходовое взятие, валидное) | Ход принят, все фигуры срублены, очередь перешла к противнику | |
 | 4 | `p_move_notation => 'd2-e3'` (превращение в дамку, валидное) | Ход принят, шашка превращена в дамку, очередь перешла к противнику | |
-| 5 | `p_move_notation => NULL` | Ошибка "Нелегальный ход: ""." или ошибка типа данных | |
-| 6 | `p_move_notation => ''` (пустая строка) | Ошибка "Нелегальный ход: ""." | |
-| 7 | `p_move_notation => '   '` (только пробелы) | Ошибка "Нелегальный ход: ""." (после TRIM) | |
-| 8 | `p_move_notation => 'c3-d4'` (не очередь игрока, очередь белых, игрок черные) | Ошибка "Сейчас не ваш ход. (ID Игры: X, Очередь: W)." | |
-| 9 | `p_move_notation => 'c3-d4'` (не очередь игрока, очередь черных, игрок белые) | Ошибка "Сейчас не ваш ход. (ID Игры: X, Очередь: B)." | |
-| 10 | `p_move_notation => 'c3-d4'` (нет активной игры) | Ошибка "Нет активных игр, чтобы сделать ход." | |
-| 11 | `p_move_notation => 'c3-d4'` (игра статус 'O', не активна) | Ошибка "Игра (ID: X) еще не активна. Противник не подключился." | |
-| 12 | `p_move_notation => 'c3-d4'` (игра статус 'C', не активна) | Ошибка "Игра (ID: X) еще не активна. Противник не подключился." | |
-| 13 | `p_move_notation => 'c3-d4'` (игра статус 'V', завершена) | Ошибка "Игра (ID: X) еще не активна. Противник не подключился." | |
-| 14 | `p_move_notation => 'c3-d4'` (игра статус 'D', завершена) | Ошибка "Игра (ID: X) еще не активна. Противник не подключился." | |
-| 15 | `p_move_notation => 'c3-d4'` (игра статус 'T', завершена) | Ошибка "Игра (ID: X) еще не активна. Противник не подключился." | |
-| 16 | `p_move_notation => 'c3-d4'` (игра статус 'R', завершена) | Ошибка "Игра (ID: X) еще не активна. Противник не подключился." | |
-| 17 | `p_move_notation => 'c3-d4'` (есть обязательное взятие, игрок делает тихий ход) | Ошибка "Неверный ход. Взятие обязательно! Доступные варианты: ..." | |
-| 18 | `p_move_notation => 'c3:e5'` (есть обязательное взятие, но не максимальное) | Ошибка "Неверный ход. Взятие обязательно! Доступные варианты: ..." (с максимальным взятием) | |
-| 19 | `p_move_notation => 'a1-b2'` (нелегальный ход, фигура не может так ходить) | Ошибка "Нелегальный ход: "a1-b2"." | |
-| 20 | `p_move_notation => 'a1-b3'` (нелегальный ход, слишком далеко) | Ошибка "Нелегальный ход: "a1-b3"." | |
-| 21 | `p_move_notation => 'invalid'` (неверный формат) | Ошибка "Нелегальный ход: "invalid"." | |
-| 22 | `p_move_notation => 'a3'` (неполный формат) | Ошибка "Нелегальный ход: "a3"." | |
-| 23 | `p_move_notation => 'a3-b4-c5'` (неверный формат для тихого хода) | Ошибка "Нелегальный ход: "a3-b4-c5"." | |
-| 24 | `p_move_notation => 'a3:b5'` (неверный формат, двоеточие без взятия) | Ошибка "Нелегальный ход: "a3:b5"." | |
+| 5 | `p_move_notation => NULL` | Ошибка «Нелегальный ход: "".» или ошибка типа данных | |
+| 6 | `p_move_notation => ''` (пустая строка) | Ошибка «Нелегальный ход: "".» | |
+| 7 | `p_move_notation => '   '` (только пробелы) | Ошибка «Нелегальный ход: "".» (после TRIM) | |
+| 8 | `p_move_notation => 'c3-d4'` (не очередь игрока, очередь белых, игрок черные) | Ошибка «Сейчас не ваш ход. (ID Игры: X, Очередь: W).» | |
+| 9 | `p_move_notation => 'c3-d4'` (не очередь игрока, очередь черных, игрок белые) | Ошибка «Сейчас не ваш ход. (ID Игры: X, Очередь: B).» | |
+| 10 | `p_move_notation => 'c3-d4'` (нет активной игры) | Ошибка «Нет активных игр, чтобы сделать ход.» | |
+| 11 | `p_move_notation => 'c3-d4'` (игра статус 'O', не активна) | Ошибка «Игра (ID: X) еще не активна. Противник не подключился.» | |
+| 12 | `p_move_notation => 'c3-d4'` (игра статус 'C', не активна) | Ошибка «Игра (ID: X) еще не активна. Противник не подключился.» | |
+| 13 | `p_move_notation => 'c3-d4'` (игра статус 'V', завершена) | Ошибка «Игра (ID: X) еще не активна. Противник не подключился.» | |
+| 14 | `p_move_notation => 'c3-d4'` (игра статус 'D', завершена) | Ошибка «Игра (ID: X) еще не активна. Противник не подключился.» | |
+| 15 | `p_move_notation => 'c3-d4'` (игра статус 'T', завершена) | Ошибка «Игра (ID: X) еще не активна. Противник не подключился.» | |
+| 16 | `p_move_notation => 'c3-d4'` (игра статус 'R', завершена) | Ошибка «Игра (ID: X) еще не активна. Противник не подключился.» | |
+| 17 | `p_move_notation => 'c3-d4'` (есть обязательное взятие, игрок делает тихий ход) | Ошибка «Неверный ход. Взятие обязательно! Доступные варианты: ...» | |
+| 18 | `p_move_notation => 'c3:e5'` (есть обязательное взятие, но не максимальное) | Ошибка «Неверный ход. Взятие обязательно! Доступные варианты: ...» (с максимальным взятием) | |
+| 19 | `p_move_notation => 'a1-b2'` (нелегальный ход, фигура не может так ходить) | Ошибка «Нелегальный ход: »a1-b2«.» | |
+| 20 | `p_move_notation => 'a1-b3'` (нелегальный ход, слишком далеко) | Ошибка «Нелегальный ход: »a1-b3«.» | |
+| 21 | `p_move_notation => 'invalid'` (неверный формат) | Ошибка «Нелегальный ход: »invalid«.» | |
+| 22 | `p_move_notation => 'a3'` (неполный формат) | Ошибка «Нелегальный ход: »a3«.» | |
+| 23 | `p_move_notation => 'a3-b4-c5'` (неверный формат для тихого хода) | Ошибка «Нелегальный ход: »a3-b4-c5«.» | |
+| 24 | `p_move_notation => 'a3:b5'` (неверный формат, двоеточие без взятия) | Ошибка «Нелегальный ход: »a3:b5«.» | |
 | 25 | `p_move_notation => 'A3-B4'` (верхний регистр) | Ход принят (регистр не важен) | |
-| 26 | `p_move_notation => 'a3 - b4'` (пробелы вокруг дефиса) | Ошибка "Нелегальный ход: "a3 - b4"." (TRIM удаляет пробелы только по краям) | |
+| 26 | `p_move_notation => 'a3 - b4'` (пробелы вокруг дефиса) | Ошибка «Нелегальный ход: »a3 - b4«.» (TRIM удаляет пробелы только по краям) | |
 | 27 | `p_move_notation => '  c3-d4  '` (пробелы по краям) | Ход принят (TRIM удаляет пробелы по краям) | |
 | 28 | `p_move_notation => 'c3:e5:g7'` (многоходовое взятие, 3 хода) | Ход принят, все фигуры срублены | |
 | 29 | `p_move_notation => 'c3:e5:g7:i9'` (многоходовое взятие, 4 хода) | Ход принят, все фигуры срублены | |
@@ -1429,9 +1448,9 @@ BEGIN game_logic.print_active_board; END;
 |--------------|---------------------------|---------------------|----------------------------------------|
 | 1 | `p_opponent_username => 'PLAYER2', p_games_to_win => 3` | Матч создан, первая игра создана, статус 'C' | |
 | 2 | `p_opponent_username => NULL, p_games_to_win => 3` | Открытый матч создан, первая игра создана, статус 'O' | |
-| 3 | `p_opponent_username => USER` | Ошибка "Нельзя создать игру с самим собой" | |
-| 4 | `p_games_to_win => 2` | Ошибка "Количество игр для победы должно быть нечетным" | |
-| 5 | `p_games_to_win => 0` | Ошибка "Количество игр для победы должно быть нечетным" | |
+| 3 | `p_opponent_username => USER` | Ошибка «Нельзя вызвать самого себя.» | |
+| 4 | `p_games_to_win => 2` | Ошибка «Неверное количество игр для победы (p_games_to_win). Должно быть нечетным числом (best of N, где N нечетное).» | |
+| 5 | `p_games_to_win => 0` | Ошибка «Неверное количество игр для победы (p_games_to_win). Должно быть нечетным числом (best of N, где N нечетное).» | |
 | 6 | `p_games_to_win => 5` | Матч создан, best of 5 | |
 | 7 | `p_games_to_win => NULL` | Матч создан, best of 3 (по умолчанию) | |
 | 8 | `p_player_color => 'W'` | Игрок назначен на белые в первой игре | |
@@ -1440,16 +1459,16 @@ BEGIN game_logic.print_active_board; END;
 | 11 | `p_rule_id => 1` | Матч создан с правилами русских шашек | |
 | 12 | `p_rule_id => 2` | Матч создан с правилами международных шашек | |
 | 13 | `p_time_limit_move_sec => 60` | Лимит времени на ход установлен (60 сек) | |
-| 14 | `p_time_limit_move_sec => 20` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
-| 15 | `p_time_limit_move_sec => 301` | Ошибка "Лимит времени на ход должен быть от 30 до 300 секунд" | |
+| 14 | `p_time_limit_move_sec => 20` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
+| 15 | `p_time_limit_move_sec => 301` | Ошибка «Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).» | |
 | 16 | `p_time_limit_game_sec => 3600` | Лимит времени на партию установлен (3600 сек) | |
-| 17 | `p_time_limit_game_sec => 500` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
-| 18 | `p_time_limit_game_sec => 7201` | Ошибка "Лимит времени на партию должен быть от 600 до 7200 секунд" | |
+| 17 | `p_time_limit_game_sec => 500` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
+| 18 | `p_time_limit_game_sec => 7201` | Ошибка «Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).» | |
 | 19 | `p_draw_moves_limit => 15` | Лимит полуходов без взятий установлен (15) | |
-| 20 | `p_draw_moves_limit => 3` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
-| 21 | `p_draw_moves_limit => 21` | Ошибка "Лимит ходов без взятий должен быть от 5 до 20" | |
+| 20 | `p_draw_moves_limit => 3` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
+| 21 | `p_draw_moves_limit => 21` | Ошибка «Лимит ходов без взятий должен быть от 5 до 20.» | |
 | 19 | `p_enable_pos_rep_draw => 'Y'` | Ничья по повтору позиции включена | |
-| 20 | Создание матча при наличии активной игры | Ошибка "Вы уже заняты в активной сессии" | |
+| 20 | Создание матча при наличии активной игры | Ошибка «Вы уже заняты в активной сессии» | |
 | 21 | После победы в 2 играх из 3 | Матч завершен, победитель определен, статус 'C' | |
 | 22 | После завершения игры в матче | Следующая игра создана автоматически с чередованием цвета | |
 | 23 | После завершения матча | Рейтинги обновлены с бонусом за матч (+10*N, где N = games_to_win) | |
@@ -1465,19 +1484,18 @@ BEGIN game_logic.print_active_board; END;
 |--------------|---------------------------|---------------------|----------------------------------------|
 | 1 | `p_match_id => 1` (открытый матч, статус 'O') | Игрок присоединился к матчу, первая игра активирована, статус матча 'A' | |
 | 2 | `p_match_id => 1` (вызов на матч, статус 'C') | Игрок присоединился к матчу, первая игра активирована, статус матча 'A' | |
-| 3 | `p_match_id => 999` (несуществующий матч) | Ошибка "Матч с ID 999 не найден" | |
-| 4 | `p_match_id => 0` | Ошибка "Матч с ID 0 не найден" | |
-| 5 | `p_match_id => -1` | Ошибка "Матч с ID -1 не найден" | |
-| 6 | `p_match_id => NULL` | Ошибка "Матч с ID не найден" или ошибка типа данных | |
-| 7 | `p_match_id => 1.5` (дробное число) | Ошибка "Матч с ID не найден" или приведение к 1 | |
+| 3 | `p_match_id => 999` (несуществующий матч) | Ошибка «Матч с ID 999 не найден» | |
+| 4 | `p_match_id => 0` | Ошибка «Матч с ID 0 не найден» | |
+| 5 | `p_match_id => -1` | Ошибка «Матч с ID -1 не найден» | |
+| 6 | `p_match_id => NULL` | Ошибка «Матч с ID не найден» или ошибка типа данных | |
 | 8 | `p_match_id => '1'` (строка) | Ошибка типа данных или приведение к числу | |
 | 9 | `p_match_id => 'abc'` (не число) | Ошибка типа данных | |
-| 10 | `p_match_id => 1` (матч статус 'A', активен) | Ошибка "Матч (ID: 1) уже начат или завершен (Статус: A)" | |
-| 11 | `p_match_id => 1` (матч статус 'F', завершен) | Ошибка "Матч (ID: 1) уже начат или завершен (Статус: F)" | |
-| 12 | `p_match_id => 1` (есть активная игра) | Ошибка "Вы уже заняты в активной сессии (игре или просмотре)" | |
-| 13 | `p_match_id => 1` (режим просмотра) | Ошибка "Вы уже заняты в активной сессии (игре или просмотре)" | |
-| 14 | `p_match_id => 1` (матч, нет ожидающей игры) | Ошибка "Не найдено ожидающей игры для этого матча (ID: 1)" | |
-| 15 | `p_match_id => 1` (матч, все игры активны или завершены) | Ошибка "Не найдено ожидающей игры для этого матча (ID: 1)" | |
+| 10 | `p_match_id => 1` (матч статус 'A', активен) | Ошибка «Матч (ID: 1) уже начат или завершен (Статус: A)» | |
+| 11 | `p_match_id => 1` (матч статус 'F', завершен) | Ошибка «Матч (ID: 1) уже начат или завершен (Статус: F)» | |
+| 12 | `p_match_id => 1` (есть активная игра) | Ошибка «Вы уже заняты в активной сессии (игре или просмотре)» | |
+| 13 | `p_match_id => 1` (режим просмотра) | Ошибка «Вы уже заняты в активной сессии (игре или просмотре)» | |
+| 14 | `p_match_id => 1` (матч, нет ожидающей игры) | Ошибка «Не найдено ожидающей игры для этого матча (ID: 1)» | |
+| 15 | `p_match_id => 1` (матч, все игры активны или завершены) | Ошибка «Не найдено ожидающей игры для этого матча (ID: 1)» | |
 | 16 | `p_match_id => 1` (открытый матч, успешное присоединение) | Игрок присоединился, первая игра активирована, сообщение выведено | |
 | 17 | `p_match_id => 1` (вызов на матч, успешное присоединение) | Игрок присоединился, первая игра активирована, сообщение выведено | |
 | 18 | `p_match_id => 1` (матч, присоединение к открытой игре) | Игрок присоединился через join_game, матч активирован | |
@@ -1493,17 +1511,17 @@ BEGIN game_logic.print_active_board; END;
 
 | № испы-тания | Условия | Ожидаемый результат | Результат, полученный в ходе испытания |
 |--------------|---------|---------------------|----------------------------------------|
-| 1 | Отмена открытой игры (статус 'O') | Игра удалена, сообщение "Ваш вызов/открытая игра (ID: X) был(а) отменен(а)" | |
-| 2 | Отмена вызова (статус 'C') | Игра удалена, сообщение "Ваш вызов/открытая игра (ID: X) был(а) отменен(а)" | |
+| 1 | Отмена открытой игры (статус 'O') | Игра удалена, сообщение «Ваш вызов/открытая игра (ID: X) был(а) отменен(а)» | |
+| 2 | Отмена вызова (статус 'C') | Игра удалена, сообщение «Ваш вызов/открытая игра (ID: X) был(а) отменен(а)» | |
 | 3 | Отмена игры в матче (статус 'O', есть match_id) | Игра удалена, матч удален, сообщение о отмене матча выведено | |
 | 4 | Отмена вызова в матче (статус 'C', есть match_id) | Игра удалена, матч удален, сообщение о отмене матча выведено | |
-| 5 | Отмена активной игры (статус 'A') | Ошибка "Эту игру (ID: X) нельзя отменить (статус A). Используйте resign_game, чтобы сдаться" | |
-| 6 | Отмена завершенной игры (статус 'V') | Ошибка "Эту игру (ID: X) нельзя отменить (статус V). Используйте resign_game, чтобы сдаться" | |
-| 7 | Отмена завершенной игры (статус 'D') | Ошибка "Эту игру (ID: X) нельзя отменить (статус D). Используйте resign_game, чтобы сдаться" | |
-| 8 | Отмена завершенной игры (статус 'T') | Ошибка "Эту игру (ID: X) нельзя отменить (статус T). Используйте resign_game, чтобы сдаться" | |
-| 9 | Отмена завершенной игры (статус 'R') | Ошибка "Эту игру (ID: X) нельзя отменить (статус R). Используйте resign_game, чтобы сдаться" | |
-| 10 | Отмена игры (нет активной игры) | Ошибка "Нет активных игр или вызовов для отмены" | |
-| 11 | Отмена игры (режим просмотра) | Ошибка "Вы находитесь в режиме просмотра (Игра ID: X). Нельзя отменить игру" | |
+| 5 | Отмена активной игры (статус 'A') | Ошибка «Эту игру (ID: X) нельзя отменить (статус A). Используйте resign_game, чтобы сдаться» | |
+| 6 | Отмена завершенной игры (статус 'V') | Ошибка «Эту игру (ID: X) нельзя отменить (статус V). Используйте resign_game, чтобы сдаться» | |
+| 7 | Отмена завершенной игры (статус 'D') | Ошибка «Эту игру (ID: X) нельзя отменить (статус D). Используйте resign_game, чтобы сдаться» | |
+| 8 | Отмена завершенной игры (статус 'T') | Ошибка «Эту игру (ID: X) нельзя отменить (статус T). Используйте resign_game, чтобы сдаться» | |
+| 9 | Отмена завершенной игры (статус 'R') | Ошибка «Эту игру (ID: X) нельзя отменить (статус R). Используйте resign_game, чтобы сдаться» | |
+| 10 | Отмена игры (нет активной игры) | Ошибка «Нет активных игр или вызовов для отмены» | |
+| 11 | Отмена игры (режим просмотра) | Ошибка «Вы находитесь в режиме просмотра (Игра ID: X). Нельзя отменить игру» | |
 | 12 | Отмена открытой игры (PvP игра) | Игра удалена | |
 | 13 | Отмена открытой игры (PvE игра) | Игра удалена | |
 | 14 | Отмена открытой игры (задача) | Игра удалена | |
@@ -1524,15 +1542,15 @@ BEGIN game_logic.print_active_board; END;
 | 2 | `show_puzzles(p_difficulty => 'E')` | Список задач легкой сложности выведен | |
 | 3 | `show_puzzles(p_difficulty => 'M')` | Список задач средней сложности выведен | |
 | 4 | `show_puzzles(p_difficulty => 'H')` | Список задач сложной сложности выведен | |
-| 5 | `show_puzzles(p_difficulty => 'X')` (неверное значение) | Ошибка "Сложность должна быть 'E' (Easy), 'M' (Medium) или 'H' (Hard)" | |
+| 5 | `show_puzzles(p_difficulty => 'X')` (неверное значение) | Ошибка «Сложность должна быть 'E' (Easy), 'M' (Medium) или 'H' (Hard)» | |
 | 6 | `show_puzzles(p_difficulty => NULL)` | Список всех задач выведен | |
 | 7 | `show_puzzles(p_puzzle_id => 1)` | Детали задачи #1 выведены | |
-| 8 | `show_puzzles(p_puzzle_id => 999)` (несуществующая задача) | Сообщение "Задача с ID 999 не найдена" | |
-| 9 | `show_puzzles(p_puzzle_id => 0)` | Сообщение "Задача с ID 0 не найдена" | |
+| 8 | `show_puzzles(p_puzzle_id => 999)` (несуществующая задача) | Сообщение «Задача с ID 999 не найдена» | |
+| 9 | `show_puzzles(p_puzzle_id => 0)` | Сообщение «Задача с ID 0 не найдена» | |
 | 10 | `show_puzzles(p_puzzle_id => NULL)` | Список всех задач выведен | |
 | 11 | `show_puzzles(p_puzzle_id => 1, p_solution => 'N')` | Детали задачи выведены, решение не показано | |
 | 12 | `show_puzzles(p_puzzle_id => 1, p_solution => 'Y')` (были попытки) | Решение задачи выведено | |
-| 13 | `show_puzzles(p_puzzle_id => 1, p_solution => 'Y')` (не было попыток) | Сообщение "Нельзя смотреть решение, если не было попыток" | |
+| 13 | `show_puzzles(p_puzzle_id => 1, p_solution => 'Y')` (не было попыток) | Сообщение «Нельзя смотреть решение, если не было попыток» | |
 | 14 | `show_puzzles(p_puzzle_id => 1, p_solution => 'y')` (нижний регистр) | Решение выведено (регистр не важен) | |
 | 15 | `show_puzzles(p_puzzle_id => 1, p_solution => NULL)` | Решение не показано (по умолчанию 'N') | |
 | 16 | `show_puzzles(p_difficulty => 'M', p_puzzle_id => 1)` (оба параметра) | Детали задачи #1 выведены (p_puzzle_id имеет приоритет) | |
@@ -1546,39 +1564,39 @@ BEGIN game_logic.print_active_board; END;
 | 24 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W')` | Задача создана | |
 | 25 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'B')` | Задача создана | |
 | 26 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'w')` (нижний регистр) | Задача создана (регистр не важен) | |
-| 27 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'X')` (неверное значение) | Ошибка "p_turn_to_move должен быть 'W' или 'B'" | |
-| 28 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => NULL)` | Ошибка "p_turn_to_move должен быть 'W' или 'B'" | |
+| 27 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'X')` (неверное значение) | Ошибка «p_turn_to_move должен быть 'W' или 'B'» | |
+| 28 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => NULL)` | Ошибка «p_turn_to_move должен быть 'W' или 'B'» | |
 | 29 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_moves_to_solve => 5)` | Задача создана с указанием ходов | |
 | 30 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_moves_to_solve => NULL)` | Задача создана (игра с ИИ) | |
-| 31 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_moves_to_solve => 0)` | Ошибка "p_moves_to_solve должен быть больше 0 или NULL" | |
-| 32 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_moves_to_solve => -1)` | Ошибка "p_moves_to_solve должен быть больше 0 или NULL" | |
+| 31 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_moves_to_solve => 0)` | Ошибка «p_moves_to_solve должен быть больше 0 или NULL» | |
+| 32 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_moves_to_solve => -1)` | Ошибка «p_moves_to_solve должен быть больше 0 или NULL» | |
 | 33 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => 'E')` | Задача создана с легкой сложностью | |
 | 34 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => 'M')` | Задача создана со средней сложностью (по умолчанию) | |
 | 35 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => 'H')` | Задача создана со сложной сложностью | |
 | 36 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => NULL)` | Задача создана со средней сложностью (по умолчанию) | |
-| 37 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => 'X')` | Ошибка "p_difficulty_level должен быть 'E' (Easy), 'M' (Medium) или 'H' (Hard)" | |
+| 37 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => 'X')` | Ошибка «p_difficulty_level должен быть 'E' (Easy), 'M' (Medium) или 'H' (Hard)» | |
 | 38 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_solution => 'c3-d4')` | Задача создана с решением | |
 | 39 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_solution => NULL)` | Задача создана без решения | |
-| 40 | `create_puzzle(p_board_position => EMPTY_CLOB(), p_turn_to_move => 'W')` | Ошибка "Неверный размер доски" или "На доске нет фигур" | |
+| 40 | `create_puzzle(p_board_position => EMPTY_CLOB(), p_turn_to_move => 'W')` | Ошибка «Неверный размер доски» или «На доске нет фигур» | |
 | 41 | `create_puzzle(p_board_position => CLOB_64_символов, p_turn_to_move => 'W')` | Задача создана (доска 8x8) | |
 | 42 | `create_puzzle(p_board_position => CLOB_100_символов, p_turn_to_move => 'W')` | Задача создана (доска 10x10) | |
-| 43 | `create_puzzle(p_board_position => CLOB_50_символов, p_turn_to_move => 'W')` | Ошибка "Неверный размер доски" | |
-| 44 | `create_puzzle(p_board_position => CLOB_с_недопустимыми_символами, p_turn_to_move => 'W')` | Ошибка "Доска содержит недопустимые символы" | |
-| 45 | `create_puzzle(p_board_position => CLOB_без_белых, p_turn_to_move => 'W')` | Ошибка "На доске нет ни одной белой фигуры" | |
-| 46 | `create_puzzle(p_board_position => CLOB_без_черных, p_turn_to_move => 'W')` | Ошибка "На доске нет ни одной черной фигуры" | |
-| 47 | `create_puzzle(p_board_position => CLOB_фигура_на_светлой, p_turn_to_move => 'W')` | Ошибка "Фигура на позиции X находится на светлой клетке" | |
-| 48 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W')` (есть активная игра) | Ошибка "Вы заняты в активной сессии" | |
-| 49 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W')` (режим просмотра) | Ошибка "Вы заняты в активной сессии" | |
+| 43 | `create_puzzle(p_board_position => CLOB_50_символов, p_turn_to_move => 'W')` | Ошибка «Неверный размер доски» | |
+| 44 | `create_puzzle(p_board_position => CLOB_с_недопустимыми_символами, p_turn_to_move => 'W')` | Ошибка «Доска содержит недопустимые символы» | |
+| 45 | `create_puzzle(p_board_position => CLOB_без_белых, p_turn_to_move => 'W')` | Ошибка «На доске нет ни одной белой фигуры» | |
+| 46 | `create_puzzle(p_board_position => CLOB_без_черных, p_turn_to_move => 'W')` | Ошибка «На доске нет ни одной черной фигуры» | |
+| 47 | `create_puzzle(p_board_position => CLOB_фигура_на_светлой, p_turn_to_move => 'W')` | Ошибка «Фигура на позиции X находится на светлой клетке» | |
+| 48 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W')` (есть активная игра) | Ошибка «Вы заняты в активной сессии» | |
+| 49 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W')` (режим просмотра) | Ошибка «Вы заняты в активной сессии» | |
 | 50 | `delete_my_puzzle(p_puzzle_id => 1)` (задача существует, принадлежит пользователю) | Задача удалена | |
-| 51 | `delete_my_puzzle(p_puzzle_id => 999)` (задача не существует) | Ошибка "Задача с ID 999 не существует или не принадлежит вам" | |
-| 52 | `delete_my_puzzle(p_puzzle_id => 1)` (задача принадлежит другому пользователю) | Ошибка "Задача с ID 1 не существует или не принадлежит вам" | |
-| 53 | `delete_my_puzzle(p_puzzle_id => 0)` | Ошибка "Задача с ID 0 не существует или не принадлежит вам" | |
-| 54 | `delete_my_puzzle(p_puzzle_id => NULL)` | Ошибка "Параметр p_puzzle_id обязателен" | |
-| 55 | `delete_my_puzzle(p_puzzle_id => 0)` (удаление всех своих задач, есть задачи) | Все задачи пользователя удалены, сообщение "Успешно удалено задач: X" | |
-| 56 | `delete_my_puzzle(p_puzzle_id => 0)` (удаление всех своих задач, нет задач) | Сообщение "У вас нет созданных задач для удаления" | |
-| 57 | `delete_my_puzzle(p_puzzle_id => 1)` (общая задача, не пользовательская) | Ошибка "Задача с ID 1 не существует или не принадлежит вам" | |
-| 58 | `delete_my_puzzle(p_puzzle_id => 1)` (есть активная игра) | Ошибка "Вы заняты в активной сессии" | |
-| 59 | `delete_my_puzzle(p_puzzle_id => 1)` (режим просмотра) | Ошибка "Вы заняты в активной сессии" | |
+| 51 | `delete_my_puzzle(p_puzzle_id => 999)` (задача не существует) | Ошибка «Задача с ID 999 не существует или не принадлежит вам» | |
+| 52 | `delete_my_puzzle(p_puzzle_id => 1)` (задача принадлежит другому пользователю) | Ошибка «Задача с ID 1 не существует или не принадлежит вам» | |
+| 53 | `delete_my_puzzle(p_puzzle_id => 0)` | Ошибка «Задача с ID 0 не существует или не принадлежит вам» | |
+| 54 | `delete_my_puzzle(p_puzzle_id => NULL)` | Ошибка «Параметр p_puzzle_id обязателен» | |
+| 55 | `delete_my_puzzle(p_puzzle_id => 0)` (удаление всех своих задач, есть задачи) | Все задачи пользователя удалены, сообщение «Успешно удалено задач: X» | |
+| 56 | `delete_my_puzzle(p_puzzle_id => 0)` (удаление всех своих задач, нет задач) | Сообщение «У вас нет созданных задач для удаления» | |
+| 57 | `delete_my_puzzle(p_puzzle_id => 1)` (общая задача, не пользовательская) | Ошибка «Задача с ID 1 не существует или не принадлежит вам» | |
+| 58 | `delete_my_puzzle(p_puzzle_id => 1)` (есть активная игра) | Ошибка «Вы заняты в активной сессии» | |
+| 59 | `delete_my_puzzle(p_puzzle_id => 1)` (режим просмотра) | Ошибка «Вы заняты в активной сессии» | |
 | 56 | `show_daily_puzzle` (есть ежедневная задача на сегодня) | Ежедневная задача выведена | |
 | 57 | `show_daily_puzzle` (нет ежедневной задачи на сегодня) | Сообщение об отсутствии задачи или ошибка | |
 | 58 | `show_daily_puzzle` (ежедневная задача решена) | Ежедневная задача выведена | |
@@ -1595,28 +1613,28 @@ BEGIN game_logic.print_active_board; END;
 | № испы-тания | Состав входных параметров | Ожидаемый результат | Результат, полученный в ходе испытания |
 |--------------|---------------------------|---------------------|----------------------------------------|
 | 1 | `print_active_board` (без параметров, есть активная игра) | Доска активной игры выведена | |
-| 2 | `print_active_board` (без параметров, нет активной игры) | Ошибка "У вас нет активных игр" | |
+| 2 | `print_active_board` (без параметров, нет активной игры) | Ошибка «У вас нет активных игр» | |
 | 3 | `print_active_board(p_game_id => 1)` (чужой активная игра, статус 'A') | Сессия просмотра создана, доска выведена | |
 | 4 | `print_active_board(p_game_id => 1)` (чужой открытая игра, статус 'O') | Сессия просмотра создана, доска выведена | |
 | 5 | `print_active_board(p_game_id => 1)` (чужой вызов, статус 'C') | Сессия просмотра создана, доска выведена | |
-| 6 | `print_active_board(p_game_id => 1)` (игра завершена, статус 'V') | Доска выведена, сообщение "ИГРА ЗАВЕРШЕНА", сессия закрыта | |
-| 7 | `print_active_board(p_game_id => 1)` (игра завершена, статус 'D') | Доска выведена, сообщение "ИГРА ЗАВЕРШЕНА", сессия закрыта | |
-| 8 | `print_active_board(p_game_id => 1)` (игра завершена, статус 'T') | Доска выведена, сообщение "ИГРА ЗАВЕРШЕНА", сессия закрыта | |
-| 9 | `print_active_board(p_game_id => 1)` (игра завершена, статус 'R') | Доска выведена, сообщение "ИГРА ЗАВЕРШЕНА", сессия закрыта | |
-| 10 | `print_active_board(p_game_id => 999)` (несуществующая игра) | Ошибка "Игры с id = 999 не существует" | |
-| 11 | `print_active_board(p_game_id => 0)` | Ошибка "Игры с id = 0 не существует" | |
-| 12 | `print_active_board(p_game_id => NULL)` (нет активной игры) | Ошибка "У вас нет активных игр" | |
+| 6 | `print_active_board(p_game_id => 1)` (игра завершена, статус 'V') | Доска выведена, сообщение «ИГРА ЗАВЕРШЕНА», сессия закрыта | |
+| 7 | `print_active_board(p_game_id => 1)` (игра завершена, статус 'D') | Доска выведена, сообщение «ИГРА ЗАВЕРШЕНА», сессия закрыта | |
+| 8 | `print_active_board(p_game_id => 1)` (игра завершена, статус 'T') | Доска выведена, сообщение «ИГРА ЗАВЕРШЕНА», сессия закрыта | |
+| 9 | `print_active_board(p_game_id => 1)` (игра завершена, статус 'R') | Доска выведена, сообщение «ИГРА ЗАВЕРШЕНА», сессия закрыта | |
+| 10 | `print_active_board(p_game_id => 999)` (несуществующая игра) | Ошибка «Игры с id = 999 не существует» | |
+| 11 | `print_active_board(p_game_id => 0)` | Ошибка «Игры с id = 0 не существует» | |
+| 12 | `print_active_board(p_game_id => NULL)` (нет активной игры) | Ошибка «У вас нет активных игр» | |
 | 13 | `print_active_board(p_username => 'PLAYER1')` (пользователь существует, есть активная игра) | Доска активной игры пользователя выведена | |
-| 14 | `print_active_board(p_username => 'PLAYER1')` (пользователь существует, нет активной игры) | Ошибка "У пользователя "PLAYER1" не найдено активных сессий" | |
-| 15 | `print_active_board(p_username => 'NONEXISTENT')` (пользователь не существует) | Ошибка "Пользователя "NONEXISTENT" не существует" | |
-| 16 | `print_active_board(p_username => NULL)` (нет активной игры) | Ошибка "У вас нет активных игр" | |
-| 17 | `print_active_board(p_game_id => 1, p_username => 'PLAYER1')` (оба параметра указаны) | Ошибка "Для поиска передайте процедуре только один параметр" | |
+| 14 | `print_active_board(p_username => 'PLAYER1')` (пользователь существует, нет активной игры) | Ошибка «У пользователя »PLAYER1« не найдено активных сессий» | |
+| 15 | `print_active_board(p_username => 'NONEXISTENT')` (пользователь не существует) | Ошибка «Пользователя »NONEXISTENT« не существует» | |
+| 16 | `print_active_board(p_username => NULL)` (нет активной игры) | Ошибка «У вас нет активных игр» | |
+| 17 | `print_active_board(p_game_id => 1, p_username => 'PLAYER1')` (оба параметра указаны) | Ошибка «Для поиска передайте процедуре только один параметр» | |
 | 18 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'N')` | Доска выведена немедленно | |
 | 19 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'Y')` (активная игра, не ваш ход) | Ожидание хода, обновление доски после хода | |
-| 20 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'Y')` (активная игра, ваш ход) | Доска выведена немедленно, сообщение "ВАШ ХОД!" | |
+| 20 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'Y')` (активная игра, ваш ход) | Доска выведена немедленно, сообщение «ВАШ ХОД!» | |
 | 21 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'Y')` (открытая игра, статус 'O') | Ожидание подключения игрока, обновление доски после подключения | |
 | 22 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'Y')` (вызов, статус 'C') | Ожидание подключения игрока, обновление доски после подключения | |
-| 23 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'N')` (открытая игра) | Сообщение "К игре еще никто не подключился" | |
+| 23 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'N')` (открытая игра) | Сообщение «К игре еще никто не подключился» | |
 | 24 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'y')` (нижний регистр) | Ожидание хода (регистр не важен) | |
 | 25 | `print_active_board(p_game_id => 1, p_wait_for_turn => NULL)` | Доска выведена немедленно (по умолчанию 'N') | |
 | 26 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'X')` (неверное значение) | Доска выведена немедленно (неверное значение игнорируется) | |
@@ -1630,9 +1648,9 @@ BEGIN game_logic.print_active_board; END;
 | 34 | `print_active_board(p_game_id => 1)` (есть таймаут на ход) | Доска выведена, информация о времени на ход выведена | |
 | 35 | `print_active_board(p_game_id => 1)` (есть таймаут на партию) | Доска выведена, информация о времени на партию выведена | |
 | 36 | `print_active_board(p_game_id => 1)` (ваш ход, есть обязательное взятие) | Доска выведена, возможные ходы подсвечены | |
-| 37 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'Y')` (таймаут ожидания) | Сообщение "Тайм-аут ожидания" или "Тайм-аут ожидания подключения" | |
+| 37 | `print_active_board(p_game_id => 1, p_wait_for_turn => 'Y')` (таймаут ожидания) | Сообщение «Тайм-аут ожидания» или «Тайм-аут ожидания подключения» | |
 | 38 | `stop_spectating` (есть активная сессия просмотра) | Сессия просмотра завершена, left_at установлен | |
-| 39 | `stop_spectating` (нет активной сессии просмотра) | Сообщение "Вы не находитесь в режиме просмотра" | |
+| 39 | `stop_spectating` (нет активной сессии просмотра) | Сообщение «Вы не находитесь в режиме просмотра» | |
 | 40 | При завершении игры (сессия просмотра активна) | Сессия просмотра автоматически закрыта, left_at установлен | |
 
 
@@ -1646,31 +1664,31 @@ BEGIN game_logic.print_active_board; END;
 | № испы-тания | Состав входных параметров | Ожидаемый результат | Результат, полученный в ходе испытания |
 |--------------|---------------------------|---------------------|----------------------------------------|
 | 1 | `p_action => 'O'` (предложить ничью, нет активного предложения) | Предложение ничьей создано, статус 'O', draw_offered_by_color установлен | |
-| 2 | `p_action => 'O'` (предложить ничью, уже есть свое предложение) | Ошибка "Вы уже предложили ничью" | |
+| 2 | `p_action => 'O'` (предложить ничью, уже есть свое предложение) | Ошибка «Вы уже предложили ничью» | |
 | 3 | `p_action => 'O'` (предложить ничью, оппонент уже предложил) | Ничья принята автоматически, игра завершена, статус 'D' | |
 | 4 | `p_action => 'A'` (принять ничью, есть активное предложение оппонента) | Ничья принята, игра завершена, статус 'D' | |
-| 5 | `p_action => 'A'` (принять ничью, нет активного предложения) | Ошибка "Нет активного предложения о ничьей, чтобы его принять" | |
-| 6 | `p_action => 'A'` (принять ничью, свое предложение) | Ошибка "Нельзя принять собственное предложение о ничьей" | |
+| 5 | `p_action => 'A'` (принять ничью, нет активного предложения) | Ошибка «Нет активного предложения о ничьей, чтобы его принять» | |
+| 6 | `p_action => 'A'` (принять ничью, свое предложение) | Ошибка «Нельзя принять собственное предложение о ничьей» | |
 | 7 | `p_action => 'C'` (отменить ничью, есть свое активное предложение) | Предложение отменено, draw_offer_status = NULL | |
-| 8 | `p_action => 'C'` (отменить ничью, нет активного предложения) | Ошибка "Нет активного предложения о ничьей, чтобы его отменить" | |
-| 9 | `p_action => 'C'` (отменить ничью, предложение оппонента) | Ошибка "Нельзя отменить предложение оппонента" | |
+| 8 | `p_action => 'C'` (отменить ничью, нет активного предложения) | Ошибка «Нет активного предложения о ничьей, чтобы его отменить» | |
+| 9 | `p_action => 'C'` (отменить ничью, предложение оппонента) | Ошибка «Нельзя отменить предложение оппонента» | |
 | 10 | `p_action => 'o'` (нижний регистр) | Предложение ничьей создано (регистр не важен) | |
 | 11 | `p_action => 'a'` (нижний регистр) | Ничья принята (регистр не важен) | |
 | 12 | `p_action => 'c'` (нижний регистр) | Предложение отменено (регистр не важен) | |
-| 13 | `p_action => 'X'` (неверное значение) | Ошибка "Неверный p_action: "X". Допустимые значения: O, A, C" | |
-| 14 | `p_action => NULL` | Ошибка "Неверный p_action" или ошибка типа данных | |
-| 15 | `p_action => 'O'` (нет активной игры) | Ошибка "У вас нет активной игры" | |
-| 16 | `p_action => 'O'` (игра статус 'O', не активна) | Ошибка "Игра (ID: X) неактивна (статус: O)" | |
-| 17 | `p_action => 'O'` (игра статус 'C', не активна) | Ошибка "Игра (ID: X) неактивна (статус: C)" | |
-| 18 | `p_action => 'O'` (игра статус 'V', завершена) | Ошибка "Игра (ID: X) неактивна (статус: V)" | |
-| 19 | `p_action => 'O'` (игра статус 'D', завершена) | Ошибка "Игра (ID: X) неактивна (статус: D)" | |
-| 20 | `p_action => 'O'` (игра статус 'T', завершена) | Ошибка "Игра (ID: X) неактивна (статус: T)" | |
-| 21 | `p_action => 'O'` (игра статус 'R', завершена) | Ошибка "Игра (ID: X) неактивна (статус: R)" | |
-| 22 | `p_action => 'O'` (игра с ИИ) | Ошибка "Предложение ничьей недоступно в играх против ИИ и в задачах" | |
-| 23 | `p_action => 'O'` (задача) | Ошибка "Предложение ничьей недоступно в играх против ИИ и в задачах" | |
-| 24 | `p_action => 'O'` (режим просмотра) | Ошибка "Вы находитесь в режиме просмотра (Игра ID: X). Нельзя управлять ничьей" | |
-| 25 | `p_action => 'A'` (режим просмотра) | Ошибка "Вы находитесь в режиме просмотра (Игра ID: X). Нельзя управлять ничьей" | |
-| 26 | `p_action => 'C'` (режим просмотра) | Ошибка "Вы находитесь в режиме просмотра (Игра ID: X). Нельзя управлять ничьей" | |
+| 13 | `p_action => 'X'` (неверное значение) | Ошибка «Неверный p_action: »X«. Допустимые значения: O, A, C» | |
+| 14 | `p_action => NULL` | Ошибка «Неверный p_action» или ошибка типа данных | |
+| 15 | `p_action => 'O'` (нет активной игры) | Ошибка «У вас нет активной игры» | |
+| 16 | `p_action => 'O'` (игра статус 'O', не активна) | Ошибка «Игра (ID: X) неактивна (статус: O)» | |
+| 17 | `p_action => 'O'` (игра статус 'C', не активна) | Ошибка «Игра (ID: X) неактивна (статус: C)» | |
+| 18 | `p_action => 'O'` (игра статус 'V', завершена) | Ошибка «Игра (ID: X) неактивна (статус: V)» | |
+| 19 | `p_action => 'O'` (игра статус 'D', завершена) | Ошибка «Игра (ID: X) неактивна (статус: D)» | |
+| 20 | `p_action => 'O'` (игра статус 'T', завершена) | Ошибка «Игра (ID: X) неактивна (статус: T)» | |
+| 21 | `p_action => 'O'` (игра статус 'R', завершена) | Ошибка «Игра (ID: X) неактивна (статус: R)» | |
+| 22 | `p_action => 'O'` (игра с ИИ) | Ошибка «Предложение ничьей недоступно в играх против ИИ и в задачах» | |
+| 23 | `p_action => 'O'` (задача) | Ошибка «Предложение ничьей недоступно в играх против ИИ и в задачах» | |
+| 24 | `p_action => 'O'` (режим просмотра) | Ошибка «Вы находитесь в режиме просмотра (Игра ID: X). Нельзя управлять ничьей» | |
+| 25 | `p_action => 'A'` (режим просмотра) | Ошибка «Вы находитесь в режиме просмотра (Игра ID: X). Нельзя управлять ничьей» | |
+| 26 | `p_action => 'C'` (режим просмотра) | Ошибка «Вы находитесь в режиме просмотра (Игра ID: X). Нельзя управлять ничьей» | |
 | 27 | `p_action => 'O'` (белые предлагают) | Предложение создано, draw_offered_by_color = 'W' | |
 | 28 | `p_action => 'O'` (черные предлагают) | Предложение создано, draw_offered_by_color = 'B' | |
 | 29 | `p_action => 'O'` (матч) | Предложение создано, игра продолжается | |
@@ -1698,14 +1716,14 @@ BEGIN game_logic.print_active_board; END;
 | 6 | `p_resign_match => 'n'` (нижний регистр) | Игра завершена, статус 'R' (регистр не важен) | |
 | 7 | `p_resign_match => 'y'` (нижний регистр) | Игра завершена, статус 'R', матч завершен (регистр не важен) | |
 | 8 | `p_resign_match => 'X'` (неверное значение) | Игра завершена, статус 'R' (неверное значение игнорируется или ошибка) | |
-| 9 | Сдача (нет активной игры) | Ошибка "У вас нет активной партии, чтобы сдаться" | |
-| 10 | Сдача (игра статус 'O', не активна) | Ошибка "Эта партия (ID: X) неактивна (статус O)" | |
-| 11 | Сдача (игра статус 'C', не активна) | Ошибка "Эта партия (ID: X) неактивна (статус C)" | |
-| 12 | Сдача (игра статус 'V', завершена) | Ошибка "Эта партия (ID: X) неактивна (статус V)" | |
-| 13 | Сдача (игра статус 'D', завершена) | Ошибка "Эта партия (ID: X) неактивна (статус D)" | |
-| 14 | Сдача (игра статус 'T', завершена) | Ошибка "Эта партия (ID: X) неактивна (статус T)" | |
-| 15 | Сдача (игра статус 'R', завершена) | Ошибка "Эта партия (ID: X) неактивна (статус R)" | |
-| 16 | Сдача (режим просмотра) | Ошибка "Вы находитесь в режиме просмотра (Игра ID: X). Нельзя сдаться" | |
+| 9 | Сдача (нет активной игры) | Ошибка «У вас нет активной партии, чтобы сдаться» | |
+| 10 | Сдача (игра статус 'O', не активна) | Ошибка «Эта партия (ID: X) неактивна (статус O)» | |
+| 11 | Сдача (игра статус 'C', не активна) | Ошибка «Эта партия (ID: X) неактивна (статус C)» | |
+| 12 | Сдача (игра статус 'V', завершена) | Ошибка «Эта партия (ID: X) неактивна (статус V)» | |
+| 13 | Сдача (игра статус 'D', завершена) | Ошибка «Эта партия (ID: X) неактивна (статус D)» | |
+| 14 | Сдача (игра статус 'T', завершена) | Ошибка «Эта партия (ID: X) неактивна (статус T)» | |
+| 15 | Сдача (игра статус 'R', завершена) | Ошибка «Эта партия (ID: X) неактивна (статус R)» | |
+| 16 | Сдача (режим просмотра) | Ошибка «Вы находитесь в режиме просмотра (Игра ID: X). Нельзя сдаться» | |
 | 17 | Сдача (задача) | Задача завершена, статус 'V', puzzle_status 'f', рейтинги обновлены | |
 | 18 | Сдача (PvP игра, белые сдаются) | Игра завершена, статус 'R', winner_player_color 'B', рейтинги обновлены | |
 | 19 | Сдача (PvP игра, черные сдаются) | Игра завершена, статус 'R', winner_player_color 'W', рейтинги обновлены | |
@@ -1746,31 +1764,30 @@ BEGIN game_logic.print_active_board; END;
 | 14 | `p_game_id => 1, p_restart => 'X'` (неверное значение) | Просмотр продолжен (неверное значение игнорируется или ошибка) | |
 | 15 | `p_game_id => 1, p_moves_to_show => 3, p_restart => 'N'` | Три хода выведены, просмотр продолжен | |
 | 16 | `p_game_id => 1, p_moves_to_show => 3, p_restart => 'Y'` | Просмотр перезапущен, три хода выведены с начала | |
-| 17 | `p_game_id => 999` (несуществующая игра) | Ошибка "Игра с ID 999 не найдена" | |
-| 18 | `p_game_id => 0` | Ошибка "Игра с ID 0 не найдена" | |
-| 19 | `p_game_id => -1` | Ошибка "Игра с ID -1 не найдена" | |
-| 20 | `p_game_id => NULL` | Ошибка "Игра с ID не найдена" или ошибка типа данных | |
-| 21 | `p_game_id => 1.5` (дробное число) | Ошибка "Игра с ID не найдена" или приведение к 1 | |
+| 17 | `p_game_id => 999` (несуществующая игра) | Ошибка «Игра с ID 999 не найдена» | |
+| 18 | `p_game_id => 0` | Ошибка «Игра с ID 0 не найдена» | |
+| 19 | `p_game_id => -1` | Ошибка «Игра с ID -1 не найдена» | |
+| 20 | `p_game_id => NULL` | Ошибка «Игра с ID не найдена» или ошибка типа данных | |
 | 22 | `p_game_id => '1'` (строка) | Ошибка типа данных или приведение к числу | |
 | 23 | `p_game_id => 'abc'` (не число) | Ошибка типа данных | |
-| 24 | `p_game_id => 1` (игра статус 'A', активна) | Ошибка "Нельзя просматривать активную (или не начатую) партию (ID: 1)" | |
-| 25 | `p_game_id => 1` (игра статус 'O', не начата) | Ошибка "Нельзя просматривать активную (или не начатую) партию (ID: 1)" | |
-| 26 | `p_game_id => 1` (игра статус 'C', вызов) | Ошибка "Нельзя просматривать активную (или не начатую) партию (ID: 1)" | |
+| 24 | `p_game_id => 1` (игра статус 'A', активна) | Ошибка «Нельзя просматривать активную (или не начатую) партию (ID: 1)» | |
+| 25 | `p_game_id => 1` (игра статус 'O', не начата) | Ошибка «Нельзя просматривать активную (или не начатую) партию (ID: 1)» | |
+| 26 | `p_game_id => 1` (игра статус 'C', вызов) | Ошибка «Нельзя просматривать активную (или не начатую) партию (ID: 1)» | |
 | 27 | `p_game_id => 1` (игра статус 'V', завершена) | Первый ход выведен | |
 | 28 | `p_game_id => 1` (игра статус 'D', завершена) | Первый ход выведен | |
 | 29 | `p_game_id => 1` (игра статус 'T', завершена) | Первый ход выведен | |
 | 30 | `p_game_id => 1` (игра статус 'R', завершена) | Первый ход выведен | |
-| 31 | `p_game_id => 1` (игра без ходов) | Ошибка "В этой партии (ID: 1) не было ходов" | |
+| 31 | `p_game_id => 1` (игра без ходов) | Ошибка «В этой партии (ID: 1) не было ходов» | |
 | 32 | `p_game_id => 1` (первый вызов, создание сессии) | Сессия просмотра создана, sequence создан, job создан | |
 | 33 | `p_game_id => 1` (повторный вызов, продолжение) | Следующие ходы выведены, sequence продолжен | |
 | 34 | `p_game_id => 1, p_restart => 'Y'` (перезапуск существующей сессии) | Сессия сброшена, sequence удален, job удален, просмотр начат с начала | |
 | 35 | `p_game_id => 1, p_moves_to_show => 1` (достигнут конец партии) | Последний ход выведен, сообщение о конце партии выведено | |
 | 36 | `p_game_id => 1, p_moves_to_show => 5` (достигнут конец партии) | Оставшиеся ходы выведены, сообщение о конце партии выведено | |
-| 37 | `p_game_id => 1` (игра завершена победой, статус 'V') | Ходы выведены, в конце сообщение "Победа игрока X" | |
-| 38 | `p_game_id => 1` (игра завершена ничьей, статус 'D') | Ходы выведены, в конце сообщение "Ничья" | |
-| 39 | `p_game_id => 1` (игра завершена по таймауту, статус 'T') | Ходы выведены, в конце сообщение "Игра завершена по таймауту" | |
-| 40 | `p_game_id => 1` (игра завершена сдачей, статус 'R') | Ходы выведены, в конце сообщение "X сдался. Победитель: Y" | |
-| 41 | `p_game_id => 1` (игра с ИИ, победитель ИИ) | Ходы выведены, в конце сообщение с "AI (difficulty_level: X)" | |
+| 37 | `p_game_id => 1` (игра завершена победой, статус 'V') | Ходы выведены, в конце сообщение «Победа игрока X» | |
+| 38 | `p_game_id => 1` (игра завершена ничьей, статус 'D') | Ходы выведены, в конце сообщение «Ничья» | |
+| 39 | `p_game_id => 1` (игра завершена по таймауту, статус 'T') | Ходы выведены, в конце сообщение «Игра завершена по таймауту» | |
+| 40 | `p_game_id => 1` (игра завершена сдачей, статус 'R') | Ходы выведены, в конце сообщение «X сдался. Победитель: Y» | |
+| 41 | `p_game_id => 1` (игра с ИИ, победитель ИИ) | Ходы выведены, в конце сообщение с «AI (difficulty_level: X)» | |
 | 42 | `p_game_id => 1` (игра PvP, победитель определен) | Ходы выведены, в конце сообщение с именем победителя | |
 | 43 | `p_game_id => 1, p_moves_to_show => 1` (многократные вызовы) | Каждый вызов показывает следующий ход | |
 | 44 | `p_game_id => 1, p_moves_to_show => 3` (многократные вызовы) | Каждый вызов показывает следующие 3 хода | |
@@ -1779,7 +1796,6 @@ BEGIN game_logic.print_active_board; END;
 | 47 | `p_game_id => 1` (задача, завершена) | Ходы выведены, просмотр работает | |
 | 48 | `p_game_id => 1` (ежедневная задача, завершена) | Ходы выведены, просмотр работает | |
 | 49 | `p_game_id => 1, p_moves_to_show => '5'` (строка) | Ошибка типа данных или приведение к числу | |
-| 50 | `p_game_id => 1, p_moves_to_show => 5.5` (дробное число) | Пять ходов выведено (округление до 5) | |
 | 51 | `p_game_id => 1` (игра с одним ходом) | Один ход выведен, сообщение о конце партии | |
 | 52 | `p_game_id => 1` (игра с большим количеством ходов) | Ходы выведены последовательно | |
 | 53 | `p_game_id => 1, p_moves_to_show => 1, p_restart => 'Y'` | Просмотр перезапущен, один ход выведен | |
@@ -1820,13 +1836,13 @@ BEGIN game_logic.print_active_board; END;
 
 | № испы-тания | Некорректное действие | Ожидаемый результат | Результат, полученный в ходе испытания |
 |--------------|----------------------|---------------------|----------------------------------------|
-| 1 | Создание второй игры при активной первой | Ошибка "У вас уже есть активная игра" | |
-| 2 | Ход в завершенной игре | Ошибка "Игра уже завершена" | |
-| 3 | Присоединение к несуществующей игре | Ошибка "Игра не найдена" | |
-| 4 | Ход не своей фигурой | Ошибка "Нелегальный ход" | |
-| 5 | Ход не в свою очередь | Ошибка "Не ваша очередь ходить" | |
-| 6 | Создание игры с несуществующим оппонентом | Ошибка "Оппонент не найден" | |
-| 7 | Создание задачи с некорректной позицией | Ошибка "Некорректная позиция доски" | |
+| 1 | Создание второй игры при активной первой | Ошибка «У вас уже есть активная игра» | |
+| 2 | Ход в завершенной игре | Ошибка «Игра уже завершена» | |
+| 3 | Присоединение к несуществующей игре | Ошибка «Игра не найдена» | |
+| 4 | Ход не своей фигурой | Ошибка «Нелегальный ход» | |
+| 5 | Ход не в свою очередь | Ошибка «Не ваша очередь ходить» | |
+| 6 | Создание игры с несуществующим оппонентом | Ошибка «Оппонент не найден» | |
+| 7 | Создание задачи с некорректной позицией | Ошибка «Некорректная позиция доски» | |
 
 
 
