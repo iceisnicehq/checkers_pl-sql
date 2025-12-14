@@ -25,6 +25,9 @@ BEGIN
                 v_solver_id   NUMBER;
                 v_prev_solves NUMBER;
                 v_puzzle_created_by NUMBER;
+                v_is_daily_puzzle BOOLEAN := (v_game.is_daily_puzzle = 'Y');
+                v_puzzle_date DATE;
+                v_today DATE := TRUNC(SYSDATE);
             BEGIN
 
                 IF v_game.status = 'V' AND v_game.puzzle_status = 's' THEN
@@ -37,6 +40,35 @@ BEGIN
 
                     IF v_puzzle_created_by IS NULL AND v_solver_id IS NOT NULL THEN
 
+                        IF v_is_daily_puzzle THEN
+                            -- Для daily puzzle проверяем, решена ли уже сегодняшняя задача этим игроком
+                            BEGIN
+                                SELECT dp.puzzle_date INTO v_puzzle_date
+                                FROM daily_puzzles dp
+                                WHERE dp.puzzle_id = v_game.puzzle_id
+                                  AND dp.puzzle_date = v_today
+                                  AND ROWNUM = 1;
+                            EXCEPTION
+                                WHEN NO_DATA_FOUND THEN
+                                    v_puzzle_date := NULL;
+                            END;
+
+                            IF v_puzzle_date IS NOT NULL THEN
+                                -- Проверяем, решена ли уже сегодняшняя daily puzzle этим игроком
+                                SELECT COUNT(*) INTO v_prev_solves
+                                FROM games g
+                                JOIN daily_puzzles dp ON g.puzzle_id = dp.puzzle_id
+                                WHERE dp.puzzle_date = v_today
+                                  AND (g.player_white_id = v_solver_id OR g.player_black_id = v_solver_id)
+                                  AND g.status = 'V'
+                                  AND g.puzzle_status = 's'
+                                  AND g.is_daily_puzzle = 'Y'
+                                  AND g.game_id != p_game_id;
+                            ELSE
+                                v_prev_solves := 1; -- Если не найдена сегодняшняя daily puzzle, не начисляем
+                            END IF;
+                        ELSE
+                            -- Для обычных задач проверяем по puzzle_id (как раньше)
                         SELECT COUNT(*) INTO v_prev_solves
                         FROM games
                         WHERE puzzle_id = v_game.puzzle_id
@@ -44,6 +76,7 @@ BEGIN
                           AND status = 'V'
                           AND puzzle_status = 's'
                           AND game_id != p_game_id;
+                        END IF;
 
                         IF v_prev_solves = 0 THEN
 

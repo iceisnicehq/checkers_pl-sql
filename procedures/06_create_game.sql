@@ -38,22 +38,22 @@ BEGIN
         RETURN;
     END IF;
 
-    IF p_time_limit_move_sec IS NOT NULL AND p_time_limit_move_sec <= 30 THEN
-        v_error_msg := 'Лимит времени на ход должен быть не менее 30 секунд.';
+    IF p_time_limit_move_sec IS NOT NULL AND (p_time_limit_move_sec < 30 OR p_time_limit_move_sec > 300) THEN
+        v_error_msg := 'Лимит времени на ход должен быть от 30 до 300 секунд (5 минут).';
         p_audit_log(v_current_player_id, NULL, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
     
-    IF p_time_limit_game_sec IS NOT NULL AND p_time_limit_game_sec <= 600 THEN
-        v_error_msg := 'Лимит времени на партию должен быть не менее 600 секунд (10 минут).';
+    IF p_time_limit_game_sec IS NOT NULL AND (p_time_limit_game_sec < 600 OR p_time_limit_game_sec > 7200) THEN
+        v_error_msg := 'Лимит времени на партию должен быть от 600 до 7200 секунд (от 10 до 120 минут).';
         p_audit_log(v_current_player_id, NULL, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;
     END IF;
     
-    IF p_draw_moves_limit IS NOT NULL AND p_draw_moves_limit <= 5 THEN
-        v_error_msg := 'Лимит ходов без взятий должен быть не менее 5.';
+    IF p_draw_moves_limit IS NOT NULL AND (p_draw_moves_limit < 5 OR p_draw_moves_limit > 20) THEN
+        v_error_msg := 'Лимит ходов без взятий должен быть от 5 до 20.';
         p_audit_log(v_current_player_id, NULL, v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
         RETURN;

@@ -1,6 +1,6 @@
 PROCEDURE create_match(
-    p_opponent_username   IN VARCHAR2,
-    p_games_to_win        IN NUMBER,
+    p_opponent_username   IN VARCHAR2 DEFAULT NULL,
+    p_games_to_win        IN NUMBER   DEFAULT 3,
     p_player_color        IN CHAR     DEFAULT NULL,
     p_rule_id             IN NUMBER   DEFAULT 1,
     p_time_limit_move_sec IN NUMBER   DEFAULT NULL,
@@ -14,6 +14,7 @@ PROCEDURE create_match(
     
     v_game_id            games.game_id%TYPE;
     v_match_id           matches.match_id%TYPE;
+    v_games_to_win       NUMBER;
     
 BEGIN
     v_current_player_id := get_or_create_player_id(USER);
@@ -25,7 +26,9 @@ BEGIN
         RETURN;
     END IF;
 
-    IF p_games_to_win IS NULL OR p_games_to_win <= 0 OR MOD(p_games_to_win, 2) = 0 THEN
+    v_games_to_win := NVL(p_games_to_win, 3);
+    
+    IF v_games_to_win <= 0 OR MOD(v_games_to_win, 2) = 0 THEN
         v_error_msg := 'Неверное количество игр для победы (p_games_to_win). Должно быть нечетным числом (best of N, где N нечетное).';
         p_audit_log(v_current_player_id, NULL, p_event_msg => v_error_msg);
         DBMS_OUTPUT.PUT_LINE(v_error_msg);
@@ -67,7 +70,7 @@ BEGIN
         )
         VALUES (
             v_fetched_rule_id,
-            p_games_to_win,
+            v_games_to_win,
             v_fetched_status
         )
         RETURNING match_id INTO v_match_id;
@@ -78,9 +81,9 @@ BEGIN
     WHERE game_id = v_game_id;
     
     IF p_opponent_username IS NOT NULL THEN
-        v_status_message := 'Вызов на матч (ID: ' || v_match_id || ') до ' || p_games_to_win || ' побед брошен игроку ' || p_opponent_username;
+        v_status_message := 'Вызов на матч (ID: ' || v_match_id || ') до ' || v_games_to_win || ' побед брошен игроку ' || p_opponent_username;
     ELSE
-        v_status_message := 'Открытый матч (ID: ' || v_match_id || ') до ' || p_games_to_win || ' побед создан. Ожидайте оппонента.';
+        v_status_message := 'Открытый матч (ID: ' || v_match_id || ') до ' || v_games_to_win || ' побед создан. Ожидайте оппонента.';
     END IF;
 
     p_audit_log(v_current_player_id, v_game_id, 'MATCH_CREATED');

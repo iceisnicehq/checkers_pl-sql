@@ -49,7 +49,7 @@ BEGIN
             v_separator := v_separator || '---';
         END;
     END LOOP;
-    v_header    := v_header    || ' |';
+    v_header    := v_header    || '|';
     v_separator := v_separator || '+--';
 
     DBMS_LOB.append(v_clob, v_header || c_nl);
