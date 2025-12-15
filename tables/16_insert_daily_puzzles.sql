@@ -1,0 +1,42 @@
+DECLARE
+    v_puzzle_id puzzles.puzzle_id%TYPE;
+    v_today     DATE := TRUNC(SYSDATE);
+    v_count     PLS_INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM daily_puzzles WHERE puzzle_date = v_today;
+
+    IF v_count = 0 THEN
+        BEGIN
+            SELECT puzzle_id INTO v_puzzle_id
+            FROM (
+                SELECT p.puzzle_id
+                FROM puzzles p
+                LEFT JOIN daily_puzzles dp ON p.puzzle_id = dp.puzzle_id AND dp.puzzle_date >= (v_today - 30)
+                WHERE p.created_by_player_id IS NULL
+                AND dp.puzzle_id IS NULL             
+                ORDER BY DBMS_RANDOM.VALUE
+            ) WHERE ROWNUM = 1;
+            
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                BEGIN
+                    SELECT puzzle_id INTO v_puzzle_id
+                    FROM (
+                        SELECT puzzle_id FROM puzzles 
+                        WHERE created_by_player_id IS NULL
+                        ORDER BY DBMS_RANDOM.VALUE
+                    ) WHERE ROWNUM = 1;
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        DBMS_OUTPUT.PUT_LINE('В таблице PUZZLES нет серверных (общих) задач!');
+                        RETURN;
+                END;
+        END;
+
+        INSERT INTO daily_puzzles (puzzle_date, puzzle_id) VALUES (v_today, v_puzzle_id);
+        COMMIT;
+        DBMS_OUTPUT.PUT_LINE('Daily Puzzle на сегодня успешно создан (ID: ' || v_puzzle_id || ').');
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('Daily Puzzle на сегодня уже существует.');
+    END IF;
+END;
