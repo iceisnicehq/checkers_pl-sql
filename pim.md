@@ -1645,32 +1645,36 @@ BEGIN game_logic.print_active_board; END;
 | 21 | `show_my_puzzles(p_difficulty => NULL)` | Список всех созданных задач выведен | |
 | 22 | `show_my_puzzles(p_difficulty => 'X')` (неверное значение) | Ошибка или список всех задач | |
 | 23 | `show_my_puzzles` (нет созданных задач) | Пустой список выведен | |
-| 24 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W')` | Задача создана | |
-| 25 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'B')` | Задача создана | |
-| 26 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'w')` (нижний регистр) | Задача создана (регистр не важен) | |
-| 27 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'X')` (неверное значение) | Ошибка «p_turn_to_move должен быть 'W' или 'B'» | |
-| 28 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => NULL)` | Ошибка «p_turn_to_move должен быть 'W' или 'B'» | |
-| 29 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_moves_to_solve => 5)` | Задача создана с указанием ходов | |
-| 30 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_moves_to_solve => NULL)` | Задача создана (игра с ИИ) | |
-| 31 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_moves_to_solve => 0)` | Ошибка «p_moves_to_solve должен быть больше 0 или NULL» | |
-| 32 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_moves_to_solve => -1)` | Ошибка «p_moves_to_solve должен быть больше 0 или NULL» | |
-| 33 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => 'E')` | Задача создана с легкой сложностью | |
-| 34 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => 'M')` | Задача создана со средней сложностью (по умолчанию) | |
-| 35 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => 'H')` | Задача создана со сложной сложностью | |
-| 36 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => NULL)` | Задача создана со средней сложностью (по умолчанию) | |
-| 37 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_difficulty_level => 'X')` | Ошибка «p_difficulty_level должен быть 'E' (Easy), 'M' (Medium) или 'H' (Hard)» | |
-| 38 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_solution => 'c3-d4')` | Задача создана с решением | |
-| 39 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W', p_solution => NULL)` | Задача создана без решения | |
-| 40 | `create_puzzle(p_board_position => EMPTY_CLOB(), p_turn_to_move => 'W')` | Ошибка «Неверный размер доски» или «На доске нет фигур» | |
-| 41 | `create_puzzle(p_board_position => CLOB_64_символов, p_turn_to_move => 'W')` | Задача создана (доска 8x8) | |
-| 42 | `create_puzzle(p_board_position => CLOB_100_символов, p_turn_to_move => 'W')` | Задача создана (доска 10x10) | |
-| 43 | `create_puzzle(p_board_position => CLOB_50_символов, p_turn_to_move => 'W')` | Ошибка «Неверный размер доски» | |
-| 44 | `create_puzzle(p_board_position => CLOB_с_недопустимыми_символами, p_turn_to_move => 'W')` | Ошибка «Доска содержит недопустимые символы» | |
-| 45 | `create_puzzle(p_board_position => CLOB_без_белых, p_turn_to_move => 'W')` | Ошибка «На доске нет ни одной белой фигуры» | |
-| 46 | `create_puzzle(p_board_position => CLOB_без_черных, p_turn_to_move => 'W')` | Ошибка «На доске нет ни одной черной фигуры» | |
-| 47 | `create_puzzle(p_board_position => CLOB_фигура_на_светлой, p_turn_to_move => 'W')` | Ошибка «Фигура на позиции X находится на светлой клетке» | |
-| 48 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W')` (есть активная игра) | Ошибка «Вы заняты в активной сессии» | |
-| 49 | `create_puzzle(p_board_position => CLOB, p_turn_to_move => 'W')` (режим просмотра) | Ошибка «Вы заняты в активной сессии» | |
+| 24 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W')` | Задача создана | |
+| 25 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'B')` | Задача создана | |
+| 26 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'w')` (нижний регистр) | Задача создана (регистр не важен) | |
+| 27 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'X')` (неверное значение) | Ошибка «p_turn_to_move должен быть 'W' или 'B'» | |
+| 28 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => NULL)` | Ошибка «p_turn_to_move должен быть 'W' или 'B'» | |
+| 29 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_moves_to_solve => 5)` | Задача создана с указанием ходов | |
+| 30 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_moves_to_solve => NULL)` | Задача создана (игра с ИИ) | |
+| 31 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_moves_to_solve => 0)` | Ошибка «p_moves_to_solve должен быть больше 0 или NULL» | |
+| 32 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_moves_to_solve => -1)` | Ошибка «p_moves_to_solve должен быть больше 0 или NULL» | |
+| 33 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_difficulty_level => 'E')` | Задача создана с легкой сложностью | |
+| 34 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_difficulty_level => 'M')` | Задача создана со средней сложностью (по умолчанию) | |
+| 35 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_difficulty_level => 'H')` | Задача создана со сложной сложностью | |
+| 36 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_difficulty_level => NULL)` | Задача создана со средней сложностью (по умолчанию) | |
+| 37 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_difficulty_level => 'X')` | Ошибка «p_difficulty_level должен быть 'E' (Easy), 'M' (Medium) или 'H' (Hard)» | |
+| 38 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_solution => 'c3-d4')` | Задача создана с решением | |
+| 39 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W', p_solution => NULL)` | Задача создана без решения | |
+| 40 | `create_puzzle(p_board_position => '', p_turn_to_move => 'W')` | Ошибка «Неверный размер доски» или «На доске нет фигур» | |
+| 41 | `create_puzzle(p_board_position => RLE_64_символов_развернуто, p_turn_to_move => 'W')` | Задача создана (доска 8x8, RLE формат) | |
+| 42 | `create_puzzle(p_board_position => '16b1b4b1b6b1b3b4b6w1b1w1w4w3w1w6w6w5w12', p_turn_to_move => 'W')` | Задача создана (доска 10x10, RLE формат, правильная позиция) | |
+| 66 | `create_puzzle(p_board_position => '2b14b1b4b1b6b1b3b4b6b1b1b1b4b3b1b6b6b5b12', p_turn_to_move => 'W')` | Ошибка СУБД «ORA-06502: PL/SQL: : буфер символьных строк слишком маленький ошибка числа или значения» (после декодирования RLE больше 100 символов) | |
+| 67 | `create_puzzle(p_board_position => '16b1b4b1b6b1b3b4b6b1b1b1b4b3b1b6b6b5b12', p_turn_to_move => 'W')` | Ошибка «На доске нет ни одной белой фигуры (w, W)» | |
+| 68 | `create_puzzle(p_board_position => '15b1b4b1b6b1b3b4b6w1b1w1w4w3w1w6w6w5w12', p_turn_to_move => 'W')` | Ошибка «Неверный размер доски. Ожидалось 64 (8x8) или 100 (10x10) символов, получено: 99» | |
+| 69 | `create_puzzle(p_board_position => '17b1b13w1b3b4b8w1ww3w3', p_turn_to_move => 'W')` | Задача создана (доска 8x8, RLE формат) | |
+| 43 | `create_puzzle(p_board_position => RLE_неверный_размер, p_turn_to_move => 'W')` | Ошибка «Неверный размер доски» | |
+| 44 | `create_puzzle(p_board_position => RLE_с_недопустимыми_символами, p_turn_to_move => 'W')` | Ошибка «Доска содержит недопустимые символы» | |
+| 45 | `create_puzzle(p_board_position => RLE_без_белых, p_turn_to_move => 'W')` | Ошибка «На доске нет ни одной белой фигуры» | |
+| 46 | `create_puzzle(p_board_position => RLE_без_черных, p_turn_to_move => 'W')` | Ошибка «На доске нет ни одной черной фигуры» | |
+| 47 | `create_puzzle(p_board_position => RLE_фигура_на_светлой, p_turn_to_move => 'W')` | Ошибка «Фигура на позиции X находится на светлой клетке» | |
+| 48 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W')` (есть активная игра) | Ошибка «Вы заняты в активной сессии» | |
+| 49 | `create_puzzle(p_board_position => VARCHAR2, p_turn_to_move => 'W')` (режим просмотра) | Ошибка «Вы заняты в активной сессии» | |
 | 50 | `delete_my_puzzle(p_puzzle_id => 1)` (задача существует, принадлежит пользователю) | Задача удалена | |
 | 51 | `delete_my_puzzle(p_puzzle_id => 999)` (задача не существует) | Ошибка «Задача с ID 999 не существует или не принадлежит вам» | |
 | 52 | `delete_my_puzzle(p_puzzle_id => 1)` (задача принадлежит другому пользователю) | Ошибка «Задача с ID 1 не существует или не принадлежит вам» | |
