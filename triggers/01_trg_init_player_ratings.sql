@@ -1,4 +1,3 @@
-
 CREATE OR REPLACE TRIGGER trg_init_player_ratings
     AFTER INSERT ON players
     FOR EACH ROW

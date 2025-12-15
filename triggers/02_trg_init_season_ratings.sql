@@ -1,4 +1,3 @@
-
 CREATE OR REPLACE TRIGGER trg_init_season_ratings
     AFTER INSERT ON seasons
     FOR EACH ROW

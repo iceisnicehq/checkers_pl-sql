@@ -1273,9 +1273,10 @@ BEGIN
                 SELECT winner_player_color, status
                 FROM games
                 WHERE match_id = v_game.match_id
+                  AND game_id != p_game_id
                   AND status IN ('V', 'D', 'T', 'R')
             ) LOOP
-                IF r.status = 'V' THEN
+                IF r.status IN ('V', 'R') THEN
                     IF r.winner_player_color = 'W' THEN
                         v_player1_wins := v_player1_wins + 1;
                     ELSIF r.winner_player_color = 'B' THEN
@@ -1283,8 +1284,38 @@ BEGIN
                     END IF;
                 END IF;
             END LOOP;
+            
+            IF p_status IN ('V', 'R') AND p_winner_color IS NOT NULL THEN
+                IF p_winner_color = 'W' THEN
+                    v_player1_wins := v_player1_wins + 1;
+                ELSIF p_winner_color = 'B' THEN
+                    v_player2_wins := v_player2_wins + 1;
+                END IF;
+            END IF;
 
-            IF v_player1_wins >= TRUNC((v_games_to_win + 1) / 2) THEN
+            IF v_match.status = 'C' THEN
+                BEGIN
+                    SELECT season_id INTO v_season_id 
+                    FROM seasons 
+                    WHERE v_first_game.start_time BETWEEN start_date AND end_date 
+                    AND ROWNUM = 1;
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        SELECT MAX(season_id) INTO v_season_id FROM seasons;
+                END;
+
+                UPDATE player_ratings
+                SET rating = GREATEST(0, rating + (v_player1_wins * 16) - (v_player2_wins * 16) + (10 * v_games_to_win))
+                WHERE player_id = v_player1_id 
+                  AND rule_id = v_match_rule_id 
+                  AND season_id = v_season_id;
+                
+                UPDATE player_ratings
+                SET rating = GREATEST(0, rating + (v_player2_wins * 16) - (v_player1_wins * 16) + (10 * v_games_to_win))
+                WHERE player_id = v_player2_id 
+                  AND rule_id = v_match_rule_id 
+                  AND season_id = v_season_id;
+            ELSIF v_player1_wins >= TRUNC((v_games_to_win + 1) / 2) THEN
                 UPDATE matches
                 SET status = 'C',
                     winner_player_id = v_player1_id
@@ -1344,7 +1375,7 @@ BEGIN
                   AND rule_id = v_match_rule_id 
                   AND season_id = v_season_id;
                 
-            ELSE
+            ELSIF v_match.status != 'C' THEN
 
                 DECLARE
                     v_game_count NUMBER;
@@ -1365,7 +1396,7 @@ BEGIN
                         v_game.match_id, v_first_game.rule_id,
                         CASE v_next_player_color WHEN 'W' THEN v_player1_id ELSE v_player2_id END,
                         CASE v_next_player_color WHEN 'W' THEN v_player2_id ELSE v_player1_id END,
-                        v_next_player_color, 'C', 'W',
+                        v_next_player_color, 'A', 'W',
                         v_first_game.time_limit_move_sec,
                         v_first_game.time_limit_game_sec,
                         v_first_game.draw_moves_limit,
@@ -2848,29 +2879,39 @@ BEGIN
 
     DECLARE
         v_existing_spectator_game_id NUMBER;
+        v_closed_sessions_count NUMBER := 0;
     BEGIN
-        SELECT game_id INTO v_existing_spectator_game_id
-        FROM spectators
+        BEGIN
+            SELECT game_id INTO v_existing_spectator_game_id
+            FROM spectators
+            WHERE player_id = v_viewer_player_id
+              AND left_at IS NULL
+              AND game_id != v_target_game_id
+              AND ROWNUM = 1;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                v_existing_spectator_game_id := NULL;
+        END;
+
+        UPDATE spectators
+        SET left_at = SYSDATE
         WHERE player_id = v_viewer_player_id
           AND left_at IS NULL
-          AND game_id != v_target_game_id
-          AND ROWNUM = 1;
+          AND game_id != v_target_game_id;
         
-        IF v_existing_spectator_game_id IS NOT NULL THEN
-            DBMS_OUTPUT.PUT_LINE('--[ У вас уже есть активная сессия просмотра другой игры (ID: ' || v_existing_spectator_game_id || ') ]--');
+        v_closed_sessions_count := SQL%ROWCOUNT;
+        
+        IF v_closed_sessions_count > 0 THEN
+            IF v_closed_sessions_count = 1 AND v_existing_spectator_game_id IS NOT NULL THEN
+                DBMS_OUTPUT.PUT_LINE('--[ Вы вышли из сессии просмотра игры (ID: ' || v_existing_spectator_game_id || ') ]--');
+            ELSIF v_closed_sessions_count > 1 THEN
+                DBMS_OUTPUT.PUT_LINE('--[ Вы вышли из ' || v_closed_sessions_count || ' сессий просмотра ]--');
+            END IF;
         END IF;
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN
-            NULL;
     END;
 
-    UPDATE spectators
-    SET left_at = SYSDATE
-    WHERE player_id = v_viewer_player_id
-      AND left_at IS NULL
-      AND game_id != v_target_game_id;
-
-    IF v_viewer_player_id NOT IN (v_game.player_white_id, v_game.player_black_id)
+    IF (v_game.player_white_id IS NULL OR v_viewer_player_id != v_game.player_white_id)
+       AND (v_game.player_black_id IS NULL OR v_viewer_player_id != v_game.player_black_id)
        AND v_game.status IN ('A', 'O', 'C')
     THEN
 
@@ -3155,6 +3196,78 @@ BEGIN
                 END IF;
             END;
 
+            IF v_game.match_id IS NOT NULL THEN
+                DECLARE
+                    v_match matches%ROWTYPE;
+                    v_game_count NUMBER;
+                    v_game_number NUMBER;
+                    v_match_status CHAR(1);
+                    v_next_game_id NUMBER;
+                    v_is_viewer_winner BOOLEAN := FALSE;
+                BEGIN
+                    BEGIN
+                        SELECT * INTO v_match FROM matches WHERE match_id = v_game.match_id;
+                        SELECT status INTO v_match_status FROM matches WHERE match_id = v_game.match_id;
+                    EXCEPTION
+                        WHEN NO_DATA_FOUND THEN
+                            NULL;
+                    END;
+
+                    IF v_match.match_id IS NOT NULL THEN
+                        SELECT COUNT(*) INTO v_game_count
+                        FROM games
+                        WHERE match_id = v_game.match_id;
+
+                        SELECT COUNT(*) INTO v_game_number
+                        FROM games
+                        WHERE match_id = v_game.match_id
+                          AND game_id <= v_target_game_id;
+
+                        IF v_game.winner_player_color IS NOT NULL THEN
+                            IF (v_game.winner_player_color = 'W' AND v_game.player_white_id = v_viewer_player_id) OR
+                               (v_game.winner_player_color = 'B' AND v_game.player_black_id = v_viewer_player_id) THEN
+                                v_is_viewer_winner := TRUE;
+                            END IF;
+                        END IF;
+
+                        IF v_match_status = 'C' THEN
+                            IF v_is_viewer_winner THEN
+                                DBMS_OUTPUT.PUT_LINE('==================================================');
+                                DBMS_OUTPUT.PUT_LINE('ВЫ ПОБЕДИЛИ В МАТЧЕ!');
+                                DBMS_OUTPUT.PUT_LINE('==================================================');
+                            ELSE
+                                DBMS_OUTPUT.PUT_LINE('==================================================');
+                                DBMS_OUTPUT.PUT_LINE('МАТЧ ЗАВЕРШЕН');
+                                DBMS_OUTPUT.PUT_LINE('==================================================');
+                            END IF;
+                        ELSIF v_game.status IN ('V', 'R') AND v_game.winner_player_color IS NOT NULL THEN
+                            IF v_is_viewer_winner THEN
+                                BEGIN
+                                    SELECT game_id INTO v_next_game_id
+                                    FROM games
+                                    WHERE match_id = v_game.match_id
+                                      AND game_id > v_target_game_id
+                                      AND status = 'A'
+                                    ORDER BY game_id ASC
+                                    FETCH FIRST 1 ROW ONLY;
+                                    
+                                    DBMS_OUTPUT.PUT_LINE('==================================================');
+                                    DBMS_OUTPUT.PUT_LINE('Вы победили в игре ' || v_game_number || ' матча.');
+                                    DBMS_OUTPUT.PUT_LINE('Начинается игра ' || (v_game_number + 1) || '...');
+                                    DBMS_OUTPUT.PUT_LINE('==================================================');
+                                EXCEPTION
+                                    WHEN NO_DATA_FOUND THEN
+                                        NULL;
+                                END;
+                            END IF;
+                        END IF;
+                    END IF;
+                EXCEPTION
+                    WHEN OTHERS THEN
+                        NULL;
+                END;
+            END IF;
+
             IF v_game.puzzle_id IS NULL THEN
                 DBMS_OUTPUT.PUT_LINE('-- Используйте watch_game_replay(' || v_target_game_id || ') для просмотра полной партии.');
             END IF;
@@ -3268,7 +3381,7 @@ BEGIN
                                 WHERE match_id = v_game.match_id
                                   AND status IN ('V', 'D', 'T', 'R')
                             ) LOOP
-                                IF r.status = 'V' THEN
+                                IF r.status IN ('V', 'R') THEN
                                     IF r.winner_player_color = 'W' THEN
                                         v_player1_wins := v_player1_wins + 1;
                                     ELSIF r.winner_player_color = 'B' THEN
@@ -3292,7 +3405,8 @@ BEGIN
                             END;
 
                             v_match_info := 'Матч (ID: ' || v_game.match_id || ', Best of ' || v_match.games_to_win || 
-                                          ') | Счет: ' || v_player1_name || ' ' || v_player1_wins || ':' || v_player2_wins || ' ' || v_player2_name ||
+                                          ') | Игра ID: ' || v_target_game_id ||
+                                          ' | Счет: ' || v_player1_name || ' ' || v_player1_wins || ':' || v_player2_wins || ' ' || v_player2_name ||
                                           ' | Нужно для победы: ' || (TRUNC(v_match.games_to_win / 2) + 1) || ' игры';
                             
                             DBMS_OUTPUT.PUT_LINE(v_match_info);

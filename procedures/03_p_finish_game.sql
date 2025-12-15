@@ -62,9 +62,10 @@ BEGIN
                 SELECT winner_player_color, status
                 FROM games
                 WHERE match_id = v_game.match_id
+                  AND game_id != p_game_id
                   AND status IN ('V', 'D', 'T', 'R')
             ) LOOP
-                IF r.status = 'V' THEN
+                IF r.status IN ('V', 'R') THEN
                     IF r.winner_player_color = 'W' THEN
                         v_player1_wins := v_player1_wins + 1;
                     ELSIF r.winner_player_color = 'B' THEN
@@ -72,8 +73,38 @@ BEGIN
                     END IF;
                 END IF;
             END LOOP;
+            
+            IF p_status IN ('V', 'R') AND p_winner_color IS NOT NULL THEN
+                IF p_winner_color = 'W' THEN
+                    v_player1_wins := v_player1_wins + 1;
+                ELSIF p_winner_color = 'B' THEN
+                    v_player2_wins := v_player2_wins + 1;
+                END IF;
+            END IF;
 
-            IF v_player1_wins >= TRUNC((v_games_to_win + 1) / 2) THEN
+            IF v_match.status = 'C' THEN
+                BEGIN
+                    SELECT season_id INTO v_season_id 
+                    FROM seasons 
+                    WHERE v_first_game.start_time BETWEEN start_date AND end_date 
+                    AND ROWNUM = 1;
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        SELECT MAX(season_id) INTO v_season_id FROM seasons;
+                END;
+
+                UPDATE player_ratings
+                SET rating = GREATEST(0, rating + (v_player1_wins * 16) - (v_player2_wins * 16) + (10 * v_games_to_win))
+                WHERE player_id = v_player1_id 
+                  AND rule_id = v_match_rule_id 
+                  AND season_id = v_season_id;
+                
+                UPDATE player_ratings
+                SET rating = GREATEST(0, rating + (v_player2_wins * 16) - (v_player1_wins * 16) + (10 * v_games_to_win))
+                WHERE player_id = v_player2_id 
+                  AND rule_id = v_match_rule_id 
+                  AND season_id = v_season_id;
+            ELSIF v_player1_wins >= TRUNC((v_games_to_win + 1) / 2) THEN
                 UPDATE matches
                 SET status = 'C',
                     winner_player_id = v_player1_id
@@ -133,7 +164,7 @@ BEGIN
                   AND rule_id = v_match_rule_id 
                   AND season_id = v_season_id;
                 
-            ELSE
+            ELSIF v_match.status != 'C' THEN
 
                 DECLARE
                     v_game_count NUMBER;
@@ -154,7 +185,7 @@ BEGIN
                         v_game.match_id, v_first_game.rule_id,
                         CASE v_next_player_color WHEN 'W' THEN v_player1_id ELSE v_player2_id END,
                         CASE v_next_player_color WHEN 'W' THEN v_player2_id ELSE v_player1_id END,
-                        v_next_player_color, 'C', 'W',
+                        v_next_player_color, 'A', 'W',
                         v_first_game.time_limit_move_sec,
                         v_first_game.time_limit_game_sec,
                         v_first_game.draw_moves_limit,

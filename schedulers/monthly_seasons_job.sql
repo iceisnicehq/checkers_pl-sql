@@ -44,7 +44,7 @@ BEGIN
     start_date      => TRUNC(SYSTIMESTAMP, 'MM') + INTERVAL '1' MONTH + INTERVAL '1' DAY + INTERVAL '1' HOUR,
     repeat_interval => 'FREQ=MONTHLY; BYMONTHDAY=1; BYHOUR=1; BYMINUTE=0',
     enabled         => TRUE,
-    comments        => 'Creates a new season at the beginning of each month.'
+    comments        => 'Создает новый сезон в начале каждого месяца.'
   );
   
   DBMS_OUTPUT.PUT_LINE('Job MONTHLY_SEASONS_JOB успешно создан.');

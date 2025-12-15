@@ -48,7 +48,7 @@ BEGIN
     start_date      => TRUNC(SYSTIMESTAMP) + INTERVAL '1' DAY + INTERVAL '1' HOUR,
     repeat_interval => 'FREQ=DAILY; BYHOUR=1; BYMINUTE=0; BYSECOND=0',    
     enabled         => TRUE,
-    comments        => 'Selects a random checkers puzzle for the daily challenge.'
+    comments        => 'Выбирает случайную задачу для ежедневной задачи.'
   );
   
   DBMS_OUTPUT.PUT_LINE('Job DAILY_CHECKERS_PUZZLE_JOB успешно создан.');

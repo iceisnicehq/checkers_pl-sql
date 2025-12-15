@@ -12,7 +12,7 @@ BEGIN
     start_date      => SYSTIMESTAMP,
     repeat_interval => 'FREQ=HOURLY; BYMINUTE=0',
     enabled         => TRUE,
-    comments        => 'Automatically closes inactive game sessions after timeout period.'
+    comments        => 'Автоматически закрывает неактивные игровые сессии после периода таймаута.'
   );
   
   DBMS_OUTPUT.PUT_LINE('Job INACTIVE_SESSIONS_TIMEOUT_JOB успешно создан.');
