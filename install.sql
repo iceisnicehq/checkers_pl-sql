@@ -56,7 +56,23 @@
 -- 
 -- 8. Установка прав доступа (этот файл):
 --    - Выполнить install.sql для предоставления прав другим пользователям
--- 
+--
+-- 9. Создание тестовых пользователей:
+--    Для тестирования игры необходимо создать 5 тестовых пользователей:
+--    - PLAYER1, PLAYER2, PLAYER3, PLAYER4 – для игры друг с другом (PvP)
+--    - PLAYER5 – для просмотра игр других пользователей (режим наблюдателя)
+--    
+--    Пароль для всех пользователей: P@ssw0rd
+--    
+--    Пример создания пользователей (выполняется от имени администратора):
+--    CREATE USER player1 IDENTIFIED BY "P@ssw0rd";
+--    CREATE USER player2 IDENTIFIED BY "P@ssw0rd";
+--    CREATE USER player3 IDENTIFIED BY "P@ssw0rd";
+--    CREATE USER player4 IDENTIFIED BY "P@ssw0rd";
+--    CREATE USER player5 IDENTIFIED BY "P@ssw0rd";
+--    
+--    GRANT CONNECT, RESOURCE TO player1, player2, player3, player4, player5;
+--
 -- ====================================================================
 
 -- Предоставление прав на выполнение пакета game_logic всем пользователям

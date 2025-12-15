@@ -73,6 +73,13 @@ BEGIN
         RETURN;
     END IF;
     
+    IF p_ai_difficulty IS NOT NULL AND p_ai_difficulty NOT IN ('E', 'M', 'H') THEN
+        v_error_msg := 'Некорректная сложность ИИ. Допустимые значения: ''E'' (Easy), ''M'' (Medium), ''H'' (Hard).';
+        p_audit_log(v_current_player_id, NULL, v_error_msg);
+        DBMS_OUTPUT.PUT_LINE(v_error_msg);
+        RETURN;
+    END IF;
+    
     IF (p_opponent_username IS NOT NULL AND p_ai_difficulty IS NOT NULL) OR
        (p_puzzle_id IS NOT NULL AND p_ai_difficulty IS NOT NULL) OR
        (p_puzzle_id IS NOT NULL AND p_opponent_username IS NOT NULL)
@@ -271,7 +278,18 @@ BEGIN
                 DBMS_OUTPUT.PUT_LINE(v_error_msg);
                 RETURN;
             END IF;
-            v_opponent_player_id := get_or_create_player_id(UPPER(p_opponent_username));
+            
+            BEGIN
+                SELECT player_id INTO v_opponent_player_id
+                FROM players
+                WHERE username = UPPER(TRIM(p_opponent_username));
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    v_error_msg := 'Оппонент не найден.';
+                    p_audit_log(v_current_player_id, NULL, v_error_msg);
+                    DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                    RETURN;
+            END;
 
             DECLARE
                 v_opp_active_game NUMBER := get_active_game(v_opponent_player_id);

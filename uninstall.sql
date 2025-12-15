@@ -67,12 +67,23 @@ BEGIN
     FOR i IN (
         SELECT 'DROP SEQUENCE ' || sequence_name AS stmt 
         FROM user_sequences
-        WHERE sequence_name LIKE 'ISEQ$$_%'
-           OR sequence_name IN (
-               -- Добавьте сюда пользовательские sequences, если они есть
-           )
     ) LOOP
         EXECUTE IMMEDIATE i.stmt;
+    END LOOP;
+END;
+
+BEGIN
+    FOR i IN (
+        SELECT username FROM all_users
+        WHERE username IN ('PLAYER1', 'PLAYER2', 'PLAYER3', 'PLAYER4', 'PLAYER5')
+    ) LOOP
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP USER ' || i.username || ' CASCADE';
+            DBMS_OUTPUT.PUT_LINE('Пользователь ' || i.username || ' удален.');
+        EXCEPTION
+            WHEN OTHERS THEN
+                DBMS_OUTPUT.PUT_LINE('Ошибка при удалении пользователя ' || i.username || ': ' || SQLERRM);
+        END;
     END LOOP;
 END;
 
