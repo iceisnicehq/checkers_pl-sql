@@ -354,14 +354,22 @@ BEGIN
         IF v_show_full OR v_query = 'CREATE_PUZZLE' THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
-            DBMS_OUTPUT.PUT_LINE('  p_board_position   - Позиция доски в формате CLOB (обязателен).');
+            DBMS_OUTPUT.PUT_LINE('  p_board_position   - Позиция доски в формате RLE (Run-Length Encoding) (обязателен).');
+            DBMS_OUTPUT.PUT_LINE('                          Формат: числа обозначают количество пустых клеток, буквы - фигуры.');
+            DBMS_OUTPUT.PUT_LINE('                          Пример: ''16b1b4b1b6b1b3b4b6w1b1w1w4w3w1w6w6w5w12'' (доска 10x10).');
             DBMS_OUTPUT.PUT_LINE('  p_turn_to_move     - Чей ход: ''W'' (Белые) или ''B'' (Черные) (обязателен).');
             DBMS_OUTPUT.PUT_LINE('  p_moves_to_solve   - Оптимальное количество ходов для решения (необязателен, по умолчанию NULL = игра с ИИ).');
             DBMS_OUTPUT.PUT_LINE('  p_difficulty_level - Сложность: ''E'' (Easy), ''M'' (Medium), ''H'' (Hard) (необязателен, по умолчанию ''M'').');
             DBMS_OUTPUT.PUT_LINE('  p_solution         - Решение задачи в виде последовательности ходов (необязателен, по умолчанию NULL).');
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
-            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.create_puzzle(p_board_position => EMPTY_CLOB(), p_turn_to_move => ''W''); END;');
+            DBMS_OUTPUT.PUT_LINE('  -- Пример для доски 10x10 (ход белых):');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN');
+            DBMS_OUTPUT.PUT_LINE('    game_logic.create_puzzle(');
+            DBMS_OUTPUT.PUT_LINE('      p_board_position => ''16b1b4b1b6b1b3b4b6w1b1w1w4w3w1w6w6w5w12'',');
+            DBMS_OUTPUT.PUT_LINE('      p_turn_to_move => ''W''');
+            DBMS_OUTPUT.PUT_LINE('    );');
+            DBMS_OUTPUT.PUT_LINE('  END;');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;

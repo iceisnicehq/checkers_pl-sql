@@ -87,7 +87,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
     PROCEDURE join_match(p_match_id IN NUMBER); 
 
     PROCEDURE create_puzzle(
-        p_board_position   IN CLOB,
+        p_board_position   IN VARCHAR2,
         p_turn_to_move     IN CHAR,
         p_moves_to_solve   IN NUMBER DEFAULT NULL,
         p_difficulty_level IN CHAR DEFAULT 'M',

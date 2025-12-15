@@ -4053,7 +4053,7 @@ EXCEPTION
 END join_match;
 
 PROCEDURE create_puzzle(
-    p_board_position   IN CLOB,
+    p_board_position   IN VARCHAR2,
     p_turn_to_move     IN CHAR,
     p_moves_to_solve   IN NUMBER DEFAULT NULL,
     p_difficulty_level IN CHAR DEFAULT 'M',
@@ -4063,10 +4063,6 @@ PROCEDURE create_puzzle(
     v_error_msg VARCHAR2(2000);
     
     v_single_line_board VARCHAR2(200) := '';
-    v_line              VARCHAR2(200);
-    v_offset            NUMBER := 1;
-    v_clob_len          NUMBER;
-    v_line_break        NUMBER;
     v_board_size        NUMBER;
     v_rule_id           game_rules.rule_id%TYPE;
     v_encoded_board     VARCHAR2(100);
@@ -4101,34 +4097,18 @@ BEGIN
     END IF;
 
     BEGIN
-        v_clob_len := DBMS_LOB.getlength(p_board_position);
-
-        WHILE v_offset <= v_clob_len LOOP
-            v_line_break := DBMS_LOB.instr(p_board_position, c_nl, v_offset);
-            
-            IF v_line_break = 0 THEN
-
-                v_line := DBMS_LOB.substr(p_board_position, v_clob_len - v_offset + 1, v_offset);
-                v_offset := v_clob_len + 1;
-            ELSE
-
-                v_line := DBMS_LOB.substr(p_board_position, v_line_break - v_offset, v_offset);
-                v_offset := v_line_break + 1;
-            END IF;
-
-            v_line := REGEXP_REPLACE(v_line, '[[:space:]]', '');
-            
-            IF LENGTH(v_line) > 0 THEN
-
-                IF LENGTH(v_single_line_board) + LENGTH(v_line) > 200 THEN
-                     v_error_msg := 'Ошибка: Размер доски превышает допустимый предел.';
-                     p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
-                     DBMS_OUTPUT.PUT_LINE(v_error_msg);
-                     RETURN;
-                END IF;
-                v_single_line_board := v_single_line_board || v_line;
-            END IF;
-        END LOOP;
+        -- Удаляем пробелы из RLE строки
+        v_encoded_board := REGEXP_REPLACE(p_board_position, '[[:space:]]', '');
+        
+        -- Декодируем RLE в развернутую строку для валидации
+        v_single_line_board := decode_board(v_encoded_board);
+        
+        IF LENGTH(v_single_line_board) > 200 THEN
+            v_error_msg := 'Ошибка: Размер доски превышает допустимый предел.';
+            p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
+            DBMS_OUTPUT.PUT_LINE(v_error_msg);
+            RETURN;
+        END IF;
 
         IF LENGTH(v_single_line_board) = 64 THEN
             v_board_size := 8;
@@ -4167,9 +4147,6 @@ BEGIN
             DECLARE
                 v_piece CHAR(1) := SUBSTR(v_single_line_board, i, 1);
                 v_field rec_board_field;
-                v_row PLS_INTEGER;
-                v_col PLS_INTEGER;
-                v_is_dark_square BOOLEAN;
             BEGIN
 
                 IF v_piece IN ('w', 'W', 'b', 'B') THEN
@@ -4181,14 +4158,12 @@ BEGIN
                     END IF;
                     
                     v_field := g_map_by_idx(i);
-                    v_row := v_field.row_num;
-                    v_col := v_field.col_num;
-
-                    v_is_dark_square := (MOD(v_row + v_col, 2) = 1);
                     
-                    IF NOT v_is_dark_square THEN
+                    -- Проверка: фигура должна быть на темной клетке
+                    -- В шашках темные клетки - это те, где (row + col) четное
+                    IF MOD(v_field.row_num + v_field.col_num, 2) != 0 THEN
                         v_error_msg := 'Ошибка: Фигура на позиции ' || v_field.notation || 
-                                     ' (индекс ' || i || ', строка ' || v_row || ', столбец ' || v_col || 
+                                     ' (индекс ' || i || ', строка ' || v_field.row_num || ', столбец ' || v_field.col_num || 
                                      ') находится на светлой клетке. В шашках фигуры могут быть только на темных клетках.';
                         p_audit_log(v_player_id, NULL, p_event_msg => v_error_msg);
                         DBMS_OUTPUT.PUT_LINE(v_error_msg);
@@ -4203,7 +4178,7 @@ BEGIN
         WHERE board_size = v_board_size
         AND ROWNUM = 1;
 
-        v_encoded_board := encode_board(v_single_line_board);
+        -- v_encoded_board уже содержит RLE формат, сохраняем как есть
         
         INSERT INTO puzzles (
             board_position,
@@ -4905,14 +4880,22 @@ BEGIN
         IF v_show_full OR v_query = 'CREATE_PUZZLE' THEN
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПАРАМЕТРЫ:');
-            DBMS_OUTPUT.PUT_LINE('  p_board_position   - Позиция доски в формате CLOB (обязателен).');
+            DBMS_OUTPUT.PUT_LINE('  p_board_position   - Позиция доски в формате RLE (Run-Length Encoding) (обязателен).');
+            DBMS_OUTPUT.PUT_LINE('                          Формат: числа обозначают количество пустых клеток, буквы - фигуры.');
+            DBMS_OUTPUT.PUT_LINE('                          Пример: ''16b1b4b1b6b1b3b4b6w1b1w1w4w3w1w6w6w5w12'' (доска 10x10).');
             DBMS_OUTPUT.PUT_LINE('  p_turn_to_move     - Чей ход: ''W'' (Белые) или ''B'' (Черные) (обязателен).');
             DBMS_OUTPUT.PUT_LINE('  p_moves_to_solve   - Оптимальное количество ходов для решения (необязателен, по умолчанию NULL = игра с ИИ).');
             DBMS_OUTPUT.PUT_LINE('  p_difficulty_level - Сложность: ''E'' (Easy), ''M'' (Medium), ''H'' (Hard) (необязателен, по умолчанию ''M'').');
             DBMS_OUTPUT.PUT_LINE('  p_solution         - Решение задачи в виде последовательности ходов (необязателен, по умолчанию NULL).');
             DBMS_OUTPUT.PUT_LINE(c_nl);
             DBMS_OUTPUT.PUT_LINE('ПРИМЕРЫ:');
-            DBMS_OUTPUT.PUT_LINE('  BEGIN game_logic.create_puzzle(p_board_position => EMPTY_CLOB(), p_turn_to_move => ''W''); END;');
+            DBMS_OUTPUT.PUT_LINE('  -- Пример для доски 10x10 (ход белых):');
+            DBMS_OUTPUT.PUT_LINE('  BEGIN');
+            DBMS_OUTPUT.PUT_LINE('    game_logic.create_puzzle(');
+            DBMS_OUTPUT.PUT_LINE('      p_board_position => ''16b1b4b1b6b1b3b4b6w1b1w1w4w3w1w6w6w5w12'',');
+            DBMS_OUTPUT.PUT_LINE('      p_turn_to_move => ''W''');
+            DBMS_OUTPUT.PUT_LINE('    );');
+            DBMS_OUTPUT.PUT_LINE('  END;');
         END IF;
         IF NOT v_show_all THEN RETURN; END IF;
     END IF;
