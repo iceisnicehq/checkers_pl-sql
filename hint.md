@@ -499,3 +499,241 @@ ORDER BY pr.rating DESC;
    - Русские шашки: превращение происходит сразу при достижении последней горизонтали, даже во время многоходового взятия.
    - Международные шашки: превращение происходит только при остановке на последней горизонтали.
 
+---
+
+## Тестирование автоматических заданий (Schedulers)
+
+### Проверка статуса всех jobs
+
+```sql
+-- Просмотр всех jobs
+SELECT job_name, enabled, state, last_start_date, next_run_date, run_count, failure_count
+FROM user_scheduler_jobs
+WHERE job_name LIKE '%CHECKERS%' OR job_name LIKE '%SEASONS%' OR job_name LIKE '%TIMEOUT%'
+ORDER BY job_name;
+
+-- Просмотр истории выполнения jobs
+SELECT job_name, log_date, status, error#, additional_info
+FROM user_scheduler_job_log
+WHERE job_name IN ('DAILY_CHECKERS_PUZZLE_JOB', 'MONTHLY_SEASONS_JOB', 'INACTIVE_SESSIONS_TIMEOUT_JOB')
+ORDER BY log_date DESC
+FETCH FIRST 20 ROWS ONLY;
+```
+
+### Запуск job принудительно
+
+```sql
+-- Запустить job немедленно
+BEGIN
+    DBMS_SCHEDULER.RUN_JOB(job_name => 'DAILY_CHECKERS_PUZZLE_JOB', use_current_session => FALSE);
+END;
+/
+
+-- Проверить результат выполнения
+SELECT * FROM daily_puzzles WHERE puzzle_date = TRUNC(SYSDATE);
+```
+
+### Тестирование DAILY_CHECKERS_PUZZLE_JOB (ежедневная задача)
+
+```sql
+-- 1. Проверить текущее состояние
+SELECT * FROM daily_puzzles WHERE puzzle_date = TRUNC(SYSDATE);
+
+-- 2. Удалить задачу на сегодня (если есть) для тестирования
+DELETE FROM daily_puzzles WHERE puzzle_date = TRUNC(SYSDATE);
+COMMIT;
+
+-- 3. Запустить job принудительно
+BEGIN
+    DBMS_SCHEDULER.RUN_JOB(job_name => 'DAILY_CHECKERS_PUZZLE_JOB', use_current_session => FALSE);
+END;
+/
+
+-- 4. Проверить результат
+SELECT dp.puzzle_date, dp.puzzle_id, p.difficulty_level, p.moves_to_solve
+FROM daily_puzzles dp
+JOIN puzzles p ON dp.puzzle_id = p.puzzle_id
+WHERE dp.puzzle_date = TRUNC(SYSDATE);
+
+-- 5. Проверить, что задача создается только один раз
+-- Повторный запуск не должен создавать новую запись
+BEGIN
+    DBMS_SCHEDULER.RUN_JOB(job_name => 'DAILY_CHECKERS_PUZZLE_JOB', use_current_session => FALSE);
+END;
+/
+-- Проверить, что запись все еще одна
+SELECT COUNT(*) FROM daily_puzzles WHERE puzzle_date = TRUNC(SYSDATE);  -- Должно быть 1
+```
+
+### Тестирование MONTHLY_SEASONS_JOB (создание сезонов)
+
+```sql
+-- 1. Проверить текущие сезоны
+SELECT * FROM seasons ORDER BY season_id DESC;
+
+-- 2. Проверить активный сезон для текущего месяца
+SELECT * FROM seasons 
+WHERE start_date <= TRUNC(SYSDATE, 'MM') 
+  AND end_date >= TRUNC(SYSDATE, 'MM');
+
+-- 3. Удалить сезон для текущего месяца (если есть) для тестирования
+DELETE FROM seasons 
+WHERE start_date <= TRUNC(SYSDATE, 'MM') 
+  AND end_date >= TRUNC(SYSDATE, 'MM');
+COMMIT;
+
+-- 4. Запустить job принудительно
+BEGIN
+    DBMS_SCHEDULER.RUN_JOB(job_name => 'MONTHLY_SEASONS_JOB', use_current_session => FALSE);
+END;
+/
+
+-- 5. Проверить, что сезон создан
+SELECT * FROM seasons 
+WHERE start_date <= TRUNC(SYSDATE, 'MM') 
+  AND end_date >= TRUNC(SYSDATE, 'MM');
+
+-- 6. Проверить, что триггер trg_init_season_ratings сработал
+-- Должны быть созданы рейтинги для всех игроков в новом сезоне
+SELECT COUNT(*) as ratings_count, season_id
+FROM player_ratings
+WHERE season_id = (SELECT MAX(season_id) FROM seasons)
+GROUP BY season_id;
+
+-- 7. Проверить начальные рейтинги в новом сезоне
+-- Для игроков с рейтингом в предыдущем сезоне: GREATEST(500, старый_рейтинг * 0.8)
+-- Для новых игроков: 500
+SELECT 
+    p.username,
+    pr_old.rating as old_rating,
+    pr_new.rating as new_rating,
+    GREATEST(500, ROUND(pr_old.rating * 0.8)) as expected_rating
+FROM player_ratings pr_new
+JOIN players p ON pr_new.player_id = p.player_id
+LEFT JOIN player_ratings pr_old ON (
+    pr_old.player_id = pr_new.player_id 
+    AND pr_old.rule_id = pr_new.rule_id
+    AND pr_old.season_id = (
+        SELECT MAX(season_id) 
+        FROM seasons 
+        WHERE season_id < pr_new.season_id
+    )
+)
+WHERE pr_new.season_id = (SELECT MAX(season_id) FROM seasons)
+  AND pr_new.rule_id = 1
+ORDER BY p.username;
+```
+
+### Тестирование триггера trg_init_season_ratings
+
+```sql
+-- 1. Проверить текущее количество игроков и их рейтинги
+SELECT COUNT(DISTINCT player_id) as players_count FROM players;
+SELECT COUNT(*) as ratings_count FROM player_ratings;
+
+-- 2. Создать новый сезон вручную (триггер должен сработать автоматически)
+INSERT INTO seasons (season_name, start_date, end_date, is_active)
+VALUES ('Тестовый сезон', SYSDATE, SYSDATE + 30, 'Y');
+COMMIT;
+
+-- 3. Проверить, что триггер создал рейтинги для всех игроков
+-- Количество рейтингов = количество игроков * количество правил (обычно 2)
+SELECT 
+    COUNT(*) as total_ratings,
+    COUNT(DISTINCT player_id) as players_with_ratings,
+    COUNT(DISTINCT rule_id) as rules_count
+FROM player_ratings
+WHERE season_id = (SELECT MAX(season_id) FROM seasons);
+
+-- 4. Проверить начальные рейтинги
+-- Для игроков с рейтингом в предыдущем сезоне: GREATEST(500, старый_рейтинг * 0.8)
+-- Для новых игроков: 500
+SELECT 
+    p.username,
+    pr.rule_id,
+    pr.rating,
+    CASE 
+        WHEN pr.rating = 500 THEN 'Новый игрок или низкий рейтинг'
+        ELSE 'Рассчитан из предыдущего сезона'
+    END as rating_type
+FROM player_ratings pr
+JOIN players p ON pr.player_id = p.player_id
+WHERE pr.season_id = (SELECT MAX(season_id) FROM seasons)
+ORDER BY p.username, pr.rule_id;
+
+-- 5. Проверить, что нет дубликатов рейтингов
+SELECT player_id, rule_id, season_id, COUNT(*) as count
+FROM player_ratings
+WHERE season_id = (SELECT MAX(season_id) FROM seasons)
+GROUP BY player_id, rule_id, season_id
+HAVING COUNT(*) > 1;  -- Не должно быть строк
+```
+
+### Тестирование INACTIVE_SESSIONS_TIMEOUT_JOB (закрытие неактивных сессий)
+
+```sql
+-- 1. Создать игру для тестирования
+BEGIN game_logic.create_game(p_ai_difficulty => 'E'); END;
+/
+
+-- 2. Найти game_id
+SELECT game_id, start_time, status FROM games WHERE status = 'A' AND ROWNUM = 1;
+
+-- 3. Установить время последнего хода в прошлом (более 24 часов назад)
+-- Если есть ходы, обновить их время
+UPDATE game_moves 
+SET move_timestamp = SYSDATE - INTERVAL '25' HOUR
+WHERE game_id = <ваш_game_id>;
+COMMIT;
+
+-- Если ходов нет, обновить start_time игры
+UPDATE games 
+SET start_time = SYSDATE - INTERVAL '25' HOUR
+WHERE game_id = <ваш_game_id>;
+COMMIT;
+
+-- 4. Запустить job принудительно
+BEGIN
+    DBMS_SCHEDULER.RUN_JOB(job_name => 'INACTIVE_SESSIONS_TIMEOUT_JOB', use_current_session => FALSE);
+END;
+/
+
+-- 5. Проверить, что игра закрыта по таймауту
+SELECT game_id, status, end_time, winner_player_color
+FROM games 
+WHERE game_id = <ваш_game_id>;
+-- Статус должен быть 'T' (Timeout), end_time установлен, winner_player_color определен
+
+-- 6. Проверить, что зрители отключены
+SELECT * FROM spectators 
+WHERE game_id = <ваш_game_id> AND left_at IS NOT NULL;
+```
+
+### Полезные команды для управления jobs
+
+```sql
+-- Включить job
+BEGIN
+    DBMS_SCHEDULER.ENABLE(name => 'DAILY_CHECKERS_PUZZLE_JOB');
+END;
+/
+
+-- Выключить job
+BEGIN
+    DBMS_SCHEDULER.DISABLE(name => 'DAILY_CHECKERS_PUZZLE_JOB');
+END;
+/
+
+-- Остановить выполняющийся job
+BEGIN
+    DBMS_SCHEDULER.STOP_JOB(job_name => 'DAILY_CHECKERS_PUZZLE_JOB', force => TRUE);
+END;
+/
+
+-- Удалить job (для пересоздания)
+BEGIN
+    DBMS_SCHEDULER.DROP_JOB(job_name => 'DAILY_CHECKERS_PUZZLE_JOB', force => TRUE);
+END;
+/
+```
+
