@@ -1,3 +1,5 @@
+SET SERVEROUTPUT ON;
+
 DECLARE
     v_current_month DATE := TRUNC(SYSDATE, 'MM');
     v_next_month DATE := ADD_MONTHS(v_current_month, 1);
@@ -29,5 +31,4 @@ EXCEPTION
     WHEN OTHERS THEN
         DBMS_OUTPUT.PUT_LINE('Сезон не создан: ' || SQLERRM);
 END;
-/
 

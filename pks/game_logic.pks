@@ -120,4 +120,24 @@ CREATE OR REPLACE PACKAGE game_logic AS
 
     PROCEDURE stop_spectating; 
 
+    FUNCTION encode_board(
+        p_decoded_board IN VARCHAR2
+    ) RETURN VARCHAR2;
+
+    FUNCTION decode_board(
+        p_encoded_board IN VARCHAR2
+    ) RETURN VARCHAR2;
+    
+    -- Из-за проблем с версией Oracle
+    -- Перегрузка 1: без подсветки
+    FUNCTION f_get_board_as_clob(
+        p_board_position  IN VARCHAR2
+    ) RETURN CLOB;
+    
+    -- Перегрузка 2: с подсветкой
+    FUNCTION f_get_board_as_clob(
+        p_board_position  IN VARCHAR2,
+        p_highlight_indices IN t_map_indices
+    ) RETURN CLOB;
+
 END game_logic;

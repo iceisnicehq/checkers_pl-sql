@@ -27,22 +27,7 @@
 --      * 15_insert_puzzles.sql - наполнение начальными задачами (после 06_puzzles.sql)
 --      * 16_insert_daily_puzzles.sql - создание ежедневной задачи на сегодня (после 09_daily_puzzles.sql)
 -- 
--- 3. Создание спецификации пакета:
---    - Выполнить pks/game_logic.pks
--- 
--- 4. Создание тела пакета:
---    - Выполнить pkb/game_logic.pkb
--- 
--- 5. Создание триггеров (папка triggers/):
---    - 01_trg_init_player_ratings.sql
---    - 02_trg_init_season_ratings.sql
--- 
--- 6. Создание автоматических заданий (schedulers, папка schedulers/):
---    - daily_puzzle_job.sql
---    - monthly_seasons_job.sql
---    - inactive_sessions_timeout.sql
--- 
--- 7. Создание представлений (views, папка views/):
+-- 3. Создание представлений (views, папка views/):
 --    - Выполнить все скрипты из папки views/:
 --      * v_game_rules.sql
 --      * v_open_games.sql
@@ -56,6 +41,21 @@
 --      * v_open_matches.sql
 --      * v_ended_matches.sql
 --      * v_match_details.sql
+-- 
+-- 4. Создание спецификации пакета:
+--    - Выполнить pks/game_logic.pks
+-- 
+-- 5. Создание тела пакета:
+--    - Выполнить pkb/game_logic.pkb
+-- 
+-- 6. Создание триггеров (папка triggers/):
+--    - 01_trg_init_player_ratings.sql
+--    - 02_trg_init_season_ratings.sql
+-- 
+-- 7. Создание автоматических заданий (schedulers, папка schedulers/):
+--    - daily_puzzle_job.sql
+--    - monthly_seasons_job.sql
+--    - inactive_sessions_timeout.sql
 -- 
 -- 8. Установка прав доступа (этот файл):
 --    - Выполнить install.sql для предоставления прав другим пользователям

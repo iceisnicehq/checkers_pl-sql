@@ -1,3 +1,5 @@
+SET SERVEROUTPUT ON;
+
 DECLARE
     v_puzzle_id puzzles.puzzle_id%TYPE;
     v_today     DATE := TRUNC(SYSDATE);

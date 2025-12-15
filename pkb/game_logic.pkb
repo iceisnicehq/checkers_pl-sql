@@ -135,6 +135,28 @@ BEGIN
     RETURN v_player_id;
 END get_or_create_player_id;
 
+PROCEDURE p_audit_log(
+    p_player_id  IN players.player_id%TYPE,
+    p_game_id    IN games.game_id%TYPE,
+    p_event_msg  IN audit_log.event_msg%TYPE
+) IS PRAGMA AUTONOMOUS_TRANSACTION;
+BEGIN
+    INSERT INTO audit_log (
+        player_id, 
+        game_id, 
+        event_msg
+    )
+    VALUES (
+        p_player_id, 
+        p_game_id, 
+        SUBSTR(p_event_msg, 1, 2000)
+    );
+    COMMIT;
+EXCEPTION
+    WHEN OTHERS THEN NULL;
+END p_audit_log;
+
+
 FUNCTION get_initial_position(p_rule_id IN NUMBER) RETURN VARCHAR2 IS
     v_rule      game_rules%ROWTYPE;
     v_error_msg VARCHAR2(2000); 
@@ -184,6 +206,41 @@ BEGIN
        AND g_map_by_idx.EXISTS(p_idx)
        AND ABS(p_start_col - g_map_by_idx(p_idx).col_num) = p_expected_col_diff;
 END f_is_valid_index;
+
+PROCEDURE p_init_board_map(p_board_size IN NUMBER) IS
+    v_idx       PLS_INTEGER;
+    v_notation  VARCHAR2(50);
+    v_field_rec rec_board_field;
+BEGIN
+
+    IF p_board_size = g_current_map_size THEN
+        RETURN;
+    END IF;
+
+    g_map_by_notation.DELETE;
+    g_map_by_idx.DELETE;
+
+    FOR r IN 1 .. p_board_size LOOP
+        FOR c IN 1 .. p_board_size LOOP
+
+            v_idx := ((p_board_size - r) * p_board_size) + c;
+
+            v_notation := CHR(ASCII('a') + c - 1) || r;
+
+            v_field_rec.idx      := v_idx;
+            v_field_rec.notation := v_notation;
+            v_field_rec.row_num  := r;
+            v_field_rec.col_num  := c;
+
+            g_map_by_notation(v_notation) := v_field_rec;
+            g_map_by_idx(v_idx)           := v_field_rec;
+            
+        END LOOP;
+    END LOOP;
+
+    g_current_map_size := p_board_size;
+    
+END p_init_board_map;
 
 FUNCTION f_move_to_notation(
     p_move      IN r_move,
@@ -1010,61 +1067,147 @@ BEGIN
     RETURN v_clob;
 END f_get_board_as_clob;
 
-PROCEDURE p_init_board_map(p_board_size IN NUMBER) IS
-    v_idx       PLS_INTEGER;
-    v_notation  VARCHAR2(50);
-    v_field_rec rec_board_field;
+PROCEDURE p_update_ratings(
+    p_game_id IN games.game_id%TYPE
+) IS
+    v_game      games%ROWTYPE;
+    v_season_id seasons.season_id%TYPE;
 BEGIN
 
-    IF p_board_size = g_current_map_size THEN
-        RETURN;
+    SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
+
+    BEGIN
+        SELECT season_id INTO v_season_id 
+        FROM seasons 
+        WHERE v_game.start_time BETWEEN start_date AND end_date 
+        AND ROWNUM = 1;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+
+            SELECT MAX(season_id) INTO v_season_id FROM seasons;
+    END;
+
+    IF v_game.status IN ('V', 'T', 'R') AND v_game.match_id IS NULL THEN
+
+        IF v_game.puzzle_id IS NOT NULL THEN
+            DECLARE
+                v_solver_id   NUMBER;
+                v_prev_solves NUMBER;
+                v_puzzle_created_by NUMBER;
+                v_is_daily_puzzle BOOLEAN := (v_game.is_daily_puzzle = 'Y');
+                v_puzzle_date DATE;
+                v_today DATE := TRUNC(SYSDATE);
+            BEGIN
+
+                IF v_game.status = 'V' AND v_game.puzzle_status = 's' THEN
+
+                    v_solver_id := CASE WHEN v_game.creator_player_color = 'W' THEN v_game.player_white_id ELSE v_game.player_black_id END;
+
+                    SELECT created_by_player_id INTO v_puzzle_created_by
+                    FROM puzzles
+                    WHERE puzzle_id = v_game.puzzle_id;
+
+                    IF v_puzzle_created_by IS NULL AND v_solver_id IS NOT NULL THEN
+
+                        IF v_is_daily_puzzle THEN
+                            -- Для daily puzzle проверяем, решена ли уже сегодняшняя задача этим игроком
+                            BEGIN
+                                SELECT dp.puzzle_date INTO v_puzzle_date
+                                FROM daily_puzzles dp
+                                WHERE dp.puzzle_id = v_game.puzzle_id
+                                  AND dp.puzzle_date = v_today
+                                  AND ROWNUM = 1;
+                            EXCEPTION
+                                WHEN NO_DATA_FOUND THEN
+                                    v_puzzle_date := NULL;
+                            END;
+
+                            IF v_puzzle_date IS NOT NULL THEN
+                                -- Проверяем, решена ли уже сегодняшняя daily puzzle этим игроком
+                                SELECT COUNT(*) INTO v_prev_solves
+                                FROM games g
+                                JOIN daily_puzzles dp ON g.puzzle_id = dp.puzzle_id
+                                WHERE dp.puzzle_date = v_today
+                                  AND (g.player_white_id = v_solver_id OR g.player_black_id = v_solver_id)
+                                  AND g.status = 'V'
+                                  AND g.puzzle_status = 's'
+                                  AND g.is_daily_puzzle = 'Y'
+                                  AND g.game_id != p_game_id;
+                            ELSE
+                                v_prev_solves := 1; -- Если не найдена сегодняшняя daily puzzle, не начисляем
+                            END IF;
+                        ELSE
+                            -- Для обычных задач проверяем по puzzle_id (как раньше)
+                            SELECT COUNT(*) INTO v_prev_solves
+                            FROM games
+                            WHERE puzzle_id = v_game.puzzle_id
+                              AND (player_white_id = v_solver_id OR player_black_id = v_solver_id)
+                              AND status = 'V'
+                              AND puzzle_status = 's'
+                              AND game_id != p_game_id;
+                        END IF;
+
+                        IF v_prev_solves = 0 THEN
+
+                            INSERT INTO player_ratings (player_id, rule_id, season_id, rating)
+                            SELECT v_solver_id, v_game.rule_id, v_season_id, 5
+                            FROM DUAL
+                            WHERE NOT EXISTS (
+                                SELECT 1 FROM player_ratings 
+                                WHERE player_id = v_solver_id 
+                                  AND rule_id = v_game.rule_id 
+                                  AND season_id = v_season_id
+                            );
+                            
+                            UPDATE player_ratings
+                            SET rating = GREATEST(0, rating + 5)
+                            WHERE player_id = v_solver_id 
+                              AND rule_id = v_game.rule_id 
+                              AND season_id = v_season_id;
+                        END IF;
+                    END IF;
+                END IF;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    NULL;
+            END;
+
+        ELSE
+
+            IF v_game.ai_difficulty IS NULL THEN
+
+                IF v_game.winner_player_color = 'W' THEN
+                    UPDATE player_ratings
+                    SET rating = GREATEST(0, rating + 16)
+                    WHERE player_id = v_game.player_white_id 
+                      AND rule_id = v_game.rule_id 
+                      AND season_id = v_season_id;
+                    
+                    UPDATE player_ratings
+                    SET rating = GREATEST(0, rating - 16)
+                    WHERE player_id = v_game.player_black_id 
+                      AND rule_id = v_game.rule_id 
+                      AND season_id = v_season_id;
+                ELSIF v_game.winner_player_color = 'B' THEN
+                    UPDATE player_ratings
+                    SET rating = GREATEST(0, rating + 16)
+                    WHERE player_id = v_game.player_black_id 
+                      AND rule_id = v_game.rule_id 
+                      AND season_id = v_season_id;
+                    
+                    UPDATE player_ratings
+                    SET rating = GREATEST(0, rating - 16)
+                    WHERE player_id = v_game.player_white_id 
+                      AND rule_id = v_game.rule_id 
+                      AND season_id = v_season_id;
+                END IF;
+            END IF;
+
+        END IF;
+        
     END IF;
 
-    g_map_by_notation.DELETE;
-    g_map_by_idx.DELETE;
-
-    FOR r IN 1 .. p_board_size LOOP
-        FOR c IN 1 .. p_board_size LOOP
-
-            v_idx := ((p_board_size - r) * p_board_size) + c;
-
-            v_notation := CHR(ASCII('a') + c - 1) || r;
-
-            v_field_rec.idx      := v_idx;
-            v_field_rec.notation := v_notation;
-            v_field_rec.row_num  := r;
-            v_field_rec.col_num  := c;
-
-            g_map_by_notation(v_notation) := v_field_rec;
-            g_map_by_idx(v_idx)           := v_field_rec;
-            
-        END LOOP;
-    END LOOP;
-
-    g_current_map_size := p_board_size;
-    
-END p_init_board_map;
-
-PROCEDURE p_audit_log(
-    p_player_id  IN players.player_id%TYPE,
-    p_game_id    IN games.game_id%TYPE,
-    p_event_msg  IN audit_log.event_msg%TYPE
-) IS PRAGMA AUTONOMOUS_TRANSACTION;
-BEGIN
-    INSERT INTO audit_log (
-        player_id, 
-        game_id, 
-        event_msg
-    )
-    VALUES (
-        p_player_id, 
-        p_game_id, 
-        SUBSTR(p_event_msg, 1, 2000)
-    );
-    COMMIT;
-EXCEPTION
-    WHEN OTHERS THEN NULL;
-END p_audit_log;
+END p_update_ratings;
 
 PROCEDURE p_finish_game(
     p_game_id           IN NUMBER,
@@ -1284,148 +1427,6 @@ BEGIN
     
     RETURN v_board_position;
 END f_get_current_board_position;
-
-PROCEDURE p_update_ratings(
-    p_game_id IN games.game_id%TYPE
-) IS
-    v_game      games%ROWTYPE;
-    v_season_id seasons.season_id%TYPE;
-BEGIN
-
-    SELECT * INTO v_game FROM games WHERE game_id = p_game_id;
-
-    BEGIN
-        SELECT season_id INTO v_season_id 
-        FROM seasons 
-        WHERE v_game.start_time BETWEEN start_date AND end_date 
-        AND ROWNUM = 1;
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN
-
-            SELECT MAX(season_id) INTO v_season_id FROM seasons;
-    END;
-
-    IF v_game.status IN ('V', 'T', 'R') AND v_game.match_id IS NULL THEN
-
-        IF v_game.puzzle_id IS NOT NULL THEN
-            DECLARE
-                v_solver_id   NUMBER;
-                v_prev_solves NUMBER;
-                v_puzzle_created_by NUMBER;
-                v_is_daily_puzzle BOOLEAN := (v_game.is_daily_puzzle = 'Y');
-                v_puzzle_date DATE;
-                v_today DATE := TRUNC(SYSDATE);
-            BEGIN
-
-                IF v_game.status = 'V' AND v_game.puzzle_status = 's' THEN
-
-                    v_solver_id := CASE WHEN v_game.creator_player_color = 'W' THEN v_game.player_white_id ELSE v_game.player_black_id END;
-
-                    SELECT created_by_player_id INTO v_puzzle_created_by
-                    FROM puzzles
-                    WHERE puzzle_id = v_game.puzzle_id;
-
-                    IF v_puzzle_created_by IS NULL AND v_solver_id IS NOT NULL THEN
-
-                        IF v_is_daily_puzzle THEN
-                            -- Для daily puzzle проверяем, решена ли уже сегодняшняя задача этим игроком
-                            BEGIN
-                                SELECT dp.puzzle_date INTO v_puzzle_date
-                                FROM daily_puzzles dp
-                                WHERE dp.puzzle_id = v_game.puzzle_id
-                                  AND dp.puzzle_date = v_today
-                                  AND ROWNUM = 1;
-                            EXCEPTION
-                                WHEN NO_DATA_FOUND THEN
-                                    v_puzzle_date := NULL;
-                            END;
-
-                            IF v_puzzle_date IS NOT NULL THEN
-                                -- Проверяем, решена ли уже сегодняшняя daily puzzle этим игроком
-                                SELECT COUNT(*) INTO v_prev_solves
-                                FROM games g
-                                JOIN daily_puzzles dp ON g.puzzle_id = dp.puzzle_id
-                                WHERE dp.puzzle_date = v_today
-                                  AND (g.player_white_id = v_solver_id OR g.player_black_id = v_solver_id)
-                                  AND g.status = 'V'
-                                  AND g.puzzle_status = 's'
-                                  AND g.is_daily_puzzle = 'Y'
-                                  AND g.game_id != p_game_id;
-                            ELSE
-                                v_prev_solves := 1; -- Если не найдена сегодняшняя daily puzzle, не начисляем
-                            END IF;
-                        ELSE
-                            -- Для обычных задач проверяем по puzzle_id (как раньше)
-                            SELECT COUNT(*) INTO v_prev_solves
-                            FROM games
-                            WHERE puzzle_id = v_game.puzzle_id
-                              AND (player_white_id = v_solver_id OR player_black_id = v_solver_id)
-                              AND status = 'V'
-                              AND puzzle_status = 's'
-                              AND game_id != p_game_id;
-                        END IF;
-
-                        IF v_prev_solves = 0 THEN
-
-                            INSERT INTO player_ratings (player_id, rule_id, season_id, rating)
-                            SELECT v_solver_id, v_game.rule_id, v_season_id, 5
-                            FROM DUAL
-                            WHERE NOT EXISTS (
-                                SELECT 1 FROM player_ratings 
-                                WHERE player_id = v_solver_id 
-                                  AND rule_id = v_game.rule_id 
-                                  AND season_id = v_season_id
-                            );
-                            
-                            UPDATE player_ratings
-                            SET rating = GREATEST(0, rating + 5)
-                            WHERE player_id = v_solver_id 
-                              AND rule_id = v_game.rule_id 
-                              AND season_id = v_season_id;
-                        END IF;
-                    END IF;
-                END IF;
-            EXCEPTION
-                WHEN NO_DATA_FOUND THEN
-                    NULL;
-            END;
-
-        ELSE
-
-            IF v_game.ai_difficulty IS NULL THEN
-
-                IF v_game.winner_player_color = 'W' THEN
-                    UPDATE player_ratings
-                    SET rating = GREATEST(0, rating + 16)
-                    WHERE player_id = v_game.player_white_id 
-                      AND rule_id = v_game.rule_id 
-                      AND season_id = v_season_id;
-                    
-                    UPDATE player_ratings
-                    SET rating = GREATEST(0, rating - 16)
-                    WHERE player_id = v_game.player_black_id 
-                      AND rule_id = v_game.rule_id 
-                      AND season_id = v_season_id;
-                ELSIF v_game.winner_player_color = 'B' THEN
-                    UPDATE player_ratings
-                    SET rating = GREATEST(0, rating + 16)
-                    WHERE player_id = v_game.player_black_id 
-                      AND rule_id = v_game.rule_id 
-                      AND season_id = v_season_id;
-                    
-                    UPDATE player_ratings
-                    SET rating = GREATEST(0, rating - 16)
-                    WHERE player_id = v_game.player_white_id 
-                      AND rule_id = v_game.rule_id 
-                      AND season_id = v_season_id;
-                END IF;
-            END IF;
-
-        END IF;
-        
-    END IF;
-
-END p_update_ratings;
 
 PROCEDURE p_process_move(
     p_game_id        IN NUMBER,

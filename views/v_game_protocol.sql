@@ -30,7 +30,28 @@ SELECT
          WHERE gm2.game_id = g.game_id 
          ORDER BY gm2.move_number DESC 
          FETCH FIRST 1 ROW ONLY),
-        (SELECT game_logic.get_initial_position(g.rule_id) FROM DUAL)
+        CASE 
+            WHEN gr.board_size = 8 THEN 
+                '+b+b+b+b' ||
+                'b+b+b+b+' ||
+                '+b+b+b+b' ||
+                '++++++++' ||
+                '++++++++' ||
+                'w+w+w+w+' ||
+                '+w+w+w+w' ||
+                'w+w+w+w+'
+            ELSE 
+                '+b+b+b+b+b' ||
+                'b+b+b+b+b+' ||
+                '+b+b+b+b+b' ||
+                'b+b+b+b+b+' ||
+                '++++++++++' ||
+                '++++++++++' ||
+                '+w+w+w+w+w' ||
+                'w+w+w+w+w+' ||
+                '+w+w+w+w+w' ||
+                'w+w+w+w+w+'
+        END
     ) AS current_board_position,
     (SELECT COUNT(*) FROM game_moves gm3 WHERE gm3.game_id = g.game_id) AS move_count,
     (SELECT event_msg FROM audit_log 
