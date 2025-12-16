@@ -2667,7 +2667,6 @@ BEGIN
             p_audit_log(v_player_id, p_game_id, v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
 
-            -- Просто показать текущую/финальную доску без создания сессии реплея
             print_active_board(p_game_id => p_game_id);
             RETURN;
         END IF;

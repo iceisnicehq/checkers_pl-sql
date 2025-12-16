@@ -53,21 +53,6 @@ DECLARE
     TYPE capture_array IS TABLE OF CHAR(1);
     v_captures capture_array := capture_array('N', 'N', 'N', 'Y', 'Y', 'N', 'Y', 'Y', 'N', 'Y');
     
-    -- Игроки, сделавшие ход
-    TYPE player_array IS TABLE OF NUMBER;
-    v_players player_array := player_array(
-        v_player1_id,  -- Ход 1 (белые)
-        v_player2_id,  -- Ход 2 (черные)
-        v_player1_id,  -- Ход 3 (белые)
-        v_player2_id,  -- Ход 4 (черные)
-        v_player1_id,  -- Ход 5 (белые)
-        v_player2_id,  -- Ход 6 (черные)
-        v_player1_id,  -- Ход 7 (белые)
-        v_player2_id,  -- Ход 8 (черные)
-        v_player1_id,  -- Ход 9 (белые)
-        v_player2_id   -- Ход 10 (черные)
-    );
-    
     v_batch_size NUMBER := 1000; -- Размер пакета для коммита
     v_games_created NUMBER := 0;
     v_moves_created NUMBER := 0;
@@ -109,6 +94,7 @@ BEGIN
             player_white_id,
             player_black_id,
             rule_id,
+            creator_player_color,
             status,
             current_turn,
             start_time,
@@ -119,6 +105,7 @@ BEGIN
             v_player1_id,
             v_player2_id,
             v_rule_id,
+            'W', -- Создатель (игрок на белых)
             'V', -- Завершена
             'B', -- Последний ход был черных
             SYSDATE - (v_total_games - i) / 86400, -- Распределить игры по времени
@@ -136,7 +123,6 @@ BEGIN
                 move_notation,
                 is_capture,
                 board_position,
-                player_id,
                 move_timestamp
             ) VALUES (
                 v_game_id,
@@ -144,7 +130,6 @@ BEGIN
                 v_moves(j),
                 v_captures(j),
                 v_boards(j),
-                v_players(j),
                 SYSDATE - (v_total_games - i) / 86400 + (j * INTERVAL '1' MINUTE)
             );
             
