@@ -84,9 +84,17 @@ BEGIN
 
         BEGIN DBMS_SCHEDULER.DROP_JOB(v_job_name, force => TRUE); EXCEPTION WHEN OTHERS THEN NULL; END;
 
-        EXECUTE IMMEDIATE 'CREATE SEQUENCE ' || v_seq_name || 
-                          ' START WITH 1 INCREMENT BY 1 MINVALUE 1 MAXVALUE ' || 
-                          v_max_moves || ' NOCYCLE NOCACHE';
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE SEQUENCE ' || v_seq_name || 
+                              ' START WITH 1 INCREMENT BY 1 MINVALUE 1 MAXVALUE ' || 
+                              v_max_moves || ' NOCYCLE NOCACHE';
+        EXCEPTION
+            WHEN OTHERS THEN
+                v_error_msg := 'Не удалось создать последовательность ' || v_seq_name || ': ' || SQLERRM;
+                p_audit_log(v_player_id, p_game_id, SUBSTR(v_error_msg, 1, 2000));
+                DBMS_OUTPUT.PUT_LINE(v_error_msg);
+                RETURN;
+        END;
 
         DBMS_SCHEDULER.create_job(
             job_name   => v_job_name,
