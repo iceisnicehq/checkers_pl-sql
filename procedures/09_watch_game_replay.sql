@@ -75,10 +75,17 @@ BEGIN
         END IF;
 
         SELECT count(*) INTO v_max_moves FROM game_moves WHERE game_id = p_game_id;
-        IF v_max_moves = 0 THEN
-            v_error_msg := 'В этой партии (ID: ' || p_game_id || ') не было ходов.';
+        IF v_max_moves <= 1 THEN
+            IF v_max_moves = 0 THEN
+                v_error_msg := 'В этой партии (ID: ' || p_game_id || ') не было ходов. Показана финальная позиция партии.';
+            ELSE
+                v_error_msg := 'В этой партии (ID: ' || p_game_id || ') был только 1 ход. Пошаговый реплей не создается, показана финальная позиция партии.';
+            END IF;
             p_audit_log(v_player_id, p_game_id, v_error_msg);
             DBMS_OUTPUT.PUT_LINE(v_error_msg);
+
+            -- Просто показать текущую/финальную доску без создания сессии реплея
+            print_active_board(p_game_id => p_game_id);
             RETURN;
         END IF;
 

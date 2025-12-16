@@ -795,6 +795,21 @@
    - Право на выполнение пакета `game_logic` всем пользователям (GRANT EXECUTE ON game_logic TO PUBLIC)
    - Право на чтение всех представлений (views) всем пользователям (GRANT SELECT ON ... TO PUBLIC)
 
+   Для работы просмотра реплеев (процедура `watch_game_replay`) пользователю, под которым установлен пакет `game_logic`, необходима системная привилегия `CREATE SEQUENCE`. 
+   Эту привилегию должен выдать администратор БД, например:
+
+   ```sql
+   GRANT CREATE SEQUENCE TO <USERNAME>;
+   ```
+
+   Проверить наличие привилегии можно, выполнив:
+
+   ```sql
+   SELECT * FROM USER_SYS_PRIVS WHERE PRIVILEGE = 'CREATE SEQUENCE';
+   -- при необходимости также:
+   SELECT * FROM USER_TAB_PRIVS;
+   ```
+
 9. **Создание тестовых пользователей**
 
    Для тестирования игры необходимо создать 5 тестовых пользователей:

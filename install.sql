@@ -76,7 +76,21 @@
 --    
 --    GRANT CONNECT, RESOURCE TO player1, player2, player3, player4, player5;
 --
+-- 10. Системные привилегии для просмотра реплеев:
+--     Для работы процедуры просмотра реплеев (watch_game_replay) пользователю,
+--     под которым установлен пакет game_logic, требуется системная привилегия CREATE SEQUENCE.
+--     Эту привилегию должен выдать администратор БД, например:
+--       GRANT CREATE SEQUENCE TO <USERNAME>;
+--     Проверить наличие привилегии можно запросом:
+--       SELECT * FROM USER_SYS_PRIVS WHERE PRIVILEGE = 'CREATE SEQUENCE';
+--       -- при необходимости также:
+--       -- SELECT * FROM USER_TAB_PRIVS;
+--
 -- ====================================================================
+
+-- Пример выдачи необходимой системной привилегии:
+-- GRANT CREATE SEQUENCE TO <USERNAME>;
+
 
 -- Предоставление прав на выполнение пакета game_logic всем пользователям
 GRANT EXECUTE ON game_logic TO PUBLIC;
