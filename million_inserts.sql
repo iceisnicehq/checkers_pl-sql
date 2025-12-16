@@ -169,24 +169,24 @@ EXCEPTION
         DBMS_OUTPUT.PUT_LINE('Создано ходов: ' || v_moves_created);
         RAISE;
 END;
-/
 
--- Проверка результатов
-SELECT 
-    COUNT(*) as total_games,
-    COUNT(DISTINCT game_id) as unique_games,
-    MIN(game_id) as min_game_id,
-    MAX(game_id) as max_game_id
-FROM games
-WHERE player_white_id = 1 AND player_black_id = 2;
 
-SELECT 
-    COUNT(*) as total_moves,
-    COUNT(DISTINCT game_id) as games_with_moves,
-    AVG(move_number) as avg_moves_per_game
-FROM game_moves
-WHERE game_id IN (
-    SELECT game_id FROM games 
-    WHERE player_white_id = 1 AND player_black_id = 2
-);
+-- -- Проверка результатов
+-- SELECT 
+--     COUNT(*) as total_games,
+--     COUNT(DISTINCT game_id) as unique_games,
+--     MIN(game_id) as min_game_id,
+--     MAX(game_id) as max_game_id
+-- FROM games
+-- WHERE player_white_id = 1 AND player_black_id = 2;
+
+-- SELECT 
+--     COUNT(*) as total_moves,
+--     COUNT(DISTINCT game_id) as games_with_moves,
+--     AVG(move_number) as avg_moves_per_game
+-- FROM game_moves
+-- WHERE game_id IN (
+--     SELECT game_id FROM games 
+--     WHERE player_white_id = 1 AND player_black_id = 2
+-- );
 
