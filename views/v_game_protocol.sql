@@ -32,25 +32,9 @@ SELECT
          FETCH FIRST 1 ROW ONLY),
         CASE 
             WHEN gr.board_size = 8 THEN 
-                '+b+b+b+b' ||
-                'b+b+b+b+' ||
-                '+b+b+b+b' ||
-                '++++++++' ||
-                '++++++++' ||
-                'w+w+w+w+' ||
-                '+w+w+w+w' ||
-                'w+w+w+w+'
+                '1b1b1b1bb1b1b1b2b1b1b1b16w1w1w1w2w1w1w1ww1w1w1w1'
             ELSE 
-                '+b+b+b+b+b' ||
-                'b+b+b+b+b+' ||
-                '+b+b+b+b+b' ||
-                'b+b+b+b+b+' ||
-                '++++++++++' ||
-                '++++++++++' ||
-                '+w+w+w+w+w' ||
-                'w+w+w+w+w+' ||
-                '+w+w+w+w+w' ||
-                'w+w+w+w+w+'
+                '1b1b1b1b1bb1b1b1b1b2b1b1b1b1bb1b1b1b1b22w1w1w1w1ww1w1w1w1w2w1w1w1w1ww1w1w1w1w1'
         END
     ) AS current_board_position,
     (SELECT COUNT(*) FROM game_moves gm3 WHERE gm3.game_id = g.game_id) AS move_count,

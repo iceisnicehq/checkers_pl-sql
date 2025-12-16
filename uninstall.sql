@@ -1,3 +1,5 @@
+-- КАЖДЫЙ АНОНИМНЫЙ БЛОК ДОЛЖЕН БЫТЬ ВЫПОЛНЕН ОТДЕЛЬНО!;
+
 BEGIN
     FOR i IN (
         SELECT 'DROP VIEW ' || view_name AS stmt 

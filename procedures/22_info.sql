@@ -595,7 +595,7 @@ BEGIN
         DBMS_OUTPUT.PUT_LINE('  - При создании нового сезона триггер trg_init_season_ratings автоматически');
         DBMS_OUTPUT.PUT_LINE('    создает рейтинги для всех игроков по формуле: rating * 0.8 (минимум 500).');
         DBMS_OUTPUT.PUT_LINE('    Если рейтинг < 500, он остается 500.');
-        DBMS_OUTPUT.PUT_LINE('  - Матч: +16 за победу в игре, -16 за поражение, +10*N бонус за матч (N = games_to_win)');
+        DBMS_OUTPUT.PUT_LINE('  - Матч: победитель получает 16*победы + 10*games_to_win, проигравший получает 16*победы - 10*games_to_win');
         DBMS_OUTPUT.PUT_LINE(c_nl);
         IF v_query = 'RATINGS' THEN RETURN; END IF;
     END IF;

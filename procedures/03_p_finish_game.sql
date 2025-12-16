@@ -93,17 +93,33 @@ BEGIN
                         SELECT MAX(season_id) INTO v_season_id FROM seasons;
                 END;
 
-                UPDATE player_ratings
-                SET rating = GREATEST(0, rating + (v_player1_wins * 16) - (v_player2_wins * 16) + (10 * v_games_to_win))
-                WHERE player_id = v_player1_id 
-                  AND rule_id = v_match_rule_id 
-                  AND season_id = v_season_id;
-                
-                UPDATE player_ratings
-                SET rating = GREATEST(0, rating + (v_player2_wins * 16) - (v_player1_wins * 16) + (10 * v_games_to_win))
-                WHERE player_id = v_player2_id 
-                  AND rule_id = v_match_rule_id 
-                  AND season_id = v_season_id;
+                -- Победитель: 16 * победы + 10 * games_to_win
+                -- Проигравший: 16 * победы - 10 * games_to_win
+                IF v_match.winner_player_id = v_player1_id THEN
+                    UPDATE player_ratings
+                    SET rating = GREATEST(0, rating + (v_player1_wins * 16) + (10 * v_games_to_win))
+                    WHERE player_id = v_player1_id 
+                      AND rule_id = v_match_rule_id 
+                      AND season_id = v_season_id;
+                    
+                    UPDATE player_ratings
+                    SET rating = GREATEST(0, rating + (v_player2_wins * 16) - (10 * v_games_to_win))
+                    WHERE player_id = v_player2_id 
+                      AND rule_id = v_match_rule_id 
+                      AND season_id = v_season_id;
+                ELSE
+                    UPDATE player_ratings
+                    SET rating = GREATEST(0, rating + (v_player1_wins * 16) - (10 * v_games_to_win))
+                    WHERE player_id = v_player1_id 
+                      AND rule_id = v_match_rule_id 
+                      AND season_id = v_season_id;
+                    
+                    UPDATE player_ratings
+                    SET rating = GREATEST(0, rating + (v_player2_wins * 16) + (10 * v_games_to_win))
+                    WHERE player_id = v_player2_id 
+                      AND rule_id = v_match_rule_id 
+                      AND season_id = v_season_id;
+                END IF;
             ELSIF v_player1_wins >= TRUNC((v_games_to_win + 1) / 2) THEN
                 UPDATE matches
                 SET status = 'C',
@@ -122,14 +138,16 @@ BEGIN
                         SELECT MAX(season_id) INTO v_season_id FROM seasons;
                 END;
 
+                -- Победитель: 16 * победы + 10 * games_to_win
+                -- Проигравший: 16 * победы - 10 * games_to_win
                 UPDATE player_ratings
-                SET rating = GREATEST(0, rating + (v_player1_wins * 16) - (v_player2_wins * 16) + (10 * v_games_to_win))
+                SET rating = GREATEST(0, rating + (v_player1_wins * 16) + (10 * v_games_to_win))
                 WHERE player_id = v_player1_id 
                   AND rule_id = v_match_rule_id 
                   AND season_id = v_season_id;
                 
                 UPDATE player_ratings
-                SET rating = GREATEST(0, rating + (v_player2_wins * 16) - (v_player1_wins * 16) + (10 * v_games_to_win))
+                SET rating = GREATEST(0, rating + (v_player2_wins * 16) - (10 * v_games_to_win))
                 WHERE player_id = v_player2_id 
                   AND rule_id = v_match_rule_id 
                   AND season_id = v_season_id;
@@ -152,14 +170,16 @@ BEGIN
                         SELECT MAX(season_id) INTO v_season_id FROM seasons;
                 END;
 
+                -- Победитель: 16 * победы + 10 * games_to_win
+                -- Проигравший: 16 * победы - 10 * games_to_win
                 UPDATE player_ratings
-                SET rating = GREATEST(0, rating + (v_player1_wins * 16) - (v_player2_wins * 16) + (10 * v_games_to_win))
+                SET rating = GREATEST(0, rating + (v_player1_wins * 16) - (10 * v_games_to_win))
                 WHERE player_id = v_player1_id 
                   AND rule_id = v_match_rule_id 
                   AND season_id = v_season_id;
                 
                 UPDATE player_ratings
-                SET rating = GREATEST(0, rating + (v_player2_wins * 16) - (v_player1_wins * 16) + (10 * v_games_to_win))
+                SET rating = GREATEST(0, rating + (v_player2_wins * 16) + (10 * v_games_to_win))
                 WHERE player_id = v_player2_id 
                   AND rule_id = v_match_rule_id 
                   AND season_id = v_season_id;
