@@ -51,7 +51,7 @@ CREATE OR REPLACE PACKAGE game_logic AS
         move  r_move
     );
 
-    PROCEDURE info;
+    PROCEDURE info(p_query IN VARCHAR2 DEFAULT NULL);
 
     -- =========================================================================
     -- 1. УПРАВЛЕНИЕ ИГРОЙ (PvP, PvE, Puzzles)
@@ -102,21 +102,24 @@ CREATE OR REPLACE PACKAGE game_logic AS
     -- 4. РЕЖИМ ЗАДАЧ (Puzzles)
     -- =========================================================================
     PROCEDURE create_puzzle(
-        p_board_position   IN VARCHAR2,
+        p_board_position   IN CLOB,
         p_turn_to_move     IN CHAR,
         p_moves_to_solve   IN NUMBER DEFAULT NULL,
-        p_difficulty_level IN NUMBER DEFAULT 1
+        p_difficulty_level IN CHAR DEFAULT 'M',
+        p_solution          IN VARCHAR2 DEFAULT NULL
     );
     
-    PROCEDURE show_puzzles(p_difficulty IN NUMBER DEFAULT NULL, p_puzzle_id IN NUMBER DEFAULT NULL); 
+    PROCEDURE show_puzzles(
+        p_difficulty IN CHAR DEFAULT NULL, 
+        p_puzzle_id  IN NUMBER DEFAULT NULL,
+        p_solution   IN CHAR DEFAULT 'N'
+    ); 
     
-    PROCEDURE show_my_puzzles(p_difficulty IN NUMBER DEFAULT NULL); 
+    PROCEDURE show_my_puzzles(p_difficulty IN CHAR DEFAULT NULL); 
     
     PROCEDURE delete_my_puzzle(p_puzzle_id IN NUMBER);
     
     PROCEDURE show_daily_puzzle; 
-    
-    PROCEDURE start_daily_puzzle;
     
     -- =========================================================================
     -- 5. ПРОСМОТР И СТАТУС (Режим Зрителя и Реплеи)
@@ -129,7 +132,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
 
     PROCEDURE watch_game_replay( -- <-- ИЗМЕНЕНИЕ: Переименовано
         p_game_id       IN NUMBER,
-        p_moves_to_show IN NUMBER DEFAULT 1
+        p_moves_to_show IN NUMBER DEFAULT 1,
+        p_restart       IN CHAR   DEFAULT 'N'
     ); 
 
     PROCEDURE stop_spectating; 
@@ -137,14 +141,22 @@ CREATE OR REPLACE PACKAGE game_logic AS
     -- =========================================================================
     -- 6. БЫВШИЕ "ПРИВАТНЫЕ" (ТЕПЕРЬ ПУБЛИЧНЫЕ) ФУНКЦИИ
     -- =========================================================================
+    PROCEDURE p_init_board_map(
+        p_board_size IN NUMBER
+    );
+
     PROCEDURE p_audit_log(
         p_player_id  IN players.player_id%TYPE,
         p_game_id    IN games.game_id%TYPE,
-        p_event_type IN audit_log.event_msg%TYPE 
+        p_event_msg  IN audit_log.event_msg%TYPE 
     );
 
     PROCEDURE p_update_ratings(
         p_game_id IN games.game_id%TYPE
+    );
+
+    PROCEDURE p_process_inactive_timeouts(
+        p_timeout_hours IN NUMBER DEFAULT 24
     );
 
     PROCEDURE p_process_move(
@@ -153,6 +165,8 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_player_id      IN NUMBER, -- NULL для ИИ
         p_status_message OUT VARCHAR2
     );
+
+    -- =========================================================================
 
     FUNCTION encode_board(
         p_decoded_board IN VARCHAR2
@@ -172,10 +186,6 @@ CREATE OR REPLACE PACKAGE game_logic AS
 
     FUNCTION get_initial_position(
         p_rule_id IN NUMBER
-    ) RETURN VARCHAR2;
-
-    FUNCTION idx_to_notation(
-        p_idx IN PLS_INTEGER
     ) RETURN VARCHAR2;
     
     FUNCTION f_get_board_as_clob(
@@ -198,17 +208,6 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_rule_id      IN NUMBER
     ) RETURN t_move_list;
 
-    FUNCTION get_sorted_possible_moves(
-        p_board IN VARCHAR2,
-        p_color IN CHAR
-    ) RETURN t_move_list;
-    
-    FUNCTION evaluate_board(
-        p_board      IN VARCHAR2,
-        p_ai_color   IN CHAR,
-        p_difficulty IN NUMBER 
-    ) RETURN NUMBER;
-
     FUNCTION apply_move_to_board(
         p_board IN VARCHAR2,
         p_move  IN r_move,
@@ -222,15 +221,15 @@ CREATE OR REPLACE PACKAGE game_logic AS
         p_beta          IN NUMBER,
         p_is_maximizing IN BOOLEAN,
         p_ai_color      IN CHAR,
-        p_difficulty    IN NUMBER
+        p_difficulty    IN CHAR,
+        p_rule_id       IN NUMBER
     ) RETURN r_minimax_result;
 
     FUNCTION get_ai_move(
-        p_board_position IN games.board_position%TYPE,
+        p_board_position IN game_moves.board_position%TYPE,
         p_ai_color       IN games.current_turn%TYPE,
         p_rule_id        IN games.rule_id%TYPE,
         p_difficulty     IN games.ai_difficulty%TYPE
     ) RETURN VARCHAR2;
-
 
 END game_logic;
